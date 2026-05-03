@@ -144,7 +144,7 @@ private fun RuleCard(
                 Switch(checked = rule.enabled, onCheckedChange = onEnabledChanged)
             }
             Text(
-                text = "位置：${rule.area.label} · ${rule.validDurationMs / 1000} 秒内 · 分数 ${rule.minScore}",
+                text = "位置：${rule.area.label} · ${formatDuration(rule.validDurationMs)} · 分数 ${rule.minScore}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -161,6 +161,10 @@ private fun RuleCard(
             }
         }
     }
+}
+
+private fun formatDuration(durationMs: Long): String {
+    return if (durationMs > 30_000L) "任意时间" else "启动后 ${durationMs / 1000} 秒内"
 }
 
 @Composable

@@ -10,10 +10,10 @@ import org.json.JSONObject
 import java.util.UUID
 
 object RuleImportManager {
-    private const val MAX_VALID_DURATION_MS = 15_000L
+    private const val LONG_DURATION_WARNING_MS = 30_000L
     private const val MIN_COOLDOWN_MS = 800L
 
-    fun parseRulePackage(jsonText: String): RuleImportResult {
+    fun parseRulePackage(jsonText: String, selfPackageName: String = ""): RuleImportResult {
         if (jsonText.isBlank()) {
             return RuleImportResult(false, "JSON 不能为空")
         }
@@ -47,6 +47,9 @@ object RuleImportManager {
             val packageName = app.optString("packageName").trim()
             if (packageName.isBlank()) {
                 return RuleImportResult(false, "第 ${appIndex + 1} 个 App 的 packageName 不能为空")
+            }
+            if (selfPackageName.isNotBlank() && packageName == selfPackageName) {
+                return RuleImportResult(false, "不能为 Skip 自身导入自动跳过规则")
             }
 
             val appRules = app.optJSONArray("rules")
@@ -87,18 +90,30 @@ object RuleImportManager {
         texts: List<String>,
         area: RuleArea,
         validDurationMs: Long,
-        avoidRepeatClick: Boolean
+        avoidRepeatClick: Boolean,
+        selfPackageName: String = ""
     ): RuleImportResult {
         val cleanTexts = texts.cleanItems()
-        if (packageName.isBlank()) return RuleImportResult(false, "目标 App 包名不能为空")
+        if (packageName.isBlank()) return RuleImportResult(false, "请选择应用")
+        if (selfPackageName.isNotBlank() && packageName == selfPackageName) {
+            return RuleImportResult(false, "不能为 Skip 自身创建自动跳过规则")
+        }
         if (cleanTexts.isEmpty()) return RuleImportResult(false, "按钮文字不能为空")
 
         val warnings = buildList {
             if (area == RuleArea.Any) add("位置选择“不确定”会提高误触风险，已自动提高匹配分数要求。")
-            if (validDurationMs > MAX_VALID_DURATION_MS) add("生效时间较长，建议不超过 15 秒。")
+            if (validDurationMs > LONG_DURATION_WARNING_MS) {
+                add("任意时间规则会提高误触风险，请只用于按钮文字明确的弹窗。")
+            }
         }
         val safeName = name.ifBlank {
-            "${appName.ifBlank { packageName }} - 开屏跳过"
+            "首页弹窗关闭"
+        }
+        val minScore = when {
+            area == RuleArea.Any && validDurationMs > LONG_DURATION_WARNING_MS -> 90
+            area == RuleArea.Any -> 85
+            validDurationMs > LONG_DURATION_WARNING_MS -> 82
+            else -> 72
         }
         val rule = SkipRule(
             id = "user_rule_${UUID.randomUUID()}",
@@ -110,10 +125,10 @@ object RuleImportManager {
             matchContentDescriptions = cleanTexts,
             matchViewIds = emptyList(),
             area = area,
-            priority = 10,
+            priority = 100,
             cooldownMs = if (avoidRepeatClick) 1200L else 800L,
             validDurationMs = validDurationMs,
-            minScore = if (area == RuleArea.Any) 85 else 70,
+            minScore = minScore,
             packageId = "local"
         )
         return RuleImportResult(
@@ -129,7 +144,7 @@ object RuleImportManager {
         return buildList {
             if (rule.area == RuleArea.Any) add("位置为“不确定”，建议只用于按钮文字非常明确的场景。")
             if (rule.minScore < 60) add("最低分过低，可能增加误触风险。")
-            if (rule.validDurationMs > MAX_VALID_DURATION_MS) add("生效时间超过 15 秒，不建议普通场景使用。")
+            if (rule.validDurationMs > LONG_DURATION_WARNING_MS) add("任意时间规则风险更高，请确认关键词明确。")
             if (rule.cooldownMs < MIN_COOLDOWN_MS) add("点击间隔低于 800ms，可能导致重复点击。")
         }
     }
@@ -195,7 +210,7 @@ object RuleImportManager {
         val matchViewIds = ruleJson.optJSONArray("matchViewIds").toStringList()
 
         if (cooldownMs < MIN_COOLDOWN_MS) warningMessages += "$id 的 cooldownMs 低于 800，已导入但不推荐。"
-        if (validDurationMs > MAX_VALID_DURATION_MS) warningMessages += "$id 的 validDurationMs 超过 15000，可能增加误触风险。"
+        if (validDurationMs > LONG_DURATION_WARNING_MS) warningMessages += "$id 的 validDurationMs 较长，可能增加误触风险。"
         if (minScore !in 0..100) return RuleImportResult(false, "$id 的 minScore 必须在 0 到 100 之间")
         if (minScore < 60) warningMessages += "$id 的 minScore 较低，可能增加误触风险。"
         if (area == RuleArea.Any) warningMessages += "$id 使用 area=any，请确认关键词足够明确。"

@@ -2,46 +2,103 @@ package com.example.skip.data
 
 import android.content.Context
 import com.example.skip.model.ClickLog
+import com.example.skip.model.ClickLogStage
+import com.example.skip.model.ClickMethodLog
+import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.RuleLog
 import com.example.skip.model.RuleSource
+import com.example.skip.util.PrivacySanitizer
+import com.example.skip.util.RomUtils
+import org.json.JSONArray
+import org.json.JSONObject
+import java.time.Instant
 
 object LogRepository {
     private const val KEY_CLICK_LOGS = "click_logs"
     private const val KEY_RULE_LOGS = "rule_logs"
-    private const val MAX_LOG_COUNT = 80
+    private const val MAX_CLICK_LOG_COUNT = 1000
+    private const val MAX_RULE_LOG_COUNT = 100
+    private const val MAX_LOG_AGE_MS = 7L * 24L * 60L * 60L * 1000L
     private const val FIELD_SEPARATOR = "\t"
     private const val ROW_SEPARATOR = "\n"
+    private const val DUPLICATE_WINDOW_MS = 5000L
 
     fun addClickLog(context: Context, log: ClickLog) {
+        if (log.stage.isDebugOnly && !SettingsRepository.isDebugToastEnabled(context)) return
+        val now = System.currentTimeMillis()
+        val cleaned = log.copy(
+            nodeText = PrivacySanitizer.sanitizeText(log.nodeText),
+            contentDescription = PrivacySanitizer.sanitizeText(log.contentDescription),
+            clickedNodeText = PrivacySanitizer.sanitizeText(log.clickedNodeText),
+            reason = PrivacySanitizer.sanitizeText(log.reason),
+            failureReason = PrivacySanitizer.sanitizeText(log.failureReason),
+            detail = PrivacySanitizer.sanitizeText(log.detail)
+        )
+        val existing = getClickLogs(context)
+            .filter { now - it.timeMillis <= MAX_LOG_AGE_MS }
+            .filterNot { it.isDuplicateOf(cleaned, now) }
         val logs = buildList {
-            add(log)
-            addAll(getClickLogs(context))
-        }.take(MAX_LOG_COUNT)
+            add(cleaned)
+            addAll(existing)
+        }.take(MAX_CLICK_LOG_COUNT)
 
         SettingsRepository.prefs(context)
             .edit()
-            .putString(KEY_CLICK_LOGS, logs.joinToString(ROW_SEPARATOR) { it.serialize() })
+            .putString(KEY_CLICK_LOGS, JSONArray().apply {
+                logs.forEach { put(it.toJson()) }
+            }.toString())
             .apply()
     }
 
     fun getClickLogs(context: Context): List<ClickLog> {
-        return SettingsRepository.prefs(context)
-            .getString(KEY_CLICK_LOGS, null)
-            .orEmpty()
-            .lineSequence()
-            .mapNotNull { it.deserializeLog() }
-            .toList()
+        val raw = SettingsRepository.prefs(context).getString(KEY_CLICK_LOGS, null).orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return if (raw.trimStart().startsWith("[")) {
+            runCatching {
+                val array = JSONArray(raw)
+                buildList {
+                    for (index in 0 until array.length()) {
+                        array.optJSONObject(index)?.toClickLog()?.let(::add)
+                    }
+                }
+            }.getOrDefault(emptyList())
+        } else {
+            raw.lineSequence().mapNotNull { it.deserializeLegacyClickLog() }.toList()
+        }
     }
 
     fun clearClickLogs(context: Context) {
         SettingsRepository.prefs(context).edit().remove(KEY_CLICK_LOGS).apply()
     }
 
+    fun exportClickLogsAsJson(
+        context: Context,
+        versionName: String,
+        logs: List<ClickLog> = getClickLogs(context)
+    ): String {
+        val deviceInfo = RomUtils.getDeviceInfo()
+        return JSONObject()
+            .put("exportTime", Instant.ofEpochMilli(System.currentTimeMillis()).toString())
+            .put("skipVersion", versionName)
+            .put("device", JSONObject()
+                .put("brand", deviceInfo.brand)
+                .put("manufacturer", deviceInfo.manufacturer)
+                .put("model", deviceInfo.model)
+                .put("androidVersion", deviceInfo.androidVersion)
+                .put("sdkInt", deviceInfo.sdkInt)
+                .put("rom", deviceInfo.romType.label)
+            )
+            .put("events", JSONArray().apply {
+                logs.forEach { put(it.toExportJson()) }
+            })
+            .toString(2)
+    }
+
     fun addRuleLog(context: Context, log: RuleLog) {
         val logs = buildList {
             add(log)
             addAll(getRuleLogs(context))
-        }.take(MAX_LOG_COUNT)
+        }.take(MAX_RULE_LOG_COUNT)
 
         SettingsRepository.prefs(context)
             .edit()
@@ -62,37 +119,193 @@ object LogRepository {
         SettingsRepository.prefs(context).edit().remove(KEY_RULE_LOGS).apply()
     }
 
-    private fun ClickLog.serialize(): String {
-        return listOf(
-            timeMillis.toString(),
-            packageName.safeField(),
-            appName.safeField(),
-            ruleName.safeField(),
-            success.toString(),
-            reason.safeField()
-        ).joinToString(FIELD_SEPARATOR)
+    private fun ClickLog.isDuplicateOf(other: ClickLog, now: Long): Boolean {
+        if (now - timeMillis > DUPLICATE_WINDOW_MS) return false
+        return packageName == other.packageName &&
+            ruleId == other.ruleId &&
+            stage == other.stage &&
+            failureReason == other.failureReason
     }
 
-    private fun String.deserializeLog(): ClickLog? {
+    private fun ClickLog.toJson(): JSONObject {
+        return JSONObject()
+            .put("timeMillis", timeMillis)
+            .put("packageName", packageName)
+            .put("appName", appName)
+            .put("activityName", activityName)
+            .put("ruleType", ruleType)
+            .put("ruleName", ruleName)
+            .put("ruleId", ruleId)
+            .put("stage", stage.value)
+            .put("success", success)
+            .put("reason", reason)
+            .put("failureReason", failureReason)
+            .put("detail", detail)
+            .put("eventType", eventType)
+            .put("eventPackageName", eventPackageName)
+            .put("rootWindowNull", rootWindowNull)
+            .put("windowId", windowId)
+            .put("rootChildCount", rootChildCount)
+            .put("canRetrieveWindowContent", canRetrieveWindowContent)
+            .put("candidateCount", candidateCount)
+            .put("bestCandidateScore", bestCandidateScore)
+            .put("bestCandidateBounds", bestCandidateBounds)
+            .put("minScore", minScore)
+            .put("matchedKeyword", matchedKeyword)
+            .put("nodeText", nodeText)
+            .put("contentDescription", contentDescription)
+            .put("viewIdResourceName", viewIdResourceName)
+            .put("boundsInScreen", boundsInScreen)
+            .put("nodeClickable", nodeClickable)
+            .put("parentClickable", parentClickable)
+            .put("score", score)
+            .put("area", area)
+            .put("clickMethod", clickMethod.value)
+            .put("actionReturnValue", actionReturnValue)
+            .put("clickResult", clickResult)
+            .put("effectConfirmed", effectConfirmed)
+            .put("delayBeforeClickMs", delayBeforeClickMs)
+            .put("retryCount", retryCount)
+            .put("deviceRom", deviceRom)
+            .put("elapsedSinceAppStartMs", elapsedSinceAppStartMs)
+            .put("defaultRuleWindowMs", defaultRuleWindowMs)
+            .put("isSystemPackage", isSystemPackage)
+            .put("isLauncherPackage", isLauncherPackage)
+            .put("isSelfPackage", isSelfPackage)
+            .put("isSelfAppLabelCandidate", isSelfAppLabelCandidate)
+            .put("blockedBySafety", blockedBySafety)
+            .put("blockedReason", blockedReason)
+            .put("defaultRuleAreaAllowed", defaultRuleAreaAllowed)
+            .put("textKeywordIsStandaloneSkip", textKeywordIsStandaloneSkip)
+            .put("effectConfirmReason", effectConfirmReason)
+            .put("safetyModeEnabled", safetyModeEnabled)
+            .put("clickSkippedBySafetyMode", clickSkippedBySafetyMode)
+            .put("candidateBounds", candidateBounds)
+            .put("candidateCenterX", candidateCenterX)
+            .put("candidateCenterY", candidateCenterY)
+            .put("clickedNodeBounds", clickedNodeBounds)
+            .put("clickedNodeClassName", clickedNodeClassName)
+            .put("clickedNodeText", clickedNodeText)
+            .put("clickedNodeViewId", clickedNodeViewId)
+            .put("clickedParentDepth", clickedParentDepth)
+            .put("candidateAreaRatio", candidateAreaRatio)
+            .put("gestureX", gestureX)
+            .put("gestureY", gestureY)
+            .put("isLargeCandidateBounds", isLargeCandidateBounds)
+            .put("isFixedCoordinateClick", isFixedCoordinateClick)
+            .put("clickTargetSource", clickTargetSource.value)
+    }
+
+    private fun JSONObject.toClickLog(): ClickLog {
+        return ClickLog(
+            timeMillis = optLong("timeMillis"),
+            packageName = optString("packageName"),
+            appName = optString("appName"),
+            activityName = optString("activityName"),
+            ruleType = optString("ruleType"),
+            ruleName = optString("ruleName"),
+            ruleId = optString("ruleId"),
+            stage = ClickLogStage.fromValue(optString("stage")),
+            success = optNullableBoolean("success"),
+            reason = optString("reason"),
+            failureReason = optString("failureReason"),
+            detail = optString("detail"),
+            eventType = optNullableInt("eventType"),
+            eventPackageName = optString("eventPackageName"),
+            rootWindowNull = optBoolean("rootWindowNull"),
+            windowId = optNullableInt("windowId"),
+            rootChildCount = optNullableInt("rootChildCount"),
+            canRetrieveWindowContent = optBoolean("canRetrieveWindowContent"),
+            candidateCount = optNullableInt("candidateCount"),
+            bestCandidateScore = optNullableInt("bestCandidateScore"),
+            bestCandidateBounds = optString("bestCandidateBounds"),
+            minScore = optNullableInt("minScore"),
+            matchedKeyword = optString("matchedKeyword"),
+            nodeText = optString("nodeText"),
+            contentDescription = optString("contentDescription"),
+            viewIdResourceName = optString("viewIdResourceName"),
+            boundsInScreen = optString("boundsInScreen"),
+            nodeClickable = optNullableBoolean("nodeClickable"),
+            parentClickable = optNullableBoolean("parentClickable"),
+            score = optNullableInt("score"),
+            area = optString("area"),
+            clickMethod = ClickMethodLog.fromValue(optString("clickMethod")),
+            actionReturnValue = optNullableBoolean("actionReturnValue"),
+            clickResult = optNullableBoolean("clickResult"),
+            effectConfirmed = optNullableBoolean("effectConfirmed"),
+            delayBeforeClickMs = optNullableLong("delayBeforeClickMs"),
+            retryCount = optInt("retryCount"),
+            deviceRom = optString("deviceRom"),
+            elapsedSinceAppStartMs = optNullableLong("elapsedSinceAppStartMs"),
+            defaultRuleWindowMs = optNullableLong("defaultRuleWindowMs"),
+            isSystemPackage = optBoolean("isSystemPackage"),
+            isLauncherPackage = optBoolean("isLauncherPackage"),
+            isSelfPackage = optBoolean("isSelfPackage"),
+            isSelfAppLabelCandidate = optBoolean("isSelfAppLabelCandidate"),
+            blockedBySafety = optBoolean("blockedBySafety"),
+            blockedReason = optString("blockedReason"),
+            defaultRuleAreaAllowed = optNullableBoolean("defaultRuleAreaAllowed"),
+            textKeywordIsStandaloneSkip = optBoolean("textKeywordIsStandaloneSkip"),
+            effectConfirmReason = optString("effectConfirmReason"),
+            safetyModeEnabled = optBoolean("safetyModeEnabled"),
+            clickSkippedBySafetyMode = optBoolean("clickSkippedBySafetyMode"),
+            candidateBounds = optString("candidateBounds"),
+            candidateCenterX = optNullableInt("candidateCenterX"),
+            candidateCenterY = optNullableInt("candidateCenterY"),
+            clickedNodeBounds = optString("clickedNodeBounds"),
+            clickedNodeClassName = optString("clickedNodeClassName"),
+            clickedNodeText = optString("clickedNodeText"),
+            clickedNodeViewId = optString("clickedNodeViewId"),
+            clickedParentDepth = optNullableInt("clickedParentDepth"),
+            candidateAreaRatio = optNullableFloat("candidateAreaRatio"),
+            gestureX = optNullableInt("gestureX"),
+            gestureY = optNullableInt("gestureY"),
+            isLargeCandidateBounds = optBoolean("isLargeCandidateBounds"),
+            isFixedCoordinateClick = optBoolean("isFixedCoordinateClick"),
+            clickTargetSource = ClickTargetSourceLog.fromValue(optString("clickTargetSource"))
+        )
+    }
+
+    private fun ClickLog.toExportJson(): JSONObject {
+        return toJson()
+            .put("time", Instant.ofEpochMilli(timeMillis).toString())
+            .put("stageLabel", stage.label)
+    }
+
+    private fun String.deserializeLegacyClickLog(): ClickLog? {
         val parts = split(FIELD_SEPARATOR)
-        if (parts.size == 3) {
-            val time = parts[0].toLongOrNull() ?: return null
-            return ClickLog(
+        val time = parts.firstOrNull()?.toLongOrNull() ?: return null
+        return when (parts.size) {
+            3 -> ClickLog(timeMillis = time, packageName = parts[1], ruleName = parts[2])
+            6 -> ClickLog(
                 timeMillis = time,
                 packageName = parts[1],
-                ruleName = parts[2]
+                appName = parts[2],
+                ruleName = parts[3],
+                success = parts[4].toBooleanStrictOrNull(),
+                reason = parts[5]
             )
+            7 -> ClickLog(
+                timeMillis = time,
+                packageName = parts[1],
+                appName = parts[2],
+                ruleType = parts[3],
+                ruleName = parts[4],
+                success = parts[5].toBooleanStrictOrNull(),
+                reason = parts[6]
+            )
+            8 -> ClickLog(
+                timeMillis = time,
+                packageName = parts[1],
+                appName = parts[2],
+                ruleType = parts[3],
+                ruleName = parts[4],
+                success = parts[5].toBooleanStrictOrNull(),
+                reason = parts[6],
+                detail = parts[7]
+            )
+            else -> null
         }
-        if (parts.size != 6) return null
-        val time = parts[0].toLongOrNull() ?: return null
-        return ClickLog(
-            timeMillis = time,
-            packageName = parts[1],
-            appName = parts[2],
-            ruleName = parts[3],
-            success = parts[4].toBooleanStrictOrNull() ?: true,
-            reason = parts[5]
-        )
     }
 
     private fun RuleLog.serialize(): String {
@@ -122,5 +335,21 @@ object LogRepository {
 
     private fun String.safeField(): String {
         return replace(FIELD_SEPARATOR, " ").replace(ROW_SEPARATOR, " ")
+    }
+
+    private fun JSONObject.optNullableInt(key: String): Int? {
+        return if (has(key) && !isNull(key)) optInt(key) else null
+    }
+
+    private fun JSONObject.optNullableLong(key: String): Long? {
+        return if (has(key) && !isNull(key)) optLong(key) else null
+    }
+
+    private fun JSONObject.optNullableBoolean(key: String): Boolean? {
+        return if (has(key) && !isNull(key)) optBoolean(key) else null
+    }
+
+    private fun JSONObject.optNullableFloat(key: String): Float? {
+        return if (has(key) && !isNull(key)) optDouble(key).toFloat() else null
     }
 }

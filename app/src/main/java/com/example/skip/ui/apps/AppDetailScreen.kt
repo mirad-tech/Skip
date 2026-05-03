@@ -1,0 +1,309 @@
+package com.example.skip.ui.apps
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.example.skip.data.InstalledAppRepository
+import com.example.skip.data.LogRepository
+import com.example.skip.data.RuleRepository
+import com.example.skip.data.SettingsRepository
+import com.example.skip.model.SkipRule
+import com.example.skip.ui.common.AppIconView
+import com.example.skip.ui.common.SimpleScreenScaffold
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+@Composable
+fun AppDetailScreen(
+    packageName: String,
+    onBack: () -> Unit,
+    onAddRule: (String) -> Unit,
+    onImportJsonRule: (String) -> Unit,
+    onEditRule: (String) -> Unit
+) {
+    val context = LocalContext.current
+    var refreshKey by remember { mutableIntStateOf(0) }
+    val status = remember(packageName, refreshKey) {
+        InstalledAppRepository.resolve(context, packageName)
+    }
+    val rules = remember(packageName, refreshKey) {
+        RuleRepository.getCustomRulesForPackage(context, packageName)
+    }
+    val logs = remember(packageName, refreshKey) {
+        LogRepository.getClickLogs(context).filter { it.packageName == packageName }.take(5)
+    }
+    var showAddRuleOptions by remember { mutableStateOf(false) }
+
+    SimpleScreenScaffold(title = "应用详情", onBack = onBack) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AppIconView(status.app.icon, status.app.label, size = 52.dp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(status.app.label, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                status.app.packageName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Text(
+                        text = when {
+                            status.isSelfPackage -> "当前状态：不可配置"
+                            status.isProtected -> "当前状态：安全保护"
+                            status.isBlacklisted -> "当前状态：已加入黑名单"
+                            else -> "当前状态：默认跳过已启用"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "自定义规则：${rules.size}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            enabled = !status.isProtected && !status.isSelfPackage,
+                            onClick = {
+                                SettingsRepository.setBlacklisted(
+                                    context,
+                                    packageName,
+                                    !status.isBlacklisted
+                                )
+                                refreshKey++
+                            }
+                        ) {
+                            Text(if (status.isBlacklisted) "移出黑名单" else "加入黑名单")
+                        }
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            enabled = !status.isProtected && !status.isSelfPackage,
+                            onClick = { showAddRuleOptions = true }
+                        ) {
+                            Text("添加规则")
+                        }
+                    }
+                }
+            }
+
+            SectionTitle("默认规则")
+            InfoCard(
+                when {
+                    status.isSelfPackage -> "Skip 自身不会被扫描、匹配或自动点击。"
+                    status.isProtected -> "该应用属于安全保护范围，默认不自动点击。"
+                    status.isBlacklisted -> "黑名单已关闭默认开屏跳过。"
+                    else -> "默认仅在应用打开后的短时间内尝试跳过，以减少误触。"
+                }
+            )
+
+            SectionTitle("自定义规则")
+            if (rules.isEmpty()) {
+                InfoCard("暂无数据")
+            } else {
+                rules.forEach { rule ->
+                    RuleCard(
+                        rule = rule,
+                        onEnabledChange = { enabled ->
+                            RuleRepository.setRuleEnabled(context, rule.id, enabled)
+                            refreshKey++
+                        },
+                        onEdit = { onEditRule(rule.id) },
+                        onDelete = {
+                            RuleRepository.deleteRule(context, rule.id)
+                            refreshKey++
+                        }
+                    )
+                }
+            }
+
+            SectionTitle("最近命中日志")
+            if (logs.isEmpty()) {
+                InfoCard("暂无数据")
+            } else {
+                logs.forEach { log ->
+                    InfoCard(
+                        buildString {
+                            append(formatTime(log.timeMillis))
+                            append("\n")
+                            append(log.ruleType.ifBlank { "规则" })
+                            append(" · ")
+                            append(log.ruleName)
+                            append("\n")
+                            append(log.stage.label)
+                            val failure = log.failureReason.ifBlank { log.reason }
+                            if (failure.isNotBlank()) append("：").append(failure)
+                            if (log.detail.isNotBlank()) {
+                                append("\n")
+                                append(log.detail)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showAddRuleOptions) {
+        AddRuleOptionsDialog(
+            onDismiss = { showAddRuleOptions = false },
+            onCreateSimpleRule = {
+                showAddRuleOptions = false
+                onAddRule(packageName)
+            },
+            onImportJson = {
+                showAddRuleOptions = false
+                onImportJsonRule(packageName)
+            }
+        )
+    }
+}
+
+@Composable
+private fun AddRuleOptionsDialog(
+    onDismiss: () -> Unit,
+    onCreateSimpleRule: () -> Unit,
+    onImportJson: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加规则") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onCreateSimpleRule
+                ) {
+                    Text("选择位置和关键词")
+                }
+                TextButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onImportJson
+                ) {
+                    Text("导入 JSON 文件")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+private fun RuleCard(
+    rule: SkipRule,
+    onEnabledChange: (Boolean) -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(rule.name, fontWeight = FontWeight.Medium)
+                    Text(
+                        "${rule.area.label} · ${formatDuration(rule.validDurationMs)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = rule.enabled, onCheckedChange = onEnabledChange)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onEdit) {
+                    Text("编辑")
+                }
+                TextButton(onClick = onDelete) {
+                    Text("删除")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+@Composable
+private fun InfoCard(text: String) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private fun formatDuration(durationMs: Long): String {
+    return if (durationMs > 30_000L) "任意时间" else "启动后 ${durationMs / 1000} 秒内"
+}
+
+private fun formatTime(timeMillis: Long): String {
+    return SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date(timeMillis))
+}

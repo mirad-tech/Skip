@@ -13,6 +13,8 @@ import org.json.JSONObject
 import java.util.UUID
 
 object RuleRepository {
+    const val DEFAULT_RULE_WINDOW_MS = 6_000L
+
     private const val KEY_KEYWORDS = "keywords"
     private const val KEY_VIEW_ID_KEYWORDS = "view_id_keywords"
     private const val KEY_RULES_JSON = "rules_json_v2"
@@ -29,13 +31,17 @@ object RuleRepository {
         "关闭此广告",
         "关闭开屏广告",
         "关闭推广",
-        "Skip",
-        "skip",
         "Skip Ad",
         "Skip Ads",
         "skip ad",
         "skip ads",
-        "Skip Video Ad"
+        "skip_ad",
+        "ad_skip",
+        "skip button",
+        "Skip Video Ad",
+        "关闭",
+        "进入应用",
+        "我知道了"
     )
 
     val defaultViewIdKeywords = listOf(
@@ -65,6 +71,7 @@ object RuleRepository {
             .getStringSet(KEY_KEYWORDS, defaultKeywords.toSet())
             .orEmpty()
             .cleanConfigItems()
+            .filterNot { it.isStandaloneSkipKeyword() }
     }
 
     fun saveKeywords(context: Context, keywords: Collection<String>) {
@@ -111,23 +118,36 @@ object RuleRepository {
     }
 
     fun getEnabledRulesForPackage(context: Context, packageName: String): List<SkipRule> {
-        val enabledPackages = getRulePackages(context).filter { it.enabled }.map { it.id }.toSet()
-        val storedRules = getRules(context)
-            .filter { rule ->
-                rule.enabled &&
-                    rule.packageName == packageName &&
-                    (rule.packageId == "local" || rule.packageId in enabledPackages)
-            }
-            .sortedByDescending { it.priority }
-        if (storedRules.isNotEmpty()) return storedRules
-        if (SettingsRepository.getWhitelistPackages(context).contains(packageName)) {
-            return listOf(createBuiltInRuleForPackage(context, packageName))
+        if (packageName.isBlank()) return emptyList()
+        val customRules = getEnabledCustomRulesForPackage(context, packageName)
+        if (SettingsRepository.isBlacklisted(context, packageName)) {
+            return customRules
         }
-        return emptyList()
+        return (customRules + createBuiltInRuleForPackage(context, packageName))
+            .sortedWith(compareByDescending<SkipRule> { it.priority }.thenBy { it.createdAt })
     }
 
     fun hasRulesForPackage(context: Context, packageName: String): Boolean {
-        return getEnabledRulesForPackage(context, packageName).isNotEmpty()
+        return getCustomRulesForPackage(context, packageName).isNotEmpty()
+    }
+
+    fun getCustomRulesForPackage(context: Context, packageName: String): List<SkipRule> {
+        val enabledPackages = getRulePackages(context).filter { it.enabled }.map { it.id }.toSet()
+        return getRules(context)
+            .filter { rule ->
+                rule.packageName == packageName &&
+                    rule.source != RuleSource.BuiltIn &&
+                    (rule.packageId == "local" || rule.packageId in enabledPackages)
+            }
+            .sortedWith(compareByDescending<SkipRule> { it.priority }.thenBy { it.createdAt })
+    }
+
+    fun getEnabledCustomRulesForPackage(context: Context, packageName: String): List<SkipRule> {
+        return getCustomRulesForPackage(context, packageName).filter { it.enabled }
+    }
+
+    fun getBuiltInRuleForPackage(context: Context, packageName: String): SkipRule {
+        return createBuiltInRuleForPackage(context, packageName)
     }
 
     fun upsertRule(context: Context, rule: SkipRule) {
@@ -146,6 +166,21 @@ object RuleRepository {
             context,
             getRules(context).map { if (it.id == ruleId) it.copy(enabled = enabled) else it }
         )
+    }
+
+    fun disableRulesForPackage(context: Context, packageName: String): Int {
+        val rules = getRules(context)
+        var changed = 0
+        val updated = rules.map { rule ->
+            if (rule.packageName == packageName && rule.enabled) {
+                changed++
+                rule.copy(enabled = false)
+            } else {
+                rule
+            }
+        }
+        if (changed > 0) saveRules(context, updated)
+        return changed
     }
 
     fun saveImportResult(
@@ -263,9 +298,9 @@ object RuleRepository {
             matchViewIds = getViewIdKeywords(context),
             area = RuleArea.TopRight,
             priority = 1,
-            cooldownMs = 1200L,
-            validDurationMs = 10_000L,
-            minScore = 70,
+            cooldownMs = 1500L,
+            validDurationMs = DEFAULT_RULE_WINDOW_MS,
+            minScore = 75,
             packageId = "built_in"
         )
     }
@@ -331,9 +366,10 @@ object RuleRepository {
     private fun JSONObject.toSkipRule(): SkipRule? {
         val action = RuleAction.fromValue(optString("action", RuleAction.Click.value)) ?: return null
         val area = RuleArea.fromValue(optString("area", RuleArea.TopRight.value)) ?: return null
+        val source = RuleSource.fromValue(optString("source", RuleSource.UserSimple.value))
         return SkipRule(
             id = optString("id").ifBlank { "rule_${UUID.randomUUID()}" },
-            source = RuleSource.fromValue(optString("source", RuleSource.UserSimple.value)),
+            source = source,
             name = optString("name", "开屏跳过"),
             packageName = optString("packageName"),
             appName = optString("appName"),
@@ -346,7 +382,10 @@ object RuleRepository {
             action = action,
             priority = optInt("priority", 10),
             cooldownMs = optLong("cooldownMs", 1200L),
-            validDurationMs = optLong("validDurationMs", 10_000L),
+            validDurationMs = optLong(
+                "validDurationMs",
+                if (source == RuleSource.BuiltIn) DEFAULT_RULE_WINDOW_MS else 10_000L
+            ).let { if (source == RuleSource.BuiltIn && it == 10_000L) DEFAULT_RULE_WINDOW_MS else it },
             minScore = optInt("minScore", 70),
             packageId = optString("packageId", "local"),
             createdAt = optLong("createdAt", System.currentTimeMillis())
@@ -398,5 +437,9 @@ object RuleRepository {
             .filter { it.isNotEmpty() }
             .distinct()
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it })
+    }
+
+    private fun String.isStandaloneSkipKeyword(): Boolean {
+        return trim().equals("skip", ignoreCase = true)
     }
 }

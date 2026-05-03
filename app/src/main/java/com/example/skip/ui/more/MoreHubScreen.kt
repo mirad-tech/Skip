@@ -2,6 +2,7 @@ package com.example.skip.ui.more
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -13,16 +14,23 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.skip.data.SettingsRepository
 
 enum class MoreHubType(val title: String) {
-    Rules("规则"),
+    Apps("应用管理"),
     System("系统与权限"),
     Data("日志与隐私")
 }
@@ -34,20 +42,20 @@ fun MoreHubScreen(
     onBack: () -> Unit,
     onOpenDestination: (MoreDestination) -> Unit
 ) {
+    val context = LocalContext.current
     val items = when (type) {
-        MoreHubType.Rules -> listOf(
-            HubItem("创建规则", "普通表单", MoreDestination.CreateRule),
-            HubItem("导入 JSON", "高级规则", MoreDestination.JsonImport),
+        MoreHubType.Apps -> listOf(
+            HubItem("已安装应用", "搜索和配置", MoreDestination.InstalledApps),
+            HubItem("黑名单", "关闭默认跳过", MoreDestination.Blacklist),
+            HubItem("默认规则", "开屏模板", MoreDestination.DefaultRuleInfo),
             HubItem("规则列表", "启用和删除", MoreDestination.RuleList),
             HubItem("关键词", "默认匹配词", MoreDestination.Keywords),
-            HubItem("白名单", "目标 App", MoreDestination.Whitelist),
             HubItem("格式说明", "JSON 示例", MoreDestination.RuleFormat)
         )
         MoreHubType.System -> listOf(
             HubItem("兼容诊断", "ROM 和服务状态", MoreDestination.SystemCompat),
             HubItem("无障碍设置", "系统授权", MoreDestination.AccessibilitySettings),
-            HubItem("电池设置", "后台限制", MoreDestination.BatterySettings),
-            HubItem("通知设置", "权限入口", MoreDestination.NotificationSettings)
+            HubItem("电池设置", "后台限制", MoreDestination.BatterySettings)
         )
         MoreHubType.Data -> listOf(
             HubItem("点击日志", "结果记录", MoreDestination.Logs),
@@ -60,12 +68,7 @@ fun MoreHubScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(type.title) },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("返回")
-                    }
-                }
+                title = { Text(type.title) }
             )
         }
     ) { innerPadding ->
@@ -77,6 +80,44 @@ fun MoreHubScreen(
                 .padding(horizontal = 18.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            when (type) {
+                MoreHubType.Apps -> {
+                    var safetyModeEnabled by remember {
+                        mutableStateOf(SettingsRepository.isSafetyModeEnabled(context))
+                    }
+                    SettingRow(
+                        title = "安全模式",
+                        subtitle = "安全模式下只记录命中结果，不会自动点击。",
+                        checked = safetyModeEnabled,
+                        onCheckedChange = { enabled ->
+                            safetyModeEnabled = enabled
+                            SettingsRepository.setSafetyModeEnabled(context, enabled)
+                        }
+                    )
+                    if (safetyModeEnabled) {
+                        Text(
+                            text = "当前为安全模式：仅记录，不会自动点击",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+                MoreHubType.Data -> {
+                    var debugToastEnabled by remember {
+                        mutableStateOf(SettingsRepository.isDebugToastEnabled(context))
+                    }
+                    SettingRow(
+                        title = "显示跳过调试提示",
+                        subtitle = "调试模式下限频提示",
+                        checked = debugToastEnabled,
+                        onCheckedChange = { enabled ->
+                            debugToastEnabled = enabled
+                            SettingsRepository.setDebugToastEnabled(context, enabled)
+                        }
+                    )
+                }
+                MoreHubType.System -> Unit
+            }
             items.forEach { item ->
                 Card(
                     onClick = { onOpenDestination(item.destination) },
@@ -107,3 +148,32 @@ private data class HubItem(
     val subtitle: String,
     val destination: MoreDestination
 )
+
+@Composable
+private fun SettingRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, fontWeight = FontWeight.Medium)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
+}

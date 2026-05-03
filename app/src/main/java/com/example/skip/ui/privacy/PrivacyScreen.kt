@@ -31,7 +31,7 @@ fun PrivacyScreen(
                 PrivacyPageMode.Privacy -> {
                     InfoCard(
                         title = "无障碍服务用途",
-                        body = "本 App 只在你主动开启无障碍服务后，用于识别白名单 App 中疑似跳过按钮并点击。"
+                        body = "本 App 只在你主动开启无障碍服务后，用于识别疑似跳过按钮并点击。"
                     )
                     InfoCard(
                         title = "隐私边界",
@@ -53,7 +53,7 @@ fun PrivacyScreen(
                 PrivacyPageMode.About -> {
                     InfoCard(
                         title = "Skip $versionName",
-                        body = "一个本地化的 Android 屏幕辅助点击工具 MVP。"
+                        body = "一个本地化的 Android 辅助点击工具。"
                     )
                     InfoCard(
                         title = "项目定位",
