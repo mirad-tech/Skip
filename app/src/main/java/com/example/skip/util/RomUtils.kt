@@ -1,0 +1,129 @@
+package com.example.skip.util
+
+import android.os.Build
+
+object RomUtils {
+    enum class RomType(val label: String) {
+        HyperOS("HyperOS"),
+        MIUI("MIUI"),
+        OriginOS("OriginOS"),
+        FuntouchOS("Funtouch OS"),
+        ColorOS("ColorOS"),
+        RealmeUI("realme UI"),
+        MagicOS("MagicOS"),
+        EMUI("EMUI"),
+        Flyme("Flyme"),
+        OneUI("One UI"),
+        Unknown("未知系统")
+    }
+
+    data class DeviceInfo(
+        val manufacturer: String,
+        val brand: String,
+        val model: String,
+        val androidVersion: String,
+        val sdkInt: Int,
+        val romType: RomType
+    )
+
+    fun getDeviceInfo(): DeviceInfo {
+        return DeviceInfo(
+            manufacturer = Build.MANUFACTURER.orEmpty(),
+            brand = Build.BRAND.orEmpty(),
+            model = Build.MODEL.orEmpty(),
+            androidVersion = Build.VERSION.RELEASE.orEmpty(),
+            sdkInt = Build.VERSION.SDK_INT,
+            romType = detectRom()
+        )
+    }
+
+    fun detectRom(): RomType {
+        val manufacturer = Build.MANUFACTURER.orEmpty().lowercase()
+        val brand = Build.BRAND.orEmpty().lowercase()
+        val display = Build.DISPLAY.orEmpty().lowercase()
+        val miOs = getSystemProperty("ro.mi.os.version.name")
+        val miui = getSystemProperty("ro.miui.ui.version.name")
+        val vivo = getSystemProperty("ro.vivo.os.version")
+        val oppo = getSystemProperty("ro.build.version.opporom")
+        val realme = getSystemProperty("ro.build.version.realmeui")
+        val emui = getSystemProperty("ro.build.version.emui")
+        val magic = getSystemProperty("ro.build.version.magic")
+        val oneUi = getSystemProperty("ro.build.version.oneui")
+        val flyme = getSystemProperty("ro.flyme.published")
+
+        return when {
+            miOs.isNotBlank() || display.contains("hyperos") -> RomType.HyperOS
+            miui.isNotBlank() || manufacturer.contains("xiaomi") || brand.contains("redmi") -> RomType.MIUI
+            manufacturer.contains("vivo") && display.contains("origin") -> RomType.OriginOS
+            vivo.isNotBlank() || manufacturer.contains("vivo") -> RomType.FuntouchOS
+            realme.isNotBlank() || brand.contains("realme") -> RomType.RealmeUI
+            oppo.isNotBlank() || manufacturer.contains("oppo") || brand.contains("oneplus") -> RomType.ColorOS
+            magic.isNotBlank() || manufacturer.contains("honor") -> RomType.MagicOS
+            emui.isNotBlank() || manufacturer.contains("huawei") -> RomType.EMUI
+            flyme.isNotBlank() || display.contains("flyme") || manufacturer.contains("meizu") -> RomType.Flyme
+            oneUi.isNotBlank() || manufacturer.contains("samsung") -> RomType.OneUI
+            else -> RomType.Unknown
+        }
+    }
+
+    fun guidanceFor(romType: RomType): List<String> {
+        return when (romType) {
+            RomType.HyperOS,
+            RomType.MIUI -> listOf(
+                "在系统设置中找到应用管理，进入 Skip。",
+                "开启自启动或类似选项。",
+                "电池策略选择“不限制”或类似选项。",
+                "确认无障碍服务仍处于开启状态。",
+                "如果服务经常失效，可尝试在最近任务中锁定本 App。"
+            )
+            RomType.OriginOS,
+            RomType.FuntouchOS -> listOf(
+                "进入设置中的应用与权限。",
+                "确认无障碍服务已开启。",
+                "在电池设置中允许后台运行。",
+                "在后台高耗电管理中允许 Skip。",
+                "如果仍失效，检查系统管家中的后台限制。"
+            )
+            RomType.ColorOS,
+            RomType.RealmeUI -> listOf(
+                "进入设置中的应用管理，找到 Skip。",
+                "允许后台运行。",
+                "关闭过度省电限制或选择类似的不限制选项。",
+                "检查无障碍服务是否被系统关闭。"
+            )
+            RomType.MagicOS,
+            RomType.EMUI -> listOf(
+                "进入应用启动管理。",
+                "将 Skip 设置为手动管理。",
+                "允许自启动、关联启动和后台活动。",
+                "检查电池优化与无障碍服务状态。"
+            )
+            RomType.Flyme -> listOf(
+                "打开手机管家或系统设置。",
+                "找到权限管理。",
+                "允许后台运行并检查自启动。",
+                "确认无障碍服务开启。"
+            )
+            RomType.OneUI -> listOf(
+                "进入设置中的应用，找到 Skip。",
+                "检查电池设置。",
+                "允许后台使用。",
+                "确认无障碍服务开启。"
+            )
+            RomType.Unknown -> listOf(
+                "确认无障碍服务已开启。",
+                "在电池或后台管理中允许 Skip 后台运行。",
+                "如果系统提供自启动管理，请手动允许。",
+                "不同系统菜单名称可能不同，请选择含义相近的选项。"
+            )
+        }
+    }
+
+    private fun getSystemProperty(key: String): String {
+        return runCatching {
+            val clazz = Class.forName("android.os.SystemProperties")
+            val method = clazz.getMethod("get", String::class.java)
+            method.invoke(null, key) as? String
+        }.getOrDefault("").orEmpty()
+    }
+}

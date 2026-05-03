@@ -106,7 +106,7 @@ fun HomeScreen(
                             enabled = !serviceEnabled,
                             onClick = onOpenAccessibilitySettings
                         ) {
-                            Text(if (serviceEnabled) "已开启" else "开启服务")
+                            Text(if (serviceEnabled) "服务已开启" else "开启服务")
                         }
                     }
                 }
@@ -116,7 +116,7 @@ fun HomeScreen(
                 modifier = Modifier.align(Alignment.BottomCenter),
                 onClick = onOpenMore
             ) {
-                Text("更多")
+                Text("更多功能")
             }
         }
     }

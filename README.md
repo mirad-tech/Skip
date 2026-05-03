@@ -6,9 +6,11 @@
 
 ## 下载
 
-当前版本：`1.2.0`
+当前版本：`1.3.0`
 
-[点击下载 APK](https://github.com/mirad-tech/Skip/raw/main/downloads/Skip-v1.2.0-debug.apk)
+[正式版下载](https://github.com/mirad-tech/Skip/releases/download/v1.3.0/Skip-v1.3.0-release.apk)
+
+[备用下载](https://github.com/mirad-tech/Skip/raw/main/downloads/Skip-v1.3.0-release.apk)
 
 这是一个手动安装的 Android APK，没有上架应用商店。安装时如果系统提示“未知来源应用”，需要你自己确认是否继续安装。
 
@@ -25,10 +27,10 @@
 3. 点击首页的“开启服务”。
 4. 在系统无障碍设置里找到“开屏广告跳过助手”，手动开启。
 5. 回到 Skip，进入“更多”。
-6. 打开“App 白名单”，添加你想启用自动跳过的 App 包名。
+6. 打开“普通创建规则”，选择目标 App、填写按钮文字和大概位置。
 7. 重新打开目标 App，观察开屏页是否自动跳过。
 
-如果不知道某个 App 的包名，可以先用包名查看工具查询，后续版本也会考虑做成应用选择列表。
+如果你懂 JSON，也可以在“JSON 文件导入”里批量导入规则。
 
 ## 它安全吗
 

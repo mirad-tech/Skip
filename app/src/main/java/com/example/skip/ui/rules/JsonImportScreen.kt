@@ -1,0 +1,217 @@
+package com.example.skip.ui.rules
+
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.example.skip.data.LogRepository
+import com.example.skip.data.RuleImportManager
+import com.example.skip.data.RuleRepository
+import com.example.skip.data.SettingsRepository
+import com.example.skip.model.DuplicateStrategy
+import com.example.skip.model.RuleImportResult
+import com.example.skip.model.RuleLog
+import com.example.skip.model.RuleSource
+import com.example.skip.ui.common.SimpleScreenScaffold
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun JsonImportScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    var importResult by remember { mutableStateOf<RuleImportResult?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var strategy by remember { mutableStateOf(DuplicateStrategy.Override) }
+    var showPreview by remember { mutableStateOf(false) }
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching {
+            context.contentResolver.openInputStream(uri)
+                ?.bufferedReader(Charsets.UTF_8)
+                ?.use { it.readText() }
+                .orEmpty()
+        }.getOrElse {
+            error = "读取文件失败：${it.message.orEmpty()}"
+            return@rememberLauncherForActivityResult
+        }
+        val result = RuleImportManager.parseRulePackage(text)
+        if (result.success) {
+            importResult = result
+            showPreview = true
+            error = null
+        } else {
+            error = result.errorMessage
+            LogRepository.addRuleLog(
+                context,
+                RuleLog(
+                    timeMillis = System.currentTimeMillis(),
+                    source = RuleSource.JsonFile,
+                    ruleName = "JSON 文件导入",
+                    targetApp = "-",
+                    success = false,
+                    reason = result.errorMessage
+                )
+            )
+        }
+    }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.openOutputStream(uri)?.use { output ->
+                output.write(RuleRepository.exportRulesAsJson(context).toByteArray(Charsets.UTF_8))
+            }
+        }.onFailure {
+            error = "导出失败：${it.message.orEmpty()}"
+        }
+    }
+
+    SimpleScreenScaffold(title = "JSON 文件导入", onBack = onBack) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(
+                text = "给懂规则格式的用户使用。导入前会先预览，不会直接写入。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { filePicker.launch("application/json") }
+            ) {
+                Text("选择 JSON 文件")
+            }
+
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { exportLauncher.launch("skip-rules.json") }
+            ) {
+                Text("导出当前规则")
+            }
+
+            Text("重复规则处理", style = MaterialTheme.typography.titleSmall)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DuplicateStrategy.entries.forEach { item ->
+                    FilterChip(
+                        selected = strategy == item,
+                        onClick = { strategy = item },
+                        label = { Text(item.label) }
+                    )
+                }
+            }
+
+            error?.let {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Text(
+                        text = it,
+                        modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
+        }
+    }
+
+    if (showPreview) {
+        importResult?.let { result ->
+            JsonPreviewDialog(
+                result = result,
+                strategy = strategy,
+                onDismiss = { showPreview = false },
+                onConfirm = {
+                    val saved = RuleRepository.saveImportResult(context, result, strategy)
+                    SettingsRepository.saveWhitelistPackages(
+                        context,
+                        (SettingsRepository.getWhitelistPackages(context) + result.rules.map { it.packageName })
+                    )
+                    result.rulePackage?.let { pkg ->
+                        LogRepository.addRuleLog(
+                            context,
+                            RuleLog(
+                                timeMillis = System.currentTimeMillis(),
+                                source = RuleSource.JsonFile,
+                                ruleName = pkg.name,
+                                targetApp = "${result.parsedAppCount} 个 App",
+                                success = true,
+                                reason = "导入 $saved 条规则"
+                            )
+                        )
+                    }
+                    showPreview = false
+                    onBack()
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun JsonPreviewDialog(
+    result: RuleImportResult,
+    strategy: DuplicateStrategy,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val pkg = result.rulePackage
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("确认导入") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("规则包：${pkg?.name.orEmpty()}", fontWeight = FontWeight.Medium)
+                Text("作者：${pkg?.author.orEmpty()}")
+                Text("版本：${pkg?.version ?: 1}")
+                Text("更新时间：${pkg?.updateTime.orEmpty()}")
+                Text("描述：${pkg?.description.orEmpty()}")
+                Text("App 数量：${result.parsedAppCount}")
+                Text("规则数量：${result.parsedRuleCount}")
+                Text("重复处理：${strategy.label}")
+                result.warningMessages.forEach {
+                    Text("提示：$it", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) {
+                Text("确认导入")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
