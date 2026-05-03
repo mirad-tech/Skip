@@ -23,6 +23,8 @@ object LogRepository {
     private const val ROW_SEPARATOR = "\n"
     private const val DUPLICATE_WINDOW_MS = 5000L
 
+    internal object JsonNullValue
+
     fun addClickLog(context: Context, log: ClickLog) {
         if (log.stage.isDebugOnly && !SettingsRepository.isDebugToastEnabled(context)) return
         val now = System.currentTimeMillis()
@@ -127,73 +129,86 @@ object LogRepository {
             failureReason == other.failureReason
     }
 
+    internal fun clickLogToJson(log: ClickLog): JSONObject {
+        return log.toJson()
+    }
+
+    internal fun clickLogJsonFields(log: ClickLog): Map<String, Any> {
+        return linkedMapOf(
+            "timeMillis" to log.timeMillis,
+            "packageName" to log.packageName,
+            "appName" to log.appName,
+            "activityName" to log.activityName,
+            "ruleType" to log.ruleType,
+            "ruleName" to log.ruleName,
+            "ruleId" to log.ruleId,
+            "stage" to log.stage.value,
+            "success" to nullableJsonValue(log.success),
+            "reason" to log.reason,
+            "failureReason" to log.failureReason,
+            "detail" to log.detail,
+            "eventType" to nullableJsonValue(log.eventType),
+            "eventPackageName" to log.eventPackageName,
+            "rootWindowNull" to log.rootWindowNull,
+            "windowId" to nullableJsonValue(log.windowId),
+            "rootChildCount" to nullableJsonValue(log.rootChildCount),
+            "canRetrieveWindowContent" to log.canRetrieveWindowContent,
+            "candidateCount" to nullableJsonValue(log.candidateCount),
+            "bestCandidateScore" to nullableJsonValue(log.bestCandidateScore),
+            "bestCandidateBounds" to log.bestCandidateBounds,
+            "minScore" to nullableJsonValue(log.minScore),
+            "matchedKeyword" to log.matchedKeyword,
+            "nodeText" to log.nodeText,
+            "contentDescription" to log.contentDescription,
+            "viewIdResourceName" to log.viewIdResourceName,
+            "boundsInScreen" to log.boundsInScreen,
+            "nodeClickable" to nullableJsonValue(log.nodeClickable),
+            "parentClickable" to nullableJsonValue(log.parentClickable),
+            "score" to nullableJsonValue(log.score),
+            "area" to log.area,
+            "clickMethod" to log.clickMethod.value,
+            "actionReturnValue" to nullableJsonValue(log.actionReturnValue),
+            "clickResult" to nullableJsonValue(log.clickResult),
+            "effectConfirmed" to nullableJsonValue(log.effectConfirmed),
+            "delayBeforeClickMs" to nullableJsonValue(log.delayBeforeClickMs),
+            "retryCount" to log.retryCount,
+            "deviceRom" to log.deviceRom,
+            "elapsedSinceAppStartMs" to nullableJsonValue(log.elapsedSinceAppStartMs),
+            "defaultRuleWindowMs" to nullableJsonValue(log.defaultRuleWindowMs),
+            "isSystemPackage" to log.isSystemPackage,
+            "isLauncherPackage" to log.isLauncherPackage,
+            "isSelfPackage" to log.isSelfPackage,
+            "isSelfAppLabelCandidate" to log.isSelfAppLabelCandidate,
+            "blockedBySafety" to log.blockedBySafety,
+            "blockedReason" to log.blockedReason,
+            "defaultRuleAreaAllowed" to nullableJsonValue(log.defaultRuleAreaAllowed),
+            "textKeywordIsStandaloneSkip" to log.textKeywordIsStandaloneSkip,
+            "effectConfirmReason" to log.effectConfirmReason,
+            "safetyModeEnabled" to log.safetyModeEnabled,
+            "clickSkippedBySafetyMode" to log.clickSkippedBySafetyMode,
+            "candidateBounds" to log.candidateBounds,
+            "candidateCenterX" to nullableJsonValue(log.candidateCenterX),
+            "candidateCenterY" to nullableJsonValue(log.candidateCenterY),
+            "clickedNodeBounds" to log.clickedNodeBounds,
+            "clickedNodeClassName" to log.clickedNodeClassName,
+            "clickedNodeText" to log.clickedNodeText,
+            "clickedNodeViewId" to log.clickedNodeViewId,
+            "clickedParentDepth" to nullableJsonValue(log.clickedParentDepth),
+            "candidateAreaRatio" to nullableJsonValue(log.candidateAreaRatio),
+            "gestureX" to nullableJsonValue(log.gestureX),
+            "gestureY" to nullableJsonValue(log.gestureY),
+            "isLargeCandidateBounds" to log.isLargeCandidateBounds,
+            "isFixedCoordinateClick" to log.isFixedCoordinateClick,
+            "clickTargetSource" to log.clickTargetSource.value
+        )
+    }
+
     private fun ClickLog.toJson(): JSONObject {
-        return JSONObject()
-            .put("timeMillis", timeMillis)
-            .put("packageName", packageName)
-            .put("appName", appName)
-            .put("activityName", activityName)
-            .put("ruleType", ruleType)
-            .put("ruleName", ruleName)
-            .put("ruleId", ruleId)
-            .put("stage", stage.value)
-            .put("success", success)
-            .put("reason", reason)
-            .put("failureReason", failureReason)
-            .put("detail", detail)
-            .put("eventType", eventType)
-            .put("eventPackageName", eventPackageName)
-            .put("rootWindowNull", rootWindowNull)
-            .put("windowId", windowId)
-            .put("rootChildCount", rootChildCount)
-            .put("canRetrieveWindowContent", canRetrieveWindowContent)
-            .put("candidateCount", candidateCount)
-            .put("bestCandidateScore", bestCandidateScore)
-            .put("bestCandidateBounds", bestCandidateBounds)
-            .put("minScore", minScore)
-            .put("matchedKeyword", matchedKeyword)
-            .put("nodeText", nodeText)
-            .put("contentDescription", contentDescription)
-            .put("viewIdResourceName", viewIdResourceName)
-            .put("boundsInScreen", boundsInScreen)
-            .put("nodeClickable", nodeClickable)
-            .put("parentClickable", parentClickable)
-            .put("score", score)
-            .put("area", area)
-            .put("clickMethod", clickMethod.value)
-            .put("actionReturnValue", actionReturnValue)
-            .put("clickResult", clickResult)
-            .put("effectConfirmed", effectConfirmed)
-            .put("delayBeforeClickMs", delayBeforeClickMs)
-            .put("retryCount", retryCount)
-            .put("deviceRom", deviceRom)
-            .put("elapsedSinceAppStartMs", elapsedSinceAppStartMs)
-            .put("defaultRuleWindowMs", defaultRuleWindowMs)
-            .put("isSystemPackage", isSystemPackage)
-            .put("isLauncherPackage", isLauncherPackage)
-            .put("isSelfPackage", isSelfPackage)
-            .put("isSelfAppLabelCandidate", isSelfAppLabelCandidate)
-            .put("blockedBySafety", blockedBySafety)
-            .put("blockedReason", blockedReason)
-            .put("defaultRuleAreaAllowed", defaultRuleAreaAllowed)
-            .put("textKeywordIsStandaloneSkip", textKeywordIsStandaloneSkip)
-            .put("effectConfirmReason", effectConfirmReason)
-            .put("safetyModeEnabled", safetyModeEnabled)
-            .put("clickSkippedBySafetyMode", clickSkippedBySafetyMode)
-            .put("candidateBounds", candidateBounds)
-            .put("candidateCenterX", candidateCenterX)
-            .put("candidateCenterY", candidateCenterY)
-            .put("clickedNodeBounds", clickedNodeBounds)
-            .put("clickedNodeClassName", clickedNodeClassName)
-            .put("clickedNodeText", clickedNodeText)
-            .put("clickedNodeViewId", clickedNodeViewId)
-            .put("clickedParentDepth", clickedParentDepth)
-            .put("candidateAreaRatio", candidateAreaRatio)
-            .put("gestureX", gestureX)
-            .put("gestureY", gestureY)
-            .put("isLargeCandidateBounds", isLargeCandidateBounds)
-            .put("isFixedCoordinateClick", isFixedCoordinateClick)
-            .put("clickTargetSource", clickTargetSource.value)
+        return JSONObject().apply {
+            clickLogJsonFields(this@toJson).forEach { (key, value) ->
+                put(key, if (value == JsonNullValue) JSONObject.NULL else value)
+            }
+        }
     }
 
     private fun JSONObject.toClickLog(): ClickLog {
@@ -351,5 +366,9 @@ object LogRepository {
 
     private fun JSONObject.optNullableFloat(key: String): Float? {
         return if (has(key) && !isNull(key)) optDouble(key).toFloat() else null
+    }
+
+    private fun nullableJsonValue(value: Any?): Any {
+        return value ?: JsonNullValue
     }
 }
