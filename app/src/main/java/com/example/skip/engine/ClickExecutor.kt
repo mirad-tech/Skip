@@ -19,6 +19,10 @@ object ClickExecutor {
         return null
     }
 
+    fun isSelfSafeClickable(node: AccessibilityNodeInfo): Boolean {
+        return node.isSafeClickTarget()
+    }
+
     fun click(node: AccessibilityNodeInfo): Boolean {
         return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }

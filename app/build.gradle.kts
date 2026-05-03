@@ -1,6 +1,27 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use(::load)
+    }
+}
+val releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("Release", ignoreCase = true)
+}
+fun requireSigningProperty(name: String): String {
+    val value = keystoreProperties.getProperty(name).orEmpty()
+    if (value.isBlank() && releaseTaskRequested) {
+        throw GradleException(
+            "缺少 release 签名配置：请根据 keystore.properties.example 创建 keystore.properties，并填写 $name。"
+        )
+    }
+    return value
 }
 
 android {
@@ -15,14 +36,27 @@ android {
         applicationId = "com.example.skip"
         minSdk = 28
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            val storeFilePath = requireSigningProperty("storeFile")
+            if (storeFilePath.isNotBlank()) {
+                storeFile = rootProject.file(storeFilePath)
+            }
+            storePassword = requireSigningProperty("storePassword")
+            keyAlias = requireSigningProperty("keyAlias")
+            keyPassword = requireSigningProperty("keyPassword")
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

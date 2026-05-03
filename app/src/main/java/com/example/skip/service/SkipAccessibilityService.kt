@@ -9,17 +9,22 @@ import com.example.skip.engine.ClickExecutor
 import com.example.skip.engine.NodeScanner
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.model.ClickLog
-import com.example.skip.model.SkipRule
 
 class SkipAccessibilityService : AccessibilityService() {
     private var foregroundPackage: String? = null
     private var foregroundSince = 0L
-    private var lastClickAt = 0L
+    private val lastRuleClickAt = mutableMapOf<String, Long>()
     private var lastClickSignature: String? = null
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        SettingsRepository.markServiceConnected(this)
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (!event.isSupportedEvent()) return
+        SettingsRepository.markServiceActive(this)
         if (!SettingsRepository.isMasterEnabled(this)) return
 
         val root = rootInActiveWindow ?: return
@@ -27,33 +32,63 @@ class SkipAccessibilityService : AccessibilityService() {
         val now = System.currentTimeMillis()
         updateForegroundWindow(packageName, now)
 
-        if (!SafetyGuard.canHandlePackage(this, packageName)) return
-        if (now - foregroundSince > APP_START_SCAN_WINDOW_MS) return
-        if (now - lastClickAt < MIN_CLICK_INTERVAL_MS) return
+        if (!SafetyGuard.canHandlePackage(this, packageName)) {
+            SettingsRepository.setLastFailureReason(this, "当前 App 不在白名单或属于安全保护名单")
+            return
+        }
 
-        val rule = SkipRule(
-            textKeywords = RuleRepository.getKeywords(this),
-            viewIdKeywords = RuleRepository.getViewIdKeywords(this)
-        )
-        val match = NodeScanner.findBestMatch(root, rule) ?: return
+        val appElapsedMs = now - foregroundSince
+        val rules = RuleRepository.getEnabledRulesForPackage(this, packageName)
+        if (rules.isEmpty()) {
+            SettingsRepository.setLastFailureReason(this, "当前 App 没有启用规则")
+            return
+        }
+        val activeRules = rules.filter { rule ->
+            val last = lastRuleClickAt[rule.id] ?: 0L
+            appElapsedMs <= rule.validDurationMs && now - last >= rule.cooldownMs
+        }
+        if (activeRules.isEmpty()) return
+
+        val match = NodeScanner.findBestMatch(root, activeRules, appElapsedMs)
+        if (match == null) {
+            SettingsRepository.setLastFailureReason(this, "未找到达到分数阈值的可点击节点")
+            return
+        }
         val signature = "$packageName:${match.ruleName}:${match.clickNode.hashCode()}"
-        if (signature == lastClickSignature && now - lastClickAt < REPEAT_CLICK_GUARD_MS) return
+        val lastAnyRuleClick = lastRuleClickAt.values.maxOrNull() ?: 0L
+        if (signature == lastClickSignature && now - lastAnyRuleClick < REPEAT_CLICK_GUARD_MS) return
 
         if (ClickExecutor.click(match.clickNode)) {
-            lastClickAt = now
+            lastRuleClickAt[match.ruleId] = now
             lastClickSignature = signature
+            SettingsRepository.markLastClick(this, now)
             LogRepository.addClickLog(
                 context = this,
                 log = ClickLog(
                     timeMillis = now,
                     packageName = packageName,
-                    ruleName = match.ruleName
+                    ruleName = match.ruleName,
+                    success = true
+                )
+            )
+        } else {
+            SettingsRepository.setLastFailureReason(this, "点击动作执行失败")
+            LogRepository.addClickLog(
+                context = this,
+                log = ClickLog(
+                    timeMillis = now,
+                    packageName = packageName,
+                    ruleName = match.ruleName,
+                    success = false,
+                    reason = "点击动作执行失败"
                 )
             )
         }
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        SettingsRepository.markServiceInterrupted(this)
+    }
 
     private fun updateForegroundWindow(packageName: String, now: Long) {
         if (packageName.isBlank()) return
@@ -70,8 +105,6 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        private const val MIN_CLICK_INTERVAL_MS = 1000L
         private const val REPEAT_CLICK_GUARD_MS = 3000L
-        private const val APP_START_SCAN_WINDOW_MS = 10_000L
     }
 }

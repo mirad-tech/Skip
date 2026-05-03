@@ -31,8 +31,20 @@ import androidx.compose.ui.unit.dp
 import com.example.skip.data.SettingsRepository
 
 enum class MoreDestination {
+    RulesHub,
+    SystemHub,
+    DataHub,
     Whitelist,
     Keywords,
+    CreateRule,
+    JsonImport,
+    RuleList,
+    RuleFormat,
+    SystemCompat,
+    AccessibilitySettings,
+    BatterySettings,
+    NotificationSettings,
+    RuleLogs,
     Logs,
     Safety,
     Privacy,
@@ -103,22 +115,16 @@ fun MoreScreen(
                 }
             }
 
-            MoreItem("App 白名单", "仅对白名单 App 生效") {
-                onOpenDestination(MoreDestination.Whitelist)
+            MoreItem("规则", "创建、导入和管理") {
+                onOpenDestination(MoreDestination.RulesHub)
             }
-            MoreItem("关键词规则", "管理跳过、Skip 等本地规则") {
-                onOpenDestination(MoreDestination.Keywords)
+            MoreItem("系统与权限", "诊断与设置入口") {
+                onOpenDestination(MoreDestination.SystemHub)
             }
-            MoreItem("点击日志", "只记录时间、包名和命中规则") {
-                onOpenDestination(MoreDestination.Logs)
+            MoreItem("日志与隐私", "记录、安全和说明") {
+                onOpenDestination(MoreDestination.DataHub)
             }
-            MoreItem("安全保护", "默认避开敏感类型 App") {
-                onOpenDestination(MoreDestination.Safety)
-            }
-            MoreItem("隐私说明", "无障碍服务的使用边界") {
-                onOpenDestination(MoreDestination.Privacy)
-            }
-            MoreItem("关于", "版本与项目说明") {
+            MoreItem("关于", "版本与项目") {
                 onOpenDestination(MoreDestination.About)
             }
         }
