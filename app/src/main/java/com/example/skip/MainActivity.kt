@@ -8,7 +8,15 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.example.skip.data.IconManager
+import com.example.skip.data.IconScheme
+import com.example.skip.data.RuleRepository
+import com.example.skip.data.SettingsRepository
+import com.example.skip.ui.apps.AppDetailScreen
+import com.example.skip.ui.apps.BlacklistScreen
+import com.example.skip.ui.apps.InstalledAppsScreen
 import com.example.skip.ui.home.HomeScreen
+import com.example.skip.ui.icons.IconAppearanceScreen
 import com.example.skip.ui.keywords.KeywordScreen
 import com.example.skip.ui.logs.ClickLogScreen
 import com.example.skip.ui.more.MoreDestination
@@ -17,18 +25,20 @@ import com.example.skip.ui.more.MoreHubType
 import com.example.skip.ui.more.MoreScreen
 import com.example.skip.ui.privacy.PrivacyPageMode
 import com.example.skip.ui.privacy.PrivacyScreen
+import com.example.skip.ui.rules.DefaultRuleInfoScreen
 import com.example.skip.ui.rules.JsonImportScreen
 import com.example.skip.ui.rules.RuleFormatScreen
 import com.example.skip.ui.rules.RuleListScreen
 import com.example.skip.ui.rules.SimpleRuleScreen
 import com.example.skip.ui.system.SystemCompatScreen
 import com.example.skip.ui.theme.SkipTheme
-import com.example.skip.ui.whitelist.WhitelistScreen
 import com.example.skip.util.AccessibilityUtil
 import com.example.skip.util.SettingsIntentUtils
 
 class MainActivity : ComponentActivity() {
     private var serviceEnabled by mutableStateOf(false)
+    private var masterEnabled by mutableStateOf(true)
+    private var safetyModeEnabled by mutableStateOf(false)
     private var currentScreen by mutableStateOf<AppScreen>(AppScreen.Home)
     private val appVersionName: String by lazy {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
@@ -37,23 +47,23 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        refreshAccessibilityState()
+        SettingsRepository.migrateIconSchemeDefault(this)
+        RuleRepository.disableRulesForPackage(this, packageName)
+        IconManager.syncCurrentScheme(applicationContext)
+        refreshRuntimeState()
         setContent {
             SkipTheme {
                 BackHandler(enabled = currentScreen != AppScreen.Home) {
-                    currentScreen = when (currentScreen) {
-                        AppScreen.Home -> AppScreen.Home
-                        AppScreen.More -> AppScreen.Home
-                        else -> AppScreen.More
-                    }
+                    currentScreen = previousScreen(currentScreen)
                 }
 
                 when (val screen = currentScreen) {
                     AppScreen.Home -> HomeScreen(
                         serviceEnabled = serviceEnabled,
-                        onOpenAccessibilitySettings = {
-                            startActivity(SettingsIntentUtils.accessibilityIntent())
-                        },
+                        masterEnabled = masterEnabled,
+                        safetyModeEnabled = safetyModeEnabled,
+                        onEnableService = { enableSkipService() },
+                        onDisableService = { disableSkipService() },
                         onOpenMore = { currentScreen = AppScreen.More }
                     )
 
@@ -62,16 +72,48 @@ class MainActivity : ComponentActivity() {
                         onOpenDestination = { destination -> openMoreDestination(destination) }
                     )
 
-                    AppScreen.Whitelist -> WhitelistScreen(
-                        onBack = { currentScreen = AppScreen.RulesHub }
+                    AppScreen.InstalledApps -> InstalledAppsScreen(
+                        onBack = { currentScreen = AppScreen.AppHub },
+                        onOpenApp = { packageName -> currentScreen = AppScreen.AppDetail(packageName) }
+                    )
+
+                    AppScreen.Blacklist -> BlacklistScreen(
+                        onBack = { currentScreen = AppScreen.AppHub },
+                        onOpenApp = { packageName -> currentScreen = AppScreen.AppDetail(packageName) }
+                    )
+
+                    is AppScreen.AppDetail -> AppDetailScreen(
+                        packageName = screen.packageName,
+                        onBack = { currentScreen = AppScreen.InstalledApps },
+                        onAddRule = { packageName ->
+                            currentScreen = AppScreen.CreateRule(ruleId = null, packageName = packageName)
+                        },
+                        onImportJsonRule = { packageName ->
+                            currentScreen = AppScreen.JsonImport(returnPackageName = packageName)
+                        },
+                        onEditRule = { ruleId ->
+                            currentScreen = AppScreen.CreateRule(
+                                ruleId = ruleId,
+                                packageName = screen.packageName
+                            )
+                        }
+                    )
+
+                    AppScreen.IconAppearance -> IconAppearanceScreen(
+                        onBack = { currentScreen = AppScreen.More },
+                        onApplyAndExit = { scheme -> applyIconAndExit(scheme) }
+                    )
+
+                    AppScreen.DefaultRuleInfo -> DefaultRuleInfoScreen(
+                        onBack = { currentScreen = AppScreen.AppHub }
                     )
 
                     AppScreen.Keywords -> KeywordScreen(
-                        onBack = { currentScreen = AppScreen.RulesHub }
+                        onBack = { currentScreen = AppScreen.AppHub }
                     )
 
-                    AppScreen.RulesHub -> MoreHubScreen(
-                        type = MoreHubType.Rules,
+                    AppScreen.AppHub -> MoreHubScreen(
+                        type = MoreHubType.Apps,
                         onBack = { currentScreen = AppScreen.More },
                         onOpenDestination = { destination -> openMoreDestination(destination) }
                     )
@@ -100,22 +142,29 @@ class MainActivity : ComponentActivity() {
 
                     is AppScreen.CreateRule -> SimpleRuleScreen(
                         editingRuleId = screen.ruleId,
-                        onBack = { currentScreen = AppScreen.RulesHub }
+                        initialPackageName = screen.packageName,
+                        onBack = {
+                            currentScreen = screen.packageName?.let(AppScreen::AppDetail)
+                                ?: AppScreen.AppHub
+                        }
                     )
 
-                    AppScreen.JsonImport -> JsonImportScreen(
-                        onBack = { currentScreen = AppScreen.RulesHub }
+                    is AppScreen.JsonImport -> JsonImportScreen(
+                        onBack = {
+                            currentScreen = screen.returnPackageName?.let(AppScreen::AppDetail)
+                                ?: AppScreen.AppHub
+                        }
                     )
 
                     AppScreen.RuleList -> RuleListScreen(
-                        onBack = { currentScreen = AppScreen.RulesHub },
+                        onBack = { currentScreen = AppScreen.AppHub },
                         onEditSimpleRule = { ruleId ->
-                            currentScreen = AppScreen.CreateRule(ruleId)
+                            currentScreen = AppScreen.CreateRule(ruleId = ruleId, packageName = null)
                         }
                     )
 
                     AppScreen.RuleFormat -> RuleFormatScreen(
-                        onBack = { currentScreen = AppScreen.RulesHub }
+                        onBack = { currentScreen = AppScreen.AppHub }
                     )
 
                     AppScreen.SystemCompat -> SystemCompatScreen(
@@ -146,22 +195,47 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        refreshAccessibilityState()
+        refreshRuntimeState()
     }
 
-    private fun refreshAccessibilityState() {
+    private fun refreshRuntimeState() {
         serviceEnabled = AccessibilityUtil.isSkipServiceEnabled(this)
+        masterEnabled = SettingsRepository.isMasterEnabled(this)
+        safetyModeEnabled = SettingsRepository.isSafetyModeEnabled(this)
+    }
+
+    private fun enableSkipService() {
+        SettingsRepository.setMasterEnabled(this, true)
+        masterEnabled = true
+        if (!serviceEnabled) {
+            startActivity(SettingsIntentUtils.accessibilityIntent())
+        }
+    }
+
+    private fun disableSkipService() {
+        SettingsRepository.setMasterEnabled(this, false)
+        masterEnabled = false
+    }
+
+    private fun applyIconAndExit(scheme: IconScheme): Boolean {
+        moveTaskToBack(true)
+        val success = IconManager.applyScheme(applicationContext, scheme)
+        if (success) {
+            finishAndRemoveTask()
+        }
+        return success
     }
 
     private fun openMoreDestination(destination: MoreDestination) {
         currentScreen = when (destination) {
-            MoreDestination.RulesHub -> AppScreen.RulesHub
+            MoreDestination.AppHub -> AppScreen.AppHub
+            MoreDestination.InstalledApps -> AppScreen.InstalledApps
+            MoreDestination.Blacklist -> AppScreen.Blacklist
+            MoreDestination.IconAppearance -> AppScreen.IconAppearance
+            MoreDestination.DefaultRuleInfo -> AppScreen.DefaultRuleInfo
             MoreDestination.SystemHub -> AppScreen.SystemHub
             MoreDestination.DataHub -> AppScreen.DataHub
-            MoreDestination.Whitelist -> AppScreen.Whitelist
             MoreDestination.Keywords -> AppScreen.Keywords
-            MoreDestination.CreateRule -> AppScreen.CreateRule(null)
-            MoreDestination.JsonImport -> AppScreen.JsonImport
             MoreDestination.RuleList -> AppScreen.RuleList
             MoreDestination.RuleFormat -> AppScreen.RuleFormat
             MoreDestination.SystemCompat -> AppScreen.SystemCompat
@@ -173,10 +247,6 @@ class MainActivity : ComponentActivity() {
                 startActivity(SettingsIntentUtils.batteryOptimizationIntent(this))
                 AppScreen.SystemHub
             }
-            MoreDestination.NotificationSettings -> {
-                startActivity(SettingsIntentUtils.notificationIntent(this))
-                AppScreen.SystemHub
-            }
             MoreDestination.RuleLogs -> AppScreen.RuleLogs
             MoreDestination.Logs -> AppScreen.Logs
             MoreDestination.Safety -> AppScreen.Safety
@@ -184,20 +254,50 @@ class MainActivity : ComponentActivity() {
             MoreDestination.About -> AppScreen.About
         }
     }
+
+    private fun previousScreen(screen: AppScreen): AppScreen {
+        return when (screen) {
+            AppScreen.Home -> AppScreen.Home
+            AppScreen.More -> AppScreen.Home
+            AppScreen.InstalledApps,
+            AppScreen.Blacklist,
+            AppScreen.DefaultRuleInfo,
+            AppScreen.Keywords,
+            AppScreen.RuleList,
+            AppScreen.RuleFormat -> AppScreen.AppHub
+            AppScreen.SystemCompat -> AppScreen.SystemHub
+            AppScreen.Privacy,
+            AppScreen.Safety,
+            AppScreen.Logs,
+            AppScreen.RuleLogs -> AppScreen.DataHub
+            AppScreen.IconAppearance,
+            AppScreen.AppHub,
+            AppScreen.SystemHub,
+            AppScreen.DataHub,
+            AppScreen.About -> AppScreen.More
+            is AppScreen.AppDetail -> AppScreen.InstalledApps
+            is AppScreen.CreateRule -> screen.packageName?.let(AppScreen::AppDetail) ?: AppScreen.AppHub
+            is AppScreen.JsonImport -> screen.returnPackageName?.let(AppScreen::AppDetail) ?: AppScreen.AppHub
+        }
+    }
 }
 
 private sealed interface AppScreen {
     data object Home : AppScreen
     data object More : AppScreen
-    data object RulesHub : AppScreen
+    data object InstalledApps : AppScreen
+    data object Blacklist : AppScreen
+    data class AppDetail(val packageName: String) : AppScreen
+    data object IconAppearance : AppScreen
+    data object DefaultRuleInfo : AppScreen
+    data object AppHub : AppScreen
     data object SystemHub : AppScreen
     data object DataHub : AppScreen
-    data object Whitelist : AppScreen
     data object Keywords : AppScreen
     data object Logs : AppScreen
     data object RuleLogs : AppScreen
-    data class CreateRule(val ruleId: String?) : AppScreen
-    data object JsonImport : AppScreen
+    data class CreateRule(val ruleId: String?, val packageName: String?) : AppScreen
+    data class JsonImport(val returnPackageName: String?) : AppScreen
     data object RuleList : AppScreen
     data object RuleFormat : AppScreen
     data object SystemCompat : AppScreen

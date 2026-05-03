@@ -3,6 +3,7 @@ package com.example.skip.engine
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.skip.model.RuleArea
+import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import java.util.Locale
 
@@ -22,20 +23,24 @@ object ScoreEvaluator {
 
     private val closeNeedsAdContext = listOf(
         "关闭",
-        "close"
+        "close",
+        "我知道了",
+        "知道了"
     )
 
     fun evaluate(
         node: AccessibilityNodeInfo,
         rule: SkipRule,
         appElapsedMs: Long,
-        clickTarget: AccessibilityNodeInfo?
-    ): ScoredRule? {
-        if (!node.isVisibleToUser || !node.isEnabled || node.isPassword) return null
-        val classNameValue = node.className?.toString().orEmpty()
-        if (classNameValue.contains("EditText", ignoreCase = true)) return null
+        clickSelection: ClickTargetSelection?
+    ): ScoreEvaluation? {
+        if (!node.isVisibleToUser) return null
+        if (!node.isEnabled) return null
+        if (node.isPassword || node.isInputNode()) return null
         if (isDangerousButtonText(node)) return null
-        if (appElapsedMs > rule.validDurationMs) return null
+        if (appElapsedMs > rule.validDurationMs) {
+            return ScoreEvaluation(rule, 0, rule.minScore, "", node.areaInScreen(), false, "skipped_by_time_window")
+        }
 
         val textValue = node.text?.toString().orEmpty()
         val descriptionValue = node.contentDescription?.toString().orEmpty()
@@ -47,29 +52,111 @@ object ScoreEvaluator {
         if (textRule == null && descriptionRule == null && idRule == null) return null
 
         var score = 0
-        val matchedRuleName = textRule ?: descriptionRule ?: idRule ?: rule.name
+        val area = node.areaInScreen()
+        val matchedKeyword = textRule ?: descriptionRule ?: idRule ?: rule.name
+        val defaultRule = rule.source == RuleSource.BuiltIn
+        val textKeywordIsStandaloneSkip = listOf(textValue, descriptionValue)
+            .any(SafetyGuard::isStandaloneSkipText)
+        if (defaultRule && textKeywordIsStandaloneSkip) {
+            return ScoreEvaluation(
+                rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = matchedKeyword,
+                area = area,
+                passesMinScore = false,
+                failureReason = "standalone_skip_forbidden",
+                defaultRuleAreaAllowed = defaultRuleAreaAllowed(area),
+                textKeywordIsStandaloneSkip = true
+            )
+        }
+
+        val bounds = android.graphics.Rect()
+        node.getBoundsInScreen(bounds)
+        val areaRatio = ClickExecutor.areaRatio(bounds)
+        val largeCandidate = ClickExecutor.isLargeDefaultCandidate(bounds)
+        val defaultAreaAllowed = defaultRuleAreaAllowed(area)
+        if (defaultRule && !defaultAreaAllowed) {
+            return ScoreEvaluation(
+                rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = matchedKeyword,
+                area = area,
+                passesMinScore = false,
+                failureReason = "default_rule_area_blocked",
+                defaultRuleAreaAllowed = false,
+                textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
+                candidateAreaRatio = areaRatio,
+                isLargeCandidateBounds = largeCandidate
+            )
+        }
+        if (defaultRule && largeCandidate) {
+            return ScoreEvaluation(
+                rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = matchedKeyword,
+                area = area,
+                passesMinScore = false,
+                failureReason = "ambiguous_candidate_large_bounds",
+                defaultRuleAreaAllowed = defaultAreaAllowed,
+                textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
+                candidateAreaRatio = areaRatio,
+                isLargeCandidateBounds = true
+            )
+        }
+        if (defaultRule && clickSelection == null) {
+            return ScoreEvaluation(
+                rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = matchedKeyword,
+                area = area,
+                passesMinScore = false,
+                failureReason = "no_safe_clickable_target",
+                defaultRuleAreaAllowed = defaultAreaAllowed,
+                textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
+                candidateAreaRatio = areaRatio,
+                isLargeCandidateBounds = largeCandidate
+            )
+        }
 
         if (textRule != null) score += 40
         if (descriptionRule != null) score += 30
         if (idRule != null) score += 30
-        if (rule.area == RuleArea.Any || node.areaInScreen() == rule.area) score += 20
+        if (rule.area == RuleArea.Any || area == rule.area) score += 20
         if (ClickExecutor.isSelfSafeClickable(node)) score += 20
-        if (clickTarget != null && clickTarget != node) score += 10
+        if (clickSelection != null && clickSelection.node != node) score += 10
         if (appElapsedMs <= rule.validDurationMs) score += 20
         if (viewId.containsAdOrSplashSignal()) score += 10
         if (listOf(textValue, descriptionValue).any { it.containsAdSignal() }) score += 10
+        if (defaultRule && area == RuleArea.TopCenter) score -= 20
 
         val onlyGenericClose = textRule != null &&
             closeNeedsAdContext.any { textRule.equals(it, ignoreCase = true) } &&
             !viewId.containsAdOrSplashSignal() &&
             listOf(textValue, descriptionValue).none { it.containsAdSignal() }
         if (onlyGenericClose) score -= 35
-
-        return if (score >= rule.minScore) {
-            ScoredRule(ruleName = "${rule.name} / $matchedRuleName", score = score)
+        val minScore = if (defaultRule && area == RuleArea.TopCenter) {
+            rule.minScore + 20
         } else {
-            null
+            rule.minScore
         }
+
+        return ScoreEvaluation(
+            rule = rule,
+            score = score,
+            minScore = minScore,
+            matchedKeyword = matchedKeyword,
+            area = area,
+            passesMinScore = score >= minScore,
+            failureReason = if (score >= minScore) "" else "score_below_min_score",
+            defaultRuleAreaAllowed = if (defaultRule) defaultAreaAllowed else null,
+            textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
+            candidateAreaRatio = areaRatio,
+            isLargeCandidateBounds = largeCandidate
+        )
     }
 
     private fun matchedTextRule(values: List<String>, keywords: List<String>): String? {
@@ -78,9 +165,7 @@ object ScoreEvaluator {
             if (normalized.isEmpty() || normalized.length > MAX_SKIP_TEXT_LENGTH) return@firstNotNullOfOrNull null
             val lower = normalized.lowercase(Locale.ROOT)
             if (blockedTextFragments.any { lower.contains(it) }) return@firstNotNullOfOrNull null
-            keywords.firstOrNull { keyword ->
-                lower.contains(keyword.lowercase(Locale.ROOT))
-            }
+            keywords.firstOrNull { keyword -> lower.contains(keyword.lowercase(Locale.ROOT)) }
         }
     }
 
@@ -128,22 +213,36 @@ object ScoreEvaluator {
             .joinToString(" ")
             .lowercase(Locale.ROOT)
         if (combined.isBlank()) return false
-        return listOf(
-            "支付",
-            "付款",
-            "转账",
-            "确认支付",
-            "允许",
-            "授权",
-            "验证码",
-            "登录",
-            "password",
-            "pay",
-            "permission",
-            "allow",
-            "login",
-            "verify"
-        ).any { combined.contains(it) }
+        return SafetyGuard.protectedPageKeywords.any { combined.contains(it) } ||
+            listOf(
+                "支付",
+                "付款",
+                "转账",
+                "确认支付",
+                "立即支付",
+                "立即安装",
+                "继续安装",
+                "安装",
+                "允许",
+                "授权",
+                "同意授权",
+                "验证码",
+                "登录",
+                "注册",
+                "password",
+                "pay",
+                "permission",
+                "allow",
+                "login",
+                "sign in",
+                "verify",
+                "install"
+            ).any { combined.contains(it) }
+    }
+
+    private fun AccessibilityNodeInfo.isInputNode(): Boolean {
+        val classNameValue = className?.toString().orEmpty()
+        return classNameValue.contains("EditText", ignoreCase = true)
     }
 
     private fun String.containsAdSignal(): Boolean {
@@ -161,7 +260,8 @@ object ScoreEvaluator {
             lower.contains("skip") ||
             lower.contains("gdt") ||
             lower.contains("ksad") ||
-            lower.contains("tt_")
+            lower.contains("tt_") ||
+            lower.contains("csj")
     }
 
     private fun String.normalizeForRuleMatch(): String {
@@ -171,8 +271,21 @@ object ScoreEvaluator {
             .replace(":", "_")
     }
 
-    data class ScoredRule(
-        val ruleName: String,
-        val score: Int
+    private fun defaultRuleAreaAllowed(area: RuleArea): Boolean {
+        return area == RuleArea.TopRight || area == RuleArea.TopCenter
+    }
+
+    data class ScoreEvaluation(
+        val rule: SkipRule,
+        val score: Int,
+        val minScore: Int,
+        val matchedKeyword: String,
+        val area: RuleArea,
+        val passesMinScore: Boolean,
+        val failureReason: String,
+        val defaultRuleAreaAllowed: Boolean? = null,
+        val textKeywordIsStandaloneSkip: Boolean = false,
+        val candidateAreaRatio: Float = 0f,
+        val isLargeCandidateBounds: Boolean = false
     )
 }

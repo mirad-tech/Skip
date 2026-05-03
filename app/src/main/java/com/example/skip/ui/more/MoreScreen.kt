@@ -2,7 +2,6 @@ package com.example.skip.ui.more
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,36 +13,30 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.skip.data.SettingsRepository
+import com.example.skip.data.IconManager
 
 enum class MoreDestination {
-    RulesHub,
+    AppHub,
+    InstalledApps,
+    Blacklist,
+    IconAppearance,
+    DefaultRuleInfo,
     SystemHub,
     DataHub,
-    Whitelist,
     Keywords,
-    CreateRule,
-    JsonImport,
     RuleList,
     RuleFormat,
     SystemCompat,
     AccessibilitySettings,
     BatterySettings,
-    NotificationSettings,
     RuleLogs,
     Logs,
     Safety,
@@ -58,17 +51,12 @@ fun MoreScreen(
     onOpenDestination: (MoreDestination) -> Unit
 ) {
     val context = LocalContext.current
-    var masterEnabled by remember { mutableStateOf(SettingsRepository.isMasterEnabled(context)) }
+    val currentIcon = remember { IconManager.currentScheme(context).name }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("更多") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("返回")
-                    }
-                }
+                title = { Text("更多") }
             )
         }
     ) { innerPadding ->
@@ -80,51 +68,19 @@ fun MoreScreen(
                 .padding(horizontal = 18.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(18.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = "自动跳过",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = if (masterEnabled) "总开关已启用" else "总开关已关闭",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = masterEnabled,
-                        onCheckedChange = { enabled ->
-                            masterEnabled = enabled
-                            SettingsRepository.setMasterEnabled(context, enabled)
-                        }
-                    )
-                }
+            MoreItem("应用管理", "应用与规则") {
+                onOpenDestination(MoreDestination.AppHub)
             }
-
-            MoreItem("规则", "创建、导入和管理") {
-                onOpenDestination(MoreDestination.RulesHub)
+            MoreItem("图标与外观", currentIcon) {
+                onOpenDestination(MoreDestination.IconAppearance)
             }
-            MoreItem("系统与权限", "诊断与设置入口") {
+            MoreItem("系统与权限", "授权与兼容") {
                 onOpenDestination(MoreDestination.SystemHub)
             }
-            MoreItem("日志与隐私", "记录、安全和说明") {
+            MoreItem("日志与隐私", "记录与说明") {
                 onOpenDestination(MoreDestination.DataHub)
             }
-            MoreItem("关于", "版本与项目") {
+            MoreItem("关于", "版本与说明") {
                 onOpenDestination(MoreDestination.About)
             }
         }
@@ -144,32 +100,21 @@ private fun MoreItem(
             containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(18.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
             Text(
-                text = "进入",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

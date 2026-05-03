@@ -7,4 +7,10 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="icon_sky_blue_background">#FF2F7CF6</color>
+    <color name="icon_mint_green_background">#FF1FAF7A</color>
+    <color name="icon_violet_glow_background">#FF7C4DFF</color>
+    <color name="icon_sunset_orange_background">#FFFF7A1A</color>
+    <color name="icon_cherry_pink_background">#FFE83F7D</color>
+    <color name="icon_obsidian_gold_background">#FF1D1A16</color>
 </resources>

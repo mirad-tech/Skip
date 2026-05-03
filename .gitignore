@@ -1,5 +1,9 @@
 *.iml
 .gradle
+.gradle-home
+.kotlin
+.android-home/
+downloads/*.apk
 /local.properties
 /keystore.properties
 /release.keystore

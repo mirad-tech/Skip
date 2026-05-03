@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -31,13 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleImportManager
 import com.example.skip.data.RuleRepository
-import com.example.skip.data.SettingsRepository
 import com.example.skip.model.InstalledApp
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleLog
@@ -45,30 +42,40 @@ import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import com.example.skip.ui.common.SimpleScreenScaffold
 import com.example.skip.util.InstalledAppUtils
-import com.example.skip.util.PackageUtil
 
 @Composable
 fun SimpleRuleScreen(
     editingRuleId: String?,
+    initialPackageName: String? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val editingRule = remember(editingRuleId) {
         editingRuleId?.let { id -> RuleRepository.getRules(context).firstOrNull { it.id == id } }
     }
-    val apps = remember { InstalledAppUtils.loadLaunchableApps(context) }
+    val fixedPackageName = editingRule?.packageName ?: initialPackageName.orEmpty()
+    val apps = remember(fixedPackageName) {
+        if (fixedPackageName.isBlank()) InstalledAppUtils.loadLaunchableApps(context) else emptyList()
+    }
+    val fixedApp = remember(fixedPackageName) {
+        fixedPackageName.takeIf { it.isNotBlank() }?.let {
+            InstalledAppUtils.resolveApp(context, it)
+        }
+    }
     var appQuery by remember { mutableStateOf("") }
-    var packageName by remember { mutableStateOf(editingRule?.packageName.orEmpty()) }
-    var appName by remember { mutableStateOf(editingRule?.appName.orEmpty()) }
-    var ruleName by remember { mutableStateOf(editingRule?.name.orEmpty()) }
+    var packageName by remember { mutableStateOf(fixedPackageName) }
+    var appName by remember {
+        mutableStateOf(editingRule?.appName ?: fixedApp?.label.orEmpty())
+    }
+    var ruleName by remember { mutableStateOf(editingRule?.name ?: "首页弹窗关闭") }
     var texts by remember {
         mutableStateOf(
             editingRule?.matchTexts?.joinToString("，")
-                ?: "跳过，跳过广告，Skip，skip，关闭广告"
+                ?: "关闭，跳过，以后再说，我知道了"
         )
     }
     var area by remember { mutableStateOf(editingRule?.area ?: RuleArea.TopRight) }
-    var validDurationMs by remember { mutableStateOf(editingRule?.validDurationMs ?: 10_000L) }
+    var validDurationMs by remember { mutableStateOf(editingRule?.validDurationMs ?: 6_000L) }
     var avoidRepeat by remember { mutableStateOf((editingRule?.cooldownMs ?: 1200L) >= 1200L) }
     var previewRule by remember { mutableStateOf<SkipRule?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -78,51 +85,41 @@ fun SimpleRuleScreen(
         onBack = onBack
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text(
-                text = "选择目标 App，填写按钮文字和大概位置。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (fixedApp != null) {
+                AppPickItem(
+                    app = fixedApp,
+                    selected = true,
+                    onClick = {}
+                )
+            } else {
+                OutlinedTextField(
+                    value = appQuery,
+                    onValueChange = { appQuery = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("搜索已安装 App") },
+                    singleLine = true
+                )
 
-            OutlinedTextField(
-                value = appQuery,
-                onValueChange = { appQuery = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("搜索已安装 App") },
-                singleLine = true
-            )
+                val filteredApps = apps.filter {
+                    appQuery.isBlank() ||
+                        it.label.contains(appQuery, ignoreCase = true) ||
+                        it.packageName.contains(appQuery, ignoreCase = true)
+                }.take(8)
 
-            val filteredApps = apps.filter {
-                appQuery.isBlank() ||
-                    it.label.contains(appQuery, ignoreCase = true) ||
-                    it.packageName.contains(appQuery, ignoreCase = true)
-            }.take(8)
-
-            if (filteredApps.isNotEmpty()) {
-                filteredApps.forEach { app ->
-                    AppPickItem(
-                        app = app,
-                        selected = app.packageName == packageName,
-                        onClick = {
-                            packageName = app.packageName
-                            appName = app.label
-                            if (ruleName.isBlank()) ruleName = "${app.label} - 开屏跳过"
-                        }
-                    )
+                if (filteredApps.isNotEmpty()) {
+                    filteredApps.forEach { app ->
+                        AppPickItem(
+                            app = app,
+                            selected = app.packageName == packageName,
+                            onClick = {
+                                packageName = app.packageName
+                                appName = app.label
+                                if (ruleName.isBlank()) ruleName = "首页弹窗关闭"
+                            }
+                        )
+                    }
                 }
             }
-
-            OutlinedTextField(
-                value = packageName,
-                onValueChange = { packageName = it.trim() },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("目标 App 包名") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false
-                )
-            )
 
             OutlinedTextField(
                 value = texts,
@@ -143,9 +140,9 @@ fun SimpleRuleScreen(
 
             Text("规则生效时间", style = MaterialTheme.typography.titleSmall)
             ChipGrid(
-                values = listOf(5000L, 10_000L, 15_000L),
+                values = listOf(6_000L, 10_000L, 30_000L, Long.MAX_VALUE),
                 selected = validDurationMs,
-                label = { "App 打开后 ${it / 1000} 秒内" },
+                label = { formatDuration(it) },
                 onSelected = { validDurationMs = it }
             )
 
@@ -180,8 +177,8 @@ fun SimpleRuleScreen(
             Button(
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
-                    if (!PackageUtil.isLikelyPackageName(packageName)) {
-                        message = "请输入完整包名"
+                    if (packageName.isBlank()) {
+                        message = "请选择应用"
                         return@Button
                     }
                     val result = RuleImportManager.createSimpleRule(
@@ -191,7 +188,8 @@ fun SimpleRuleScreen(
                         texts = splitInput(texts),
                         area = area,
                         validDurationMs = validDurationMs,
-                        avoidRepeatClick = avoidRepeat
+                        avoidRepeatClick = avoidRepeat,
+                        selfPackageName = context.packageName
                     )
                     if (!result.success) {
                         message = result.errorMessage
@@ -221,10 +219,6 @@ fun SimpleRuleScreen(
             onConfirm = {
                 RuleRepository.createLocalPackageIfNeeded(context)
                 RuleRepository.upsertRule(context, rule)
-                SettingsRepository.saveWhitelistPackages(
-                    context,
-                    (SettingsRepository.getWhitelistPackages(context) + rule.packageName)
-                )
                 LogRepository.addRuleLog(
                     context,
                     RuleLog(
@@ -328,7 +322,7 @@ private fun RulePreviewDialog(
                 Text("包名：${rule.packageName}")
                 Text("文字：${rule.matchTexts.joinToString("、")}")
                 Text("位置：${rule.area.label}")
-                Text("生效：App 打开后 ${rule.validDurationMs / 1000} 秒内")
+                Text("生效：${formatDuration(rule.validDurationMs)}")
                 Text("防重复点击：${if (rule.cooldownMs >= 1200) "开启" else "关闭"}")
                 warnings.forEach {
                     Text("提示：$it", color = MaterialTheme.colorScheme.error)
@@ -353,4 +347,8 @@ private fun splitInput(text: String): List<String> {
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .distinct()
+}
+
+private fun formatDuration(durationMs: Long): String {
+    return if (durationMs > 30_000L) "任意时间" else "启动后 ${durationMs / 1000} 秒内"
 }

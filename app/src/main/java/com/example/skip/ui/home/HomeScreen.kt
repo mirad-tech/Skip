@@ -3,32 +3,47 @@ package com.example.skip.ui.home
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.example.skip.data.IconManager
+import com.example.skip.data.SettingsRepository
+import com.example.skip.ui.common.AppIconView
 import com.example.skip.ui.theme.SkipTheme
 
 @Composable
 fun HomeScreen(
     serviceEnabled: Boolean,
-    onOpenAccessibilitySettings: () -> Unit,
+    masterEnabled: Boolean,
+    safetyModeEnabled: Boolean,
+    onEnableService: () -> Unit,
+    onDisableService: () -> Unit,
     onOpenMore: () -> Unit
 ) {
+    val context = LocalContext.current
+    val skipEnabled = serviceEnabled && masterEnabled
+    val displaySafetyMode = safetyModeEnabled || SettingsRepository.isSafetyModeEnabled(context)
+    val iconScheme = remember(context) {
+        IconManager.currentScheme(context)
+    }
+    val icon = remember(context, iconScheme.iconRes) {
+        context.getDrawable(iconScheme.iconRes)
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -41,82 +56,43 @@ fun HomeScreen(
             Column(
                 modifier = Modifier.align(Alignment.Center),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(22.dp)
+                verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Skip",
-                        style = MaterialTheme.typography.displaySmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "少一点重复点击",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                AppIconView(icon, "Skip", size = 96.dp)
+                Button(
+                    modifier = Modifier.width(120.dp),
+                    onClick = if (skipEnabled) {
+                        onDisableService
+                    } else {
+                        onEnableService
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (skipEnabled) {
+                            Color(0xFF6B7280)
+                        } else {
+                            Color(iconScheme.previewColor)
+                        },
+                        contentColor = Color.White,
                     )
                 ) {
-                    Column(
-                        modifier = Modifier.padding(22.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "无障碍服务",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = if (serviceEnabled) "已开启" else "未开启",
-                                color = if (serviceEnabled) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.error
-                                },
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-
-                        Text(
-                            text = if (serviceEnabled) {
-                                "服务正在运行。"
-                            } else {
-                                "开启后，可自动完成部分重复点击操作。"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Button(
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !serviceEnabled,
-                            onClick = onOpenAccessibilitySettings
-                        ) {
-                            Text(if (serviceEnabled) "服务已开启" else "开启服务")
-                        }
-                    }
+                    Text(if (skipEnabled) "关闭服务" else "开启服务")
                 }
+            }
+
+            if (displaySafetyMode) {
+                Text(
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    text = "当前为安全模式：仅记录，不会自动点击",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
 
             FilledTonalButton(
                 modifier = Modifier.align(Alignment.BottomCenter),
                 onClick = onOpenMore
             ) {
-                Text("更多功能")
+                Text("更多")
             }
         }
     }
@@ -128,7 +104,10 @@ private fun HomeScreenPreview() {
     SkipTheme {
         HomeScreen(
             serviceEnabled = false,
-            onOpenAccessibilitySettings = {},
+            masterEnabled = true,
+            safetyModeEnabled = false,
+            onEnableService = {},
+            onDisableService = {},
             onOpenMore = {}
         )
     }

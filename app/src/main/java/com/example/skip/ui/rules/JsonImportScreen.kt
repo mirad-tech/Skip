@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleImportManager
 import com.example.skip.data.RuleRepository
-import com.example.skip.data.SettingsRepository
 import com.example.skip.model.DuplicateStrategy
 import com.example.skip.model.RuleImportResult
 import com.example.skip.model.RuleLog
@@ -58,7 +57,7 @@ fun JsonImportScreen(onBack: () -> Unit) {
             error = "读取文件失败：${it.message.orEmpty()}"
             return@rememberLauncherForActivityResult
         }
-        val result = RuleImportManager.parseRulePackage(text)
+        val result = RuleImportManager.parseRulePackage(text, context.packageName)
         if (result.success) {
             importResult = result
             showPreview = true
@@ -152,10 +151,6 @@ fun JsonImportScreen(onBack: () -> Unit) {
                 onDismiss = { showPreview = false },
                 onConfirm = {
                     val saved = RuleRepository.saveImportResult(context, result, strategy)
-                    SettingsRepository.saveWhitelistPackages(
-                        context,
-                        (SettingsRepository.getWhitelistPackages(context) + result.rules.map { it.packageName })
-                    )
                     result.rulePackage?.let { pkg ->
                         LogRepository.addRuleLog(
                             context,
