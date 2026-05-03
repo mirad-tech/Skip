@@ -6,11 +6,11 @@
 
 ## 下载
 
-当前版本：`1.3.0`
+当前版本：`1.3.1`
 
-[正式版下载](https://github.com/mirad-tech/Skip/releases/download/v1.3.0/Skip-v1.3.0-release.apk)
+[正式版下载](https://github.com/mirad-tech/Skip/raw/main/downloads/Skip-v1.3.1-release.apk)
 
-[备用下载](https://github.com/mirad-tech/Skip/raw/main/downloads/Skip-v1.3.0-release.apk)
+[备用下载](https://github.com/mirad-tech/Skip/blob/main/downloads/Skip-v1.3.1-release.apk)
 
 这是一个手动安装的 Android APK，没有上架应用商店。安装时如果系统提示“未知来源应用”，需要你自己确认是否继续安装。
 
