@@ -1,9 +1,11 @@
 package com.example.skip
 
 import com.example.skip.data.RuleRepository
+import com.example.skip.data.LogRepository
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickLogStage
+import com.example.skip.model.ClickMethodLog
 import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.service.DelayedClickSafetyCheck
 import com.example.skip.util.PrivacySanitizer
@@ -160,6 +162,69 @@ class SafetyAndLogUnitTest {
         assertTrue(log.clickSkippedBySafetyMode)
         assertEquals("1,2,3,4", log.candidateBounds)
         assertEquals(ClickTargetSourceLog.FixedPositionForbidden, log.clickTargetSource)
+    }
+
+    @Test
+    fun clickLogJsonKeepsNullableKeysWhenValuesAreNull() {
+        val fields = LogRepository.clickLogJsonFields(
+            ClickLog(
+                timeMillis = 1L,
+                packageName = "com.android.systemui",
+                stage = ClickLogStage.SkippedBySafety,
+                blockedBySafety = true,
+                blockedReason = "safety_guard_before_delayed_click"
+            )
+        )
+
+        listOf(
+            "candidateCenterX",
+            "candidateCenterY",
+            "gestureX",
+            "gestureY",
+            "actionReturnValue",
+            "effectConfirmed",
+            "clickedParentDepth",
+            "candidateAreaRatio"
+        ).forEach { key ->
+            assertTrue("missing key: $key", fields.containsKey(key))
+            assertEquals("not null: $key", LogRepository.JsonNullValue, fields[key])
+        }
+        assertEquals("", fields["candidateBounds"])
+        assertEquals("", fields["clickedNodeBounds"])
+        assertEquals("safety_guard_before_delayed_click", fields["blockedReason"])
+        assertEquals(ClickTargetSourceLog.None.value, fields["clickTargetSource"])
+    }
+
+    @Test
+    fun clickLogJsonKeepsRealClickCoordinates() {
+        val fields = LogRepository.clickLogJsonFields(
+            ClickLog(
+                timeMillis = 1L,
+                packageName = "com.example.news",
+                stage = ClickLogStage.ClickActionSuccess,
+                actionReturnValue = true,
+                effectConfirmed = false,
+                clickMethod = ClickMethodLog.DispatchGesture,
+                candidateBounds = "10,20,30,40",
+                candidateCenterX = 20,
+                candidateCenterY = 30,
+                gestureX = 20,
+                gestureY = 30,
+                clickedParentDepth = 1,
+                candidateAreaRatio = 0.01f,
+                clickTargetSource = ClickTargetSourceLog.GestureOnNodeCenter
+            )
+        )
+
+        assertEquals(20, fields["candidateCenterX"])
+        assertEquals(30, fields["candidateCenterY"])
+        assertEquals(20, fields["gestureX"])
+        assertEquals(30, fields["gestureY"])
+        assertEquals(true, fields["actionReturnValue"])
+        assertEquals(false, fields["effectConfirmed"])
+        assertEquals(1, fields["clickedParentDepth"])
+        assertEquals(0.01f, fields["candidateAreaRatio"])
+        assertEquals(ClickTargetSourceLog.GestureOnNodeCenter.value, fields["clickTargetSource"])
     }
 
     @Test
