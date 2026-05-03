@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">Skip</string>
     <string name="accessibility_service_label">开屏广告跳过助手</string>
-    <string name="accessibility_service_description">在你授权后，仅对白名单应用扫描无障碍节点文字并点击跳过广告按钮。</string>
+    <string name="accessibility_service_description">在你授权后，仅对白名单应用扫描无障碍节点并点击疑似跳过按钮。</string>
 </resources>
