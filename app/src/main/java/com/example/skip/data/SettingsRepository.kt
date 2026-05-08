@@ -8,6 +8,7 @@ object SettingsRepository {
     private const val ICON_PREFS_NAME = "skip_icon_config"
     private const val KEY_MASTER_ENABLED = "master_enabled"
     private const val KEY_SUCCESS_TOAST_ENABLED = "success_toast_enabled"
+    private const val KEY_SUCCESS_TOAST_MIGRATED = "success_toast_default_enabled_migration_v1"
     private const val KEY_DEBUG_TOAST_ENABLED = "debug_toast_enabled"
     private const val KEY_BLACKLIST = "blacklist_packages"
     private const val KEY_ICON_SCHEME = "icon_scheme"
@@ -28,11 +29,15 @@ object SettingsRepository {
     }
 
     fun isSuccessToastEnabled(context: Context): Boolean {
-        return isDebugToastEnabled(context)
+        migrateSuccessToastDefault(context)
+        return prefs(context).getBoolean(KEY_SUCCESS_TOAST_ENABLED, true)
     }
 
     fun setSuccessToastEnabled(context: Context, enabled: Boolean) {
-        setDebugToastEnabled(context, enabled)
+        prefs(context).edit()
+            .putBoolean(KEY_SUCCESS_TOAST_ENABLED, enabled)
+            .putBoolean(KEY_SUCCESS_TOAST_MIGRATED, true)
+            .apply()
     }
 
     fun isDebugToastEnabled(context: Context): Boolean {
@@ -42,7 +47,15 @@ object SettingsRepository {
     fun setDebugToastEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit()
             .putBoolean(KEY_DEBUG_TOAST_ENABLED, enabled)
-            .putBoolean(KEY_SUCCESS_TOAST_ENABLED, enabled)
+            .apply()
+    }
+
+    private fun migrateSuccessToastDefault(context: Context) {
+        val prefs = prefs(context)
+        if (prefs.getBoolean(KEY_SUCCESS_TOAST_MIGRATED, false)) return
+        prefs.edit()
+            .putBoolean(KEY_SUCCESS_TOAST_ENABLED, true)
+            .putBoolean(KEY_SUCCESS_TOAST_MIGRATED, true)
             .apply()
     }
 

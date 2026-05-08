@@ -1,11 +1,20 @@
 package com.example.skip.service
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.Toast
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import com.example.skip.data.IconManager
 import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
@@ -33,6 +42,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private var pendingClick: PendingClick? = null
     private var lastWindowStateChangedAt = 0L
     private val lastToastAt = mutableMapOf<String, Long>()
+    private var popupView: View? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -238,6 +248,12 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         SettingsRepository.markServiceInterrupted(this)
+        hidePopup()
+    }
+
+    override fun onDestroy() {
+        hidePopup()
+        super.onDestroy()
     }
 
     private fun updateForegroundWindow(packageName: String, now: Long) {
@@ -368,6 +384,10 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun verifyActionClick(pending: PendingClick) {
         if (pendingClick?.signature != pending.signature) return
         val result = verifyClickEffect(pending)
+        if (!result.success && result.reason == "candidate_still_present") {
+            runGestureFallback(pending)
+            return
+        }
         finishPendingClick(
             pending = pending,
             stage = result.stage,
@@ -449,10 +469,10 @@ class SkipAccessibilityService : AccessibilityService() {
                 reason = "self_app_opened_after_click"
             )
         }
-        if (foregroundPackage != pending.packageName) {
+        if (!foregroundPackage.isNullOrBlank() && foregroundPackage != pending.packageName) {
             return ClickVerification(
-                stage = ClickLogStage.ClickEffectUnknown,
-                success = false,
+                stage = ClickLogStage.ClickEffectConfirmed,
+                success = true,
                 reason = "package_changed_after_click"
             )
         }
@@ -500,7 +520,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (success) {
             SettingsRepository.markLastClick(this, now)
-            showDebugToast("已尝试跳过：${pending.appName} / ${pending.ruleName}", "success:${pending.packageName}")
+            showSuccessToast("已跳过：${pending.appName}", "success:${pending.packageName}")
         } else {
             SettingsRepository.setLastFailureReason(this, reason)
             showDebugToast("命中规则但点击失败，已记录日志", "fail:${pending.packageName}:${pending.ruleId}")
@@ -723,13 +743,84 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun showDebugToast(message: String, key: String) {
         if (!SettingsRepository.isDebugToastEnabled(this)) return
+        showToast(message, key)
+    }
+
+    private fun showSuccessToast(message: String, key: String) {
+        if (!SettingsRepository.isSuccessToastEnabled(this)) return
+        showToast(message, key)
+    }
+
+    private fun showToast(message: String, key: String) {
         val now = System.currentTimeMillis()
         val last = lastToastAt[key] ?: 0L
         if (now - last < TOAST_COOLDOWN_MS) return
         lastToastAt[key] = now
         mainHandler.post {
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            showOverlayPopup(message)
         }
+    }
+
+    private fun showOverlayPopup(message: String) {
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        hidePopup()
+        val view = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(16), dp(10))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(18).toFloat()
+                setColor(0xEE20242A.toInt())
+            }
+            elevation = dp(8).toFloat()
+        }
+        val icon = ImageView(this).apply {
+            setImageResource(IconManager.currentScheme(this@SkipAccessibilityService).iconRes)
+            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                marginEnd = dp(8)
+            }
+        }
+        val text = TextView(this).apply {
+            this.text = message
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            maxLines = 1
+        }
+        view.addView(icon)
+        view.addView(text)
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = dp(72)
+        }
+
+        runCatching {
+            windowManager.addView(view, params)
+            popupView = view
+            mainHandler.postDelayed({ hidePopup() }, POPUP_DURATION_MS)
+        }
+    }
+
+    private fun hidePopup() {
+        val view = popupView ?: return
+        popupView = null
+        runCatching {
+            val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            windowManager.removeViewImmediate(view)
+        }
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
     }
 
     private fun RuleSource.toLogType(): String {
@@ -747,6 +838,7 @@ class SkipAccessibilityService : AccessibilityService() {
         private const val CLICK_VERIFY_DELAY_MS = 360L
         private const val GESTURE_VERIFY_DELAY_MS = 460L
         private const val TOAST_COOLDOWN_MS = 60_000L
+        private const val POPUP_DURATION_MS = 1600L
     }
 }
 
