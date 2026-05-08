@@ -66,7 +66,7 @@ object ScoreEvaluator {
                 area = area,
                 passesMinScore = false,
                 failureReason = "standalone_skip_forbidden",
-                defaultRuleAreaAllowed = defaultRuleAreaAllowed(area),
+                defaultRuleAreaAllowed = isDefaultRuleAreaAllowedForCandidate(area),
                 textKeywordIsStandaloneSkip = true
             )
         }
@@ -75,22 +75,7 @@ object ScoreEvaluator {
         node.getBoundsInScreen(bounds)
         val areaRatio = ClickExecutor.areaRatio(bounds)
         val largeCandidate = ClickExecutor.isLargeDefaultCandidate(bounds)
-        val defaultAreaAllowed = defaultRuleAreaAllowed(area)
-        if (defaultRule && !defaultAreaAllowed) {
-            return ScoreEvaluation(
-                rule,
-                score = 0,
-                minScore = rule.minScore,
-                matchedKeyword = matchedKeyword,
-                area = area,
-                passesMinScore = false,
-                failureReason = "default_rule_area_blocked",
-                defaultRuleAreaAllowed = false,
-                textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
-                candidateAreaRatio = areaRatio,
-                isLargeCandidateBounds = largeCandidate
-            )
-        }
+        val defaultAreaAllowed = isDefaultRuleAreaAllowedForCandidate(area)
         if (defaultRule && largeCandidate) {
             return ScoreEvaluation(
                 rule,
@@ -271,8 +256,8 @@ object ScoreEvaluator {
             .replace(":", "_")
     }
 
-    private fun defaultRuleAreaAllowed(area: RuleArea): Boolean {
-        return area == RuleArea.TopRight || area == RuleArea.TopCenter
+    internal fun isDefaultRuleAreaAllowedForCandidate(area: RuleArea): Boolean {
+        return true
     }
 
     data class ScoreEvaluation(

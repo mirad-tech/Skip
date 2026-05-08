@@ -103,12 +103,24 @@ fun MoreHubScreen(
                     }
                 }
                 MoreHubType.Data -> {
+                    var successToastEnabled by remember {
+                        mutableStateOf(SettingsRepository.isSuccessToastEnabled(context))
+                    }
                     var debugToastEnabled by remember {
                         mutableStateOf(SettingsRepository.isDebugToastEnabled(context))
                     }
                     SettingRow(
-                        title = "显示跳过调试提示",
-                        subtitle = "调试模式下限频提示",
+                        title = "成功提示",
+                        subtitle = "跳过成功后短提示",
+                        checked = successToastEnabled,
+                        onCheckedChange = { enabled ->
+                            successToastEnabled = enabled
+                            SettingsRepository.setSuccessToastEnabled(context, enabled)
+                        }
+                    )
+                    SettingRow(
+                        title = "调试提示",
+                        subtitle = "显示安全保护和失败提示",
                         checked = debugToastEnabled,
                         onCheckedChange = { enabled ->
                             debugToastEnabled = enabled

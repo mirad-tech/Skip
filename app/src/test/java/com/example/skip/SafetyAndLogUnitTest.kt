@@ -3,10 +3,12 @@ package com.example.skip
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.LogRepository
 import com.example.skip.engine.SafetyGuard
+import com.example.skip.engine.ScoreEvaluator
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickLogStage
 import com.example.skip.model.ClickMethodLog
 import com.example.skip.model.ClickTargetSourceLog
+import com.example.skip.model.RuleArea
 import com.example.skip.service.DelayedClickSafetyCheck
 import com.example.skip.util.PrivacySanitizer
 import org.junit.Assert.assertEquals
@@ -43,6 +45,21 @@ class SafetyAndLogUnitTest {
     @Test
     fun defaultRuleWindowIsSixSeconds() {
         assertEquals(6_000L, RuleRepository.DEFAULT_RULE_WINDOW_MS)
+    }
+
+    @Test
+    fun defaultRuleDoesNotHardBlockByArea() {
+        listOf(
+            RuleArea.TopLeft,
+            RuleArea.TopCenter,
+            RuleArea.TopRight,
+            RuleArea.Center,
+            RuleArea.BottomLeft,
+            RuleArea.BottomCenter,
+            RuleArea.BottomRight
+        ).forEach { area ->
+            assertTrue(ScoreEvaluator.isDefaultRuleAreaAllowedForCandidate(area))
+        }
     }
 
     @Test
