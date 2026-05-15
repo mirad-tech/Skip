@@ -6,6 +6,9 @@
 /local.properties
 /keystore.properties
 /release.keystore
+/LITIAOTIAO_PLAN.md
+/tools/deep-clean-codex-git-loop.ps1
+/tools/codex-clean-backup-*/
 .idea/
 .idea/caches
 .idea/libraries

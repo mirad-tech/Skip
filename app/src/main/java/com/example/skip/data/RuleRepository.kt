@@ -1,7 +1,10 @@
 package com.example.skip.data
 
 import android.content.Context
+import androidx.core.content.edit
+import com.example.skip.model.CoordinateFallback
 import com.example.skip.model.DuplicateStrategy
+import com.example.skip.model.MatchMode
 import com.example.skip.model.RuleAction
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleImportResult
@@ -14,6 +17,7 @@ import java.util.UUID
 
 object RuleRepository {
     const val DEFAULT_RULE_WINDOW_MS = 6_000L
+    const val DEFAULT_RULE_MIN_SCORE = 75
 
     private const val KEY_KEYWORDS = "keywords"
     private const val KEY_VIEW_ID_KEYWORDS = "view_id_keywords"
@@ -39,7 +43,14 @@ object RuleRepository {
         "ad_skip",
         "skip button",
         "Skip Video Ad",
+        "Close Ad",
+        "close ad",
+        "Close",
+        "close",
+        "×",
+        "✕",
         "关闭",
+        "关闭按钮",
         "进入应用",
         "我知道了"
     )
@@ -76,9 +87,7 @@ object RuleRepository {
 
     fun saveKeywords(context: Context, keywords: Collection<String>) {
         SettingsRepository.prefs(context)
-            .edit()
-            .putStringSet(KEY_KEYWORDS, keywords.cleanConfigItems().toSet())
-            .apply()
+            .edit { putStringSet(KEY_KEYWORDS, keywords.cleanConfigItems().toSet()) }
     }
 
     fun getViewIdKeywords(context: Context): List<String> {
@@ -90,9 +99,7 @@ object RuleRepository {
 
     fun saveViewIdKeywords(context: Context, keywords: Collection<String>) {
         SettingsRepository.prefs(context)
-            .edit()
-            .putStringSet(KEY_VIEW_ID_KEYWORDS, keywords.cleanConfigItems().toSet())
-            .apply()
+            .edit { putStringSet(KEY_VIEW_ID_KEYWORDS, keywords.cleanConfigItems().toSet()) }
     }
 
     fun getRules(context: Context): List<SkipRule> {
@@ -106,24 +113,33 @@ object RuleRepository {
                 }
             }
         }.getOrDefault(emptyList())
+            .map(::normalizeRuleWindow)
     }
 
     fun saveRules(context: Context, rules: List<SkipRule>) {
         SettingsRepository.prefs(context)
-            .edit()
-            .putString(KEY_RULES_JSON, JSONArray().apply {
-                rules.forEach { put(it.toJson()) }
-            }.toString())
-            .apply()
+            .edit {
+                putString(KEY_RULES_JSON, JSONArray().apply {
+                    rules.forEach { put(it.toJson()) }
+                }.toString())
+            }
+        cleanupRulePackages(context, rules)
     }
 
     fun getEnabledRulesForPackage(context: Context, packageName: String): List<SkipRule> {
         if (packageName.isBlank()) return emptyList()
-        val customRules = getEnabledCustomRulesForPackage(context, packageName)
-        if (SettingsRepository.isBlacklisted(context, packageName)) {
-            return customRules
+        val policy = SettingsRepository.getAppPolicy(context, packageName)
+        val customRules = if (policy.customRulesEnabled) {
+            getEnabledCustomRulesForPackage(context, packageName)
+        } else {
+            emptyList()
         }
-        return (customRules + createBuiltInRuleForPackage(context, packageName))
+        val builtInRule = if (policy.defaultRuleEnabled) {
+            listOf(createBuiltInRuleForPackage(context, packageName))
+        } else {
+            emptyList()
+        }
+        return (customRules + builtInRule)
             .sortedWith(compareByDescending<SkipRule> { it.priority }.thenBy { it.createdAt })
     }
 
@@ -147,7 +163,7 @@ object RuleRepository {
     }
 
     fun getBuiltInRuleForPackage(context: Context, packageName: String): SkipRule {
-        return createBuiltInRuleForPackage(context, packageName)
+        return normalizeRuleWindow(createBuiltInRuleForPackage(context, packageName))
     }
 
     fun upsertRule(context: Context, rule: SkipRule) {
@@ -213,7 +229,14 @@ object RuleRepository {
         }
 
         saveRules(context, existingRules)
-        upsertRulePackage(context, packageInfo)
+        if (result.appPolicies.isNotEmpty()) {
+            result.appPolicies.forEach { SettingsRepository.setAppPolicy(context, it) }
+        }
+        if (existingRules.any { it.packageId == packageInfo.id }) {
+            upsertRulePackage(context, packageInfo)
+        } else {
+            cleanupRulePackages(context, existingRules)
+        }
         return savedCount
     }
 
@@ -246,6 +269,7 @@ object RuleRepository {
 
     fun exportRulesAsJson(context: Context): String {
         val packageJson = JSONObject()
+            .put("schemaVersion", 2)
             .put("name", "Skip 本地规则导出")
             .put("version", 1)
             .put("author", "local")
@@ -266,7 +290,21 @@ object RuleRepository {
                         })
                 )
             }
-        return packageJson.put("apps", apps).toString(2)
+        val policies = JSONArray().apply {
+            SettingsRepository.getAppPolicies(context).forEach { policy ->
+                put(
+                    JSONObject()
+                        .put("packageName", policy.packageName)
+                        .put("defaultRuleEnabled", policy.defaultRuleEnabled)
+                        .put("customRulesEnabled", policy.customRulesEnabled)
+                        .put("migratedFromBlacklist", policy.migratedFromBlacklist)
+                )
+            }
+        }
+        return packageJson
+            .put("appPolicies", policies)
+            .put("apps", apps)
+            .toString(2)
     }
 
     fun createLocalPackageIfNeeded(context: Context) {
@@ -300,9 +338,13 @@ object RuleRepository {
             priority = 1,
             cooldownMs = 1500L,
             validDurationMs = DEFAULT_RULE_WINDOW_MS,
-            minScore = 75,
+            minScore = DEFAULT_RULE_MIN_SCORE,
             packageId = "built_in"
         )
+    }
+
+    private fun normalizeRuleWindow(rule: SkipRule): SkipRule {
+        return rule.copy(validDurationMs = DEFAULT_RULE_WINDOW_MS)
     }
 
     private fun upsertRulePackage(context: Context, rulePackage: RulePackage) {
@@ -312,13 +354,31 @@ object RuleRepository {
         saveRulePackages(context, updated)
     }
 
+    internal fun removeOrphanRulePackages(
+        packages: List<RulePackage>,
+        rules: List<SkipRule>
+    ): List<RulePackage> {
+        val usedPackageIds = rules.map { it.packageId }.filter { it.isNotBlank() }.toSet()
+        return packages.filter { rulePackage ->
+            rulePackage.id == "local" || rulePackage.id in usedPackageIds
+        }
+    }
+
+    private fun cleanupRulePackages(context: Context, rules: List<SkipRule> = getRules(context)) {
+        val packages = getRulePackages(context)
+        val cleaned = removeOrphanRulePackages(packages, rules)
+        if (cleaned.size != packages.size) {
+            saveRulePackages(context, cleaned)
+        }
+    }
+
     private fun saveRulePackages(context: Context, packages: List<RulePackage>) {
         SettingsRepository.prefs(context)
-            .edit()
-            .putString(KEY_RULE_PACKAGES_JSON, JSONArray().apply {
-                packages.forEach { put(it.toJson()) }
-            }.toString())
-            .apply()
+            .edit {
+                putString(KEY_RULE_PACKAGES_JSON, JSONArray().apply {
+                    packages.forEach { put(it.toJson()) }
+                }.toString())
+            }
     }
 
     private fun SkipRule.mergeWith(other: SkipRule): SkipRule {
@@ -331,11 +391,15 @@ object RuleRepository {
                 matchContentDescriptions + other.matchContentDescriptions
                 ).cleanConfigItems(),
             matchViewIds = (matchViewIds + other.matchViewIds).cleanConfigItems(),
+            textMatchMode = other.textMatchMode,
+            contentDescriptionMatchMode = other.contentDescriptionMatchMode,
+            viewIdMatchMode = other.viewIdMatchMode,
             area = other.area,
             priority = maxOf(priority, other.priority),
             cooldownMs = other.cooldownMs,
             validDurationMs = other.validDurationMs,
             minScore = other.minScore,
+            coordinateFallback = other.coordinateFallback ?: coordinateFallback,
             packageId = other.packageId
         )
     }
@@ -352,12 +416,16 @@ object RuleRepository {
             put("matchTexts", matchTexts.toJsonArray())
             put("matchContentDescriptions", matchContentDescriptions.toJsonArray())
             put("matchViewIds", matchViewIds.toJsonArray())
+            put("textMatchMode", textMatchMode.value)
+            put("contentDescriptionMatchMode", contentDescriptionMatchMode.value)
+            put("viewIdMatchMode", viewIdMatchMode.value)
             put("area", area.value)
             put("action", action.value)
             put("priority", priority)
             put("cooldownMs", cooldownMs)
             put("validDurationMs", validDurationMs)
             put("minScore", minScore)
+            coordinateFallback?.let { put("coordinateFallback", it.toJson()) }
             put("packageId", packageId)
             put("createdAt", createdAt)
         }
@@ -378,15 +446,18 @@ object RuleRepository {
             matchTexts = optJSONArray("matchTexts").toStringList(),
             matchContentDescriptions = optJSONArray("matchContentDescriptions").toStringList(),
             matchViewIds = optJSONArray("matchViewIds").toStringList(),
+            textMatchMode = MatchMode.fromValue(optString("textMatchMode", MatchMode.Contains.value)),
+            contentDescriptionMatchMode = MatchMode.fromValue(
+                optString("contentDescriptionMatchMode", MatchMode.Contains.value)
+            ),
+            viewIdMatchMode = MatchMode.fromValue(optString("viewIdMatchMode", MatchMode.Contains.value)),
             area = area,
             action = action,
             priority = optInt("priority", 10),
             cooldownMs = optLong("cooldownMs", 1200L),
-            validDurationMs = optLong(
-                "validDurationMs",
-                if (source == RuleSource.BuiltIn) DEFAULT_RULE_WINDOW_MS else 10_000L
-            ).let { if (source == RuleSource.BuiltIn && it == 10_000L) DEFAULT_RULE_WINDOW_MS else it },
+            validDurationMs = DEFAULT_RULE_WINDOW_MS,
             minScore = optInt("minScore", 70),
+            coordinateFallback = optJSONObject("coordinateFallback")?.toCoordinateFallback(),
             packageId = optString("packageId", "local"),
             createdAt = optLong("createdAt", System.currentTimeMillis())
         )
@@ -441,5 +512,26 @@ object RuleRepository {
 
     private fun String.isStandaloneSkipKeyword(): Boolean {
         return trim().equals("skip", ignoreCase = true)
+    }
+
+    private fun CoordinateFallback.toJson(): JSONObject {
+        return JSONObject()
+            .put("enabled", enabled)
+            .put("xRatio", xRatio.toDouble())
+            .put("yRatio", yRatio.toDouble())
+            .put("anchorTexts", anchorTexts.toJsonArray())
+            .put("anchorContentDescriptions", anchorContentDescriptions.toJsonArray())
+            .put("anchorViewIds", anchorViewIds.toJsonArray())
+    }
+
+    private fun JSONObject.toCoordinateFallback(): CoordinateFallback {
+        return CoordinateFallback(
+            enabled = optBoolean("enabled", false),
+            xRatio = optDouble("xRatio", 0.0).toFloat(),
+            yRatio = optDouble("yRatio", 0.0).toFloat(),
+            anchorTexts = optJSONArray("anchorTexts").toStringList(),
+            anchorContentDescriptions = optJSONArray("anchorContentDescriptions").toStringList(),
+            anchorViewIds = optJSONArray("anchorViewIds").toStringList()
+        )
     }
 }

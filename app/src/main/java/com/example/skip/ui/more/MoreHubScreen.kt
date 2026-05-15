@@ -17,6 +17,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.SettingsRepository
+import com.example.skip.ui.common.BackIconButton
 
 enum class MoreHubType(val title: String) {
     Apps("应用管理"),
@@ -52,12 +54,16 @@ fun MoreHubScreen(
             HubItem("关键词", "默认匹配词", MoreDestination.Keywords),
             HubItem("格式说明", "JSON 示例", MoreDestination.RuleFormat)
         )
+
         MoreHubType.System -> listOf(
             HubItem("兼容诊断", "ROM 和服务状态", MoreDestination.SystemCompat),
-            HubItem("无障碍设置", "系统授权", MoreDestination.AccessibilitySettings),
+            HubItem("无障碍用途", "授权前说明", MoreDestination.AccessibilitySettings),
+            HubItem("权限说明", "用途与关闭方式", MoreDestination.Permissions),
             HubItem("电池设置", "后台限制", MoreDestination.BatterySettings)
         )
+
         MoreHubType.Data -> listOf(
+            HubItem("命中统计", "按应用和规则汇总", MoreDestination.Stats),
             HubItem("点击日志", "结果记录", MoreDestination.Logs),
             HubItem("规则日志", "创建和导入", MoreDestination.RuleLogs),
             HubItem("安全保护", "敏感 App 默认避开", MoreDestination.Safety),
@@ -68,7 +74,11 @@ fun MoreHubScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(type.title) }
+                navigationIcon = { BackIconButton(onBack = onBack) },
+                title = { Text(type.title) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
             )
         }
     ) { innerPadding ->
@@ -87,12 +97,17 @@ fun MoreHubScreen(
                     }
                     SettingRow(
                         title = "安全模式",
-                        subtitle = "安全模式下只记录命中结果，不会自动点击。",
+                        subtitle = "仅记录命中结果，不会自动点击。",
                         checked = safetyModeEnabled,
                         onCheckedChange = { enabled ->
                             safetyModeEnabled = enabled
                             SettingsRepository.setSafetyModeEnabled(context, enabled)
                         }
+                    )
+                    Text(
+                        text = "为减少误触，Skip 默认只在应用打开后的前 6 秒工作，使用应用过程中不会自动点击弹窗。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (safetyModeEnabled) {
                         Text(
@@ -102,6 +117,7 @@ fun MoreHubScreen(
                         )
                     }
                 }
+
                 MoreHubType.Data -> {
                     var successToastEnabled by remember {
                         mutableStateOf(SettingsRepository.isSuccessToastEnabled(context))
@@ -128,12 +144,14 @@ fun MoreHubScreen(
                         }
                     )
                 }
+
                 MoreHubType.System -> Unit
             }
+
             items.forEach { item ->
                 Card(
                     onClick = { onOpenDestination(item.destination) },
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(

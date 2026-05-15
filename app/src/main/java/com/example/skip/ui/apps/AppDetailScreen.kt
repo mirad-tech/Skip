@@ -1,4 +1,4 @@
-package com.example.skip.ui.apps
+﻿package com.example.skip.ui.apps
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -29,6 +29,7 @@ import com.example.skip.data.InstalledAppRepository
 import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
+import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import com.example.skip.ui.common.AppIconView
 import com.example.skip.ui.common.SimpleScreenScaffold
@@ -87,39 +88,53 @@ fun AppDetailScreen(
                         text = when {
                             status.isSelfPackage -> "当前状态：不可配置"
                             status.isProtected -> "当前状态：安全保护"
-                            status.isBlacklisted -> "当前状态：已加入黑名单"
-                            else -> "当前状态：默认跳过已启用"
+                            status.defaultSkipEnabled -> "当前状态：默认跳过已启用"
+                            else -> "当前状态：默认跳过已关闭"
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "自定义规则：${rules.size}",
+                        text = "自定义规则：${rules.size} · 命中：${status.hitCount} · 成功：${status.successCount}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            modifier = Modifier.weight(1f),
-                            enabled = !status.isProtected && !status.isSelfPackage,
-                            onClick = {
-                                SettingsRepository.setBlacklisted(
-                                    context,
-                                    packageName,
-                                    !status.isBlacklisted
-                                )
-                                refreshKey++
-                            }
-                        ) {
-                            Text(if (status.isBlacklisted) "移出黑名单" else "加入黑名单")
+                    PolicySwitchRow(
+                        title = "本应用自动辅助",
+                        subtitle = "关闭后本应用的默认规则和自定义规则都暂停执行。",
+                        checked = status.appAssistanceEnabled,
+                        enabled = !status.isProtected && !status.isSelfPackage,
+                        onCheckedChange = { enabled ->
+                            SettingsRepository.setAppAssistanceEnabled(context, packageName, enabled)
+                            refreshKey++
                         }
-                        Button(
-                            modifier = Modifier.weight(1f),
-                            enabled = !status.isProtected && !status.isSelfPackage,
-                            onClick = { showAddRuleOptions = true }
-                        ) {
-                            Text("添加规则")
+                    )
+                    PolicySwitchRow(
+                        title = "默认开屏规则",
+                        subtitle = "关闭后不再使用内置通用跳过规则。",
+                        checked = status.defaultSkipEnabled,
+                        enabled = !status.isProtected && !status.isSelfPackage,
+                        onCheckedChange = { enabled ->
+                            SettingsRepository.setDefaultRuleEnabled(context, packageName, enabled)
+                            refreshKey++
                         }
+                    )
+                    PolicySwitchRow(
+                        title = "自定义规则",
+                        subtitle = "关闭后本应用的本地/导入规则都暂停执行。",
+                        checked = status.customRulesEnabled,
+                        enabled = !status.isProtected && !status.isSelfPackage,
+                        onCheckedChange = { enabled ->
+                            SettingsRepository.setCustomRulesEnabled(context, packageName, enabled)
+                            refreshKey++
+                        }
+                    )
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !status.isProtected && !status.isSelfPackage,
+                        onClick = { showAddRuleOptions = true }
+                    ) {
+                        Text("添加规则")
                     }
                 }
             }
@@ -129,8 +144,8 @@ fun AppDetailScreen(
                 when {
                     status.isSelfPackage -> "Skip 自身不会被扫描、匹配或自动点击。"
                     status.isProtected -> "该应用属于安全保护范围，默认不自动点击。"
-                    status.isBlacklisted -> "黑名单已关闭默认开屏跳过。"
-                    else -> "默认仅在应用打开后的短时间内尝试跳过，以减少误触。"
+                    !status.defaultSkipEnabled -> "已关闭本应用的默认开屏跳过，可继续保留自定义规则。"
+                    else -> "默认仅在应用打开后的前 6 秒内尝试跳过开屏广告。"
                 }
             )
 
@@ -141,6 +156,7 @@ fun AppDetailScreen(
                 rules.forEach { rule ->
                     RuleCard(
                         rule = rule,
+                        editable = rule.source == RuleSource.UserSimple,
                         onEnabledChange = { enabled ->
                             RuleRepository.setRuleEnabled(context, rule.id, enabled)
                             refreshKey++
@@ -169,7 +185,7 @@ fun AppDetailScreen(
                             append("\n")
                             append(log.stage.label)
                             val failure = log.failureReason.ifBlank { log.reason }
-                            if (failure.isNotBlank()) append("：").append(failure)
+                            if (failure.isNotBlank()) append("（").append(failure).append("）")
                             if (log.detail.isNotBlank()) {
                                 append("\n")
                                 append(log.detail)
@@ -223,16 +239,54 @@ private fun AddRuleOptionsDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
-            }
+            TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
 }
 
 @Composable
+private fun PolicySwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(title, fontWeight = FontWeight.Medium)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = checked,
+                enabled = enabled,
+                onCheckedChange = onCheckedChange
+            )
+        }
+    }
+}
+
+@Composable
 private fun RuleCard(
     rule: SkipRule,
+    editable: Boolean,
     onEnabledChange: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
@@ -263,12 +317,8 @@ private fun RuleCard(
                 Switch(checked = rule.enabled, onCheckedChange = onEnabledChange)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onEdit) {
-                    Text("编辑")
-                }
-                TextButton(onClick = onDelete) {
-                    Text("删除")
-                }
+                TextButton(enabled = editable, onClick = onEdit) { Text("编辑") }
+                TextButton(onClick = onDelete) { Text("删除") }
             }
         }
     }
@@ -301,7 +351,7 @@ private fun InfoCard(text: String) {
 }
 
 private fun formatDuration(durationMs: Long): String {
-    return if (durationMs > 30_000L) "任意时间" else "启动后 ${durationMs / 1000} 秒内"
+    return "启动后 ${durationMs / 1000} 秒内"
 }
 
 private fun formatTime(timeMillis: Long): String {

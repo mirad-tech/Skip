@@ -38,30 +38,31 @@ object RomUtils {
     }
 
     fun detectRom(): RomType {
-        val manufacturer = Build.MANUFACTURER.orEmpty().lowercase()
-        val brand = Build.BRAND.orEmpty().lowercase()
-        val display = Build.DISPLAY.orEmpty().lowercase()
-        val miOs = getSystemProperty("ro.mi.os.version.name")
-        val miui = getSystemProperty("ro.miui.ui.version.name")
-        val vivo = getSystemProperty("ro.vivo.os.version")
-        val oppo = getSystemProperty("ro.build.version.opporom")
-        val realme = getSystemProperty("ro.build.version.realmeui")
-        val emui = getSystemProperty("ro.build.version.emui")
-        val magic = getSystemProperty("ro.build.version.magic")
-        val oneUi = getSystemProperty("ro.build.version.oneui")
-        val flyme = getSystemProperty("ro.flyme.published")
+        val manufacturer = Build.MANUFACTURER.orEmpty()
+        val brand = Build.BRAND.orEmpty()
+        val display = Build.DISPLAY.orEmpty()
+        val signals = listOf(
+            manufacturer,
+            brand,
+            display,
+            Build.PRODUCT.orEmpty(),
+            Build.DEVICE.orEmpty(),
+            Build.HARDWARE.orEmpty(),
+            Build.ID.orEmpty(),
+            Build.FINGERPRINT.orEmpty()
+        ).map { it.lowercase() }
 
         return when {
-            miOs.isNotBlank() || display.contains("hyperos") -> RomType.HyperOS
-            miui.isNotBlank() || manufacturer.contains("xiaomi") || brand.contains("redmi") -> RomType.MIUI
-            manufacturer.contains("vivo") && display.contains("origin") -> RomType.OriginOS
-            vivo.isNotBlank() || manufacturer.contains("vivo") -> RomType.FuntouchOS
-            realme.isNotBlank() || brand.contains("realme") -> RomType.RealmeUI
-            oppo.isNotBlank() || manufacturer.contains("oppo") || brand.contains("oneplus") -> RomType.ColorOS
-            magic.isNotBlank() || manufacturer.contains("honor") -> RomType.MagicOS
-            emui.isNotBlank() || manufacturer.contains("huawei") -> RomType.EMUI
-            flyme.isNotBlank() || display.contains("flyme") || manufacturer.contains("meizu") -> RomType.Flyme
-            oneUi.isNotBlank() || manufacturer.contains("samsung") -> RomType.OneUI
+            signals.containsAny("hyperos") -> RomType.HyperOS
+            signals.containsAny("xiaomi", "redmi", "poco", "miui") -> RomType.MIUI
+            signals.containsAny("originos", "origin os") -> RomType.OriginOS
+            signals.containsAny("vivo", "iqoo", "funtouch") -> RomType.FuntouchOS
+            signals.containsAny("realme") -> RomType.RealmeUI
+            signals.containsAny("oppo", "oneplus", "coloros", "color os") -> RomType.ColorOS
+            signals.containsAny("honor", "magicos", "magic os") -> RomType.MagicOS
+            signals.containsAny("huawei", "emui", "harmony") -> RomType.EMUI
+            signals.containsAny("flyme", "meizu") -> RomType.Flyme
+            signals.containsAny("samsung", "oneui", "one ui") -> RomType.OneUI
             else -> RomType.Unknown
         }
     }
@@ -119,11 +120,7 @@ object RomUtils {
         }
     }
 
-    private fun getSystemProperty(key: String): String {
-        return runCatching {
-            val clazz = Class.forName("android.os.SystemProperties")
-            val method = clazz.getMethod("get", String::class.java)
-            method.invoke(null, key) as? String
-        }.getOrDefault("").orEmpty()
+    private fun List<String>.containsAny(vararg values: String): Boolean {
+        return any { signal -> values.any { value -> signal.contains(value) } }
     }
 }

@@ -12,7 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -31,7 +31,7 @@ import java.util.Locale
 @Composable
 fun SystemCompatScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    var refreshKey by remember { mutableStateOf(0) }
+    var refreshKey by remember { mutableIntStateOf(0) }
     val deviceInfo = remember(refreshKey) { RomUtils.getDeviceInfo() }
     val serviceEnabled = remember(refreshKey) { AccessibilityUtil.isSkipServiceEnabled(context) }
     val batteryState = remember(refreshKey) {

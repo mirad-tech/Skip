@@ -11,12 +11,16 @@ data class SkipRule(
     val matchTexts: List<String> = emptyList(),
     val matchContentDescriptions: List<String> = emptyList(),
     val matchViewIds: List<String> = emptyList(),
+    val textMatchMode: MatchMode = MatchMode.Contains,
+    val contentDescriptionMatchMode: MatchMode = MatchMode.Contains,
+    val viewIdMatchMode: MatchMode = MatchMode.Contains,
     val area: RuleArea = RuleArea.TopRight,
     val action: RuleAction = RuleAction.Click,
     val priority: Int = 10,
     val cooldownMs: Long = 1200L,
-    val validDurationMs: Long = 10_000L,
+    val validDurationMs: Long = 6_000L,
     val minScore: Int = 70,
+    val coordinateFallback: CoordinateFallback? = null,
     val packageId: String = "local",
     val createdAt: Long = System.currentTimeMillis()
 )
@@ -59,6 +63,18 @@ enum class RuleAction(val value: String) {
     companion object {
         fun fromValue(value: String): RuleAction? {
             return entries.firstOrNull { it.value == value }
+        }
+    }
+}
+
+enum class MatchMode(val value: String, val label: String) {
+    Contains("contains", "包含"),
+    Exact("exact", "精确"),
+    Regex("regex", "正则");
+
+    companion object {
+        fun fromValue(value: String): MatchMode {
+            return entries.firstOrNull { it.value == value } ?: Contains
         }
     }
 }

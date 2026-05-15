@@ -7,7 +7,8 @@ data class RuleImportResult(
     val parsedAppCount: Int = 0,
     val parsedRuleCount: Int = 0,
     val rulePackage: RulePackage? = null,
-    val rules: List<SkipRule> = emptyList()
+    val rules: List<SkipRule> = emptyList(),
+    val appPolicies: List<AppPolicy> = emptyList()
 )
 
 enum class DuplicateStrategy(val label: String) {

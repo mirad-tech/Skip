@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import com.example.skip.R
 
 object IconManager {
+    val homeImageRes: Int = R.drawable.ic_skip_wordmark
+
     val schemes = listOf(
         IconScheme(
             id = "sky_blue",

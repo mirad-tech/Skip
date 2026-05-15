@@ -17,7 +17,20 @@ object RuleMatcher {
         val scoredRule = ScoreEvaluator.evaluate(node, rule, appElapsedMs, clickSelection) ?: return null
         val candidate = ClickExecutor.describeTarget(node)
         val target = clickSelection?.target ?: candidate
-        val match = if (scoredRule.passesMinScore && clickSelection != null) {
+        val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
+            listOf(
+                rule.name,
+                scoredRule.matchedKeyword,
+                candidate.text,
+                candidate.contentDescription,
+                target.text,
+                target.contentDescription,
+                candidate.viewId,
+                target.viewId
+            )
+        )
+        val blockedByHighRiskPolicy = !highRiskDecision.allowed
+        val match = if (scoredRule.passesMinScore && clickSelection != null && !blockedByHighRiskPolicy) {
             MatchResult(
                 sourceNode = node,
                 clickNode = clickSelection.node,
@@ -50,6 +63,7 @@ object RuleMatcher {
             target = candidate,
             match = match,
             failureReason = when {
+                blockedByHighRiskPolicy -> HighRiskClickPolicy.BLOCKED_REASON
                 scoredRule.failureReason.isNotBlank() -> scoredRule.failureReason
                 clickSelection == null -> "no_clickable_target"
                 else -> ""

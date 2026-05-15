@@ -2,10 +2,19 @@ package com.example.skip.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+val TealPrimary = Color(0xFF0F766E)
+val TealPrimaryDark = Color(0xFF5EEAD4)
+val BlueSecondary = Color(0xFF2563EB)
+val BlueSecondaryDark = Color(0xFF93C5FD)
+val AmberTertiary = Color(0xFFB45309)
+val AmberTertiaryDark = Color(0xFFFBBF24)
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+val LightBackground = Color(0xFFF6F8FA)
+val LightSurface = Color(0xFFFFFFFF)
+val LightSurfaceVariant = Color(0xFFE5EDF1)
+val LightOutline = Color(0xFFCAD5DA)
+
+val DarkBackground = Color(0xFF0B1115)
+val DarkSurface = Color(0xFF11181D)
+val DarkSurfaceVariant = Color(0xFF253138)
+val DarkOutline = Color(0xFF3A4A53)

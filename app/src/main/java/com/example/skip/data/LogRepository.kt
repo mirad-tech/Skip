@@ -1,6 +1,7 @@
 package com.example.skip.data
 
 import android.content.Context
+import androidx.core.content.edit
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickLogStage
 import com.example.skip.model.ClickMethodLog
@@ -45,11 +46,11 @@ object LogRepository {
         }.take(MAX_CLICK_LOG_COUNT)
 
         SettingsRepository.prefs(context)
-            .edit()
-            .putString(KEY_CLICK_LOGS, JSONArray().apply {
-                logs.forEach { put(it.toJson()) }
-            }.toString())
-            .apply()
+            .edit {
+                putString(KEY_CLICK_LOGS, JSONArray().apply {
+                    logs.forEach { put(it.toJson()) }
+                }.toString())
+            }
     }
 
     fun getClickLogs(context: Context): List<ClickLog> {
@@ -70,7 +71,7 @@ object LogRepository {
     }
 
     fun clearClickLogs(context: Context) {
-        SettingsRepository.prefs(context).edit().remove(KEY_CLICK_LOGS).apply()
+        SettingsRepository.prefs(context).edit { remove(KEY_CLICK_LOGS) }
     }
 
     fun exportClickLogsAsJson(
@@ -103,9 +104,7 @@ object LogRepository {
         }.take(MAX_RULE_LOG_COUNT)
 
         SettingsRepository.prefs(context)
-            .edit()
-            .putString(KEY_RULE_LOGS, logs.joinToString(ROW_SEPARATOR) { it.serialize() })
-            .apply()
+            .edit { putString(KEY_RULE_LOGS, logs.joinToString(ROW_SEPARATOR) { it.serialize() }) }
     }
 
     fun getRuleLogs(context: Context): List<RuleLog> {
@@ -118,7 +117,7 @@ object LogRepository {
     }
 
     fun clearRuleLogs(context: Context) {
-        SettingsRepository.prefs(context).edit().remove(KEY_RULE_LOGS).apply()
+        SettingsRepository.prefs(context).edit { remove(KEY_RULE_LOGS) }
     }
 
     private fun ClickLog.isDuplicateOf(other: ClickLog, now: Long): Boolean {
@@ -174,7 +173,13 @@ object LogRepository {
             "retryCount" to log.retryCount,
             "deviceRom" to log.deviceRom,
             "elapsedSinceAppStartMs" to nullableJsonValue(log.elapsedSinceAppStartMs),
+            "foregroundPackage" to log.foregroundPackage,
+            "foregroundStartTimeMillis" to nullableJsonValue(log.foregroundStartTimeMillis),
+            "elapsedSinceForegroundMs" to nullableJsonValue(log.elapsedSinceForegroundMs),
             "defaultRuleWindowMs" to nullableJsonValue(log.defaultRuleWindowMs),
+            "isWithinDefaultRuleWindow" to nullableJsonValue(log.isWithinDefaultRuleWindow),
+            "ruleScope" to log.ruleScope,
+            "timeWindowDecision" to log.timeWindowDecision,
             "isSystemPackage" to log.isSystemPackage,
             "isLauncherPackage" to log.isLauncherPackage,
             "isSelfPackage" to log.isSelfPackage,
@@ -252,7 +257,13 @@ object LogRepository {
             retryCount = optInt("retryCount"),
             deviceRom = optString("deviceRom"),
             elapsedSinceAppStartMs = optNullableLong("elapsedSinceAppStartMs"),
+            foregroundPackage = optString("foregroundPackage"),
+            foregroundStartTimeMillis = optNullableLong("foregroundStartTimeMillis"),
+            elapsedSinceForegroundMs = optNullableLong("elapsedSinceForegroundMs"),
             defaultRuleWindowMs = optNullableLong("defaultRuleWindowMs"),
+            isWithinDefaultRuleWindow = optNullableBoolean("isWithinDefaultRuleWindow"),
+            ruleScope = optString("ruleScope"),
+            timeWindowDecision = optString("timeWindowDecision"),
             isSystemPackage = optBoolean("isSystemPackage"),
             isLauncherPackage = optBoolean("isLauncherPackage"),
             isSelfPackage = optBoolean("isSelfPackage"),

@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">Skip</string>
     <string name="accessibility_service_label">Skip</string>
-    <string name="accessibility_service_description">授权后自动完成部分重复点击。</string>
+    <string name="accessibility_service_description">授权后仅在本机读取当前可见界面节点，并在你启用的应用与规则中点击明确的跳过、关闭类开屏页面控件。</string>
 </resources>
