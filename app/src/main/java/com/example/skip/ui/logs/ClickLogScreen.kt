@@ -6,9 +6,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -18,23 +19,34 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.example.skip.data.DiagnosticReportRepository
+import com.example.skip.data.JsonExportWriter
 import com.example.skip.data.LogRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickLogStage
 import com.example.skip.model.RuleLog
-import com.example.skip.ui.common.SimpleScreenScaffold
+import com.example.skip.ui.common.AutoLoadMoreEffect
+import com.example.skip.ui.common.LazyScreenScaffold
+import com.example.skip.ui.common.initialVisibleCount
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+internal const val CLICK_LOG_DISPLAY_LIMIT = 100
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -43,150 +55,240 @@ fun ClickLogScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
+    val coroutineScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     val versionName = remember {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }
-    var logs by remember { mutableStateOf(LogRepository.getClickLogs(context)) }
-    var ruleLogs by remember { mutableStateOf(LogRepository.getRuleLogs(context)) }
+    var logs by remember { mutableStateOf<List<ClickLog>>(emptyList()) }
+    var ruleLogs by remember { mutableStateOf<List<RuleLog>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
     var query by remember { mutableStateOf("") }
     var stageFilter by remember { mutableStateOf<ClickLogStage?>(null) }
     var resultFilter by remember { mutableStateOf<ResultFilter?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     val safetyModeEnabled = remember { SettingsRepository.isSafetyModeEnabled(context) }
+
+    LaunchedEffect(context) {
+        loading = true
+        val loaded = withContext(Dispatchers.IO) {
+            LogRepository.getClickLogs(context) to LogRepository.getRuleLogs(context)
+        }
+        logs = loaded.first
+        ruleLogs = loaded.second
+        loading = false
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        runCatching {
-            val filtered = filterLogs(logs, query, stageFilter, resultFilter)
-            context.contentResolver.openOutputStream(uri)?.use { output ->
-                output.write(
-                    LogRepository.exportClickLogsAsJson(context, versionName, filtered)
-                        .toByteArray(Charsets.UTF_8)
-                )
+        val filtered = filterLogs(logs, query, stageFilter, resultFilter)
+        message = "正在导出..."
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    JsonExportWriter.writeJson(
+                        openOutputStream = { appContext.contentResolver.openOutputStream(uri) },
+                        json = LogRepository.exportClickLogsAsJson(appContext, versionName, filtered)
+                    )
+                }
             }
-            message = "导出成功"
-        }.onFailure {
-            message = "导出失败，请重试"
+            message = if (result.isSuccess) "导出成功" else "导出失败，请重试"
+        }
+    }
+    val diagnosticExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        message = "正在导出诊断包..."
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    JsonExportWriter.writeJson(
+                        openOutputStream = { appContext.contentResolver.openOutputStream(uri) },
+                        json = DiagnosticReportRepository.exportDiagnosticReportAsJson(appContext, versionName)
+                    )
+                }
+            }
+            message = if (result.isSuccess) "诊断包导出成功" else "诊断包导出失败，请重试"
         }
     }
 
-    SimpleScreenScaffold(
+    val filteredLogs = remember(logs, query, stageFilter, resultFilter) {
+        filterLogs(logs, query, stageFilter, resultFilter)
+    }
+    val totalCount = if (showRuleLogs) ruleLogs.size else filteredLogs.size
+    var visibleCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(showRuleLogs, totalCount, query, stageFilter, resultFilter) {
+        listState.scrollToItem(0)
+        visibleCount = initialVisibleCount(totalCount, CLICK_LOG_DISPLAY_LIMIT)
+    }
+    AutoLoadMoreEffect(
+        listState = listState,
+        visibleCount = visibleCount,
+        totalCount = totalCount,
+        batchSize = CLICK_LOG_DISPLAY_LIMIT,
+        onVisibleCountChange = { visibleCount = it }
+    )
+
+    LazyScreenScaffold(
         title = if (showRuleLogs) "规则日志" else "点击日志",
-        onBack = onBack
+        onBack = onBack,
+        listState = listState
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (!showRuleLogs && safetyModeEnabled) {
-                Text(
-                    text = "当前为安全模式：仅记录，不会自动点击",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    enabled = if (showRuleLogs) ruleLogs.isNotEmpty() else logs.isNotEmpty(),
-                    onClick = {
-                        if (showRuleLogs) {
-                            LogRepository.clearRuleLogs(context)
-                            ruleLogs = emptyList()
-                        } else {
-                            LogRepository.clearClickLogs(context)
-                            logs = emptyList()
-                        }
-                    }
-                ) {
-                    Text("清空")
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (!showRuleLogs && safetyModeEnabled) {
+                    Text(
+                        text = "当前为安全模式：仅记录，不会自动点击",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
-                if (!showRuleLogs) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Button(
-                        enabled = logs.isNotEmpty(),
+                        enabled = if (showRuleLogs) ruleLogs.isNotEmpty() else logs.isNotEmpty(),
                         onClick = {
-                            exportLauncher.launch("skip_click_logs_${formatFileTime()}.json")
+                            if (showRuleLogs) {
+                                LogRepository.clearRuleLogs(context)
+                                ruleLogs = emptyList()
+                            } else {
+                                LogRepository.clearClickLogs(context)
+                                logs = emptyList()
+                            }
                         }
                     ) {
-                        Text("导出日志")
+                        Text("清空")
+                    }
+                    if (!showRuleLogs) {
+                        Button(
+                            enabled = logs.isNotEmpty(),
+                            onClick = {
+                                exportLauncher.launch("skip_click_logs_${formatFileTime()}.json")
+                            }
+                        ) {
+                            Text("导出日志")
+                        }
+                        Button(
+                            onClick = {
+                                diagnosticExportLauncher.launch("skip_diagnostic_${formatFileTime()}.json")
+                            }
+                        ) {
+                            Text("导出诊断包")
+                        }
                     }
                 }
-            }
 
-            message?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (showRuleLogs) {
-                if (ruleLogs.isEmpty()) {
-                    EmptyLogCard("暂无规则日志")
-                } else {
-                    ruleLogs.forEach { RuleLogItem(it) }
+                message?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
+            }
+        }
+
+        if (loading) {
+            item { EmptyLogCard(if (showRuleLogs) "正在加载规则日志..." else "正在加载点击日志...") }
+        } else if (showRuleLogs) {
+            if (ruleLogs.isEmpty()) {
+                item { EmptyLogCard("暂无规则日志") }
             } else {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("搜索包名") },
-                    singleLine = true
-                )
-
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = stageFilter == null,
-                        onClick = { stageFilter = null },
-                        label = { Text("全部阶段") }
-                    )
-                    listOf(
-                        ClickLogStage.RuleMatched,
-                        ClickLogStage.ClickFailed,
-                        ClickLogStage.ClickEffectConfirmed,
-                        ClickLogStage.ClickEffectUnknown,
-                        ClickLogStage.ClickSkippedBySafetyMode,
-                        ClickLogStage.SkippedBySafety,
-                        ClickLogStage.SkippedByLowScore
-                    ).forEach { stage ->
-                        FilterChip(
-                            selected = stageFilter == stage,
-                            onClick = { stageFilter = stage },
-                            label = { Text(stage.label) }
+                items(ruleLogs.take(visibleCount)) { RuleLogItem(it) }
+                if (visibleCount < ruleLogs.size) {
+                    item {
+                        Text(
+                            text = "继续滚动加载 ${ruleLogs.size - visibleCount} 条日志",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = resultFilter == null,
-                        onClick = { resultFilter = null },
-                        label = { Text("全部结果") }
+            }
+        } else {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("搜索包名") },
+                        singleLine = true
                     )
-                    ResultFilter.entries.forEach { item ->
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         FilterChip(
-                            selected = resultFilter == item,
-                            onClick = { resultFilter = item },
-                            label = { Text(item.label) }
+                            selected = stageFilter == null,
+                            onClick = { stageFilter = null },
+                            label = { Text("全部阶段") }
                         )
+                        listOf(
+                            ClickLogStage.RuleMatched,
+                            ClickLogStage.ClickFailed,
+                            ClickLogStage.ClickEffectConfirmed,
+                            ClickLogStage.ClickEffectUnknown,
+                            ClickLogStage.ClickSkippedBySafetyMode,
+                            ClickLogStage.SkippedBySafety,
+                            ClickLogStage.SkippedByLowScore
+                        ).forEach { stage ->
+                            FilterChip(
+                                selected = stageFilter == stage,
+                                onClick = { stageFilter = stage },
+                                label = { Text(stage.label) }
+                            )
+                        }
+                    }
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = resultFilter == null,
+                            onClick = { resultFilter = null },
+                            label = { Text("全部结果") }
+                        )
+                        ResultFilter.entries.forEach { item ->
+                            FilterChip(
+                                selected = resultFilter == item,
+                                onClick = { resultFilter = item },
+                                label = { Text(item.label) }
+                            )
+                        }
                     }
                 }
+            }
 
-                val filteredLogs = filterLogs(logs, query, stageFilter, resultFilter)
-                if (filteredLogs.isEmpty()) {
-                    EmptyLogCard("暂无数据")
-                } else {
-                    filteredLogs.forEach { log ->
-                        LogItem(log = log)
+            if (filteredLogs.isEmpty()) {
+                item { EmptyLogCard("暂无数据") }
+            } else {
+                item {
+                    Text(
+                        text = "当前显示 ${visibleCount}/${filteredLogs.size} 条，导出保留完整记录",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                items(filteredLogs.take(visibleCount)) { log ->
+                    LogItem(log = log)
+                }
+                if (visibleCount < filteredLogs.size) {
+                    item {
+                        Text(
+                            text = "继续滚动加载 ${filteredLogs.size - visibleCount} 条日志",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -197,7 +299,7 @@ fun ClickLogScreen(
 @Composable
 private fun EmptyLogCard(text: String) {
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
@@ -216,7 +318,7 @@ private fun EmptyLogCard(text: String) {
 @Composable
 private fun RuleLogItem(log: RuleLog) {
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(
@@ -236,7 +338,7 @@ private fun RuleLogItem(log: RuleLog) {
 @Composable
 private fun LogItem(log: ClickLog) {
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(
@@ -306,6 +408,10 @@ private fun filterLogs(
                     log.stage == ClickLogStage.ClickEffectUnknown
             }
         }
+}
+
+internal fun displayLogsForScreen(logs: List<ClickLog>): List<ClickLog> {
+    return logs.take(CLICK_LOG_DISPLAY_LIMIT)
 }
 
 private fun formatTime(timeMillis: Long): String {

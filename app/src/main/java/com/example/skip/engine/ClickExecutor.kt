@@ -133,6 +133,72 @@ object ClickExecutor {
         }
     }
 
+    fun gestureClickPoint(
+        service: AccessibilityService,
+        target: ClickTargetInfo,
+        x: Int,
+        y: Int,
+        onResult: (ClickAttempt) -> Unit
+    ) {
+        val screenWidth = android.content.res.Resources.getSystem().displayMetrics.widthPixels
+            .coerceAtLeast(1)
+        val screenHeight = android.content.res.Resources.getSystem().displayMetrics.heightPixels
+            .coerceAtLeast(1)
+        if (x !in 0 until screenWidth || y !in 0 until screenHeight) {
+            onResult(
+                ClickAttempt(
+                    method = ClickMethodLog.DispatchGesture,
+                    accepted = false,
+                    target = target,
+                    reason = "coordinate_fallback_out_of_screen"
+                )
+            )
+            return
+        }
+
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 80L))
+            .build()
+        val accepted = service.dispatchGesture(
+            gesture,
+            object : AccessibilityService.GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription) {
+                    onResult(
+                        ClickAttempt(
+                            method = ClickMethodLog.DispatchGesture,
+                            accepted = true,
+                            target = target,
+                            reason = "coordinate_fallback_completed"
+                        )
+                    )
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription) {
+                    onResult(
+                        ClickAttempt(
+                            method = ClickMethodLog.DispatchGesture,
+                            accepted = false,
+                            target = target,
+                            reason = "coordinate_fallback_cancelled"
+                        )
+                    )
+                }
+            },
+            Handler(Looper.getMainLooper())
+        )
+        if (!accepted) {
+            onResult(
+                ClickAttempt(
+                    method = ClickMethodLog.DispatchGesture,
+                    accepted = false,
+                    target = target,
+                    reason = "coordinate_fallback_dispatch_returned_false"
+                )
+            )
+        }
+    }
+
     fun describeTarget(node: AccessibilityNodeInfo): ClickTargetInfo {
         val bounds = Rect()
         node.getBoundsInScreen(bounds)

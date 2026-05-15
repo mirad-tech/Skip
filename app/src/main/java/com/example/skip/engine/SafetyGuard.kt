@@ -134,7 +134,7 @@ object SafetyGuard {
         "permission",
         "install",
         "password"
-    )
+    ) + HighRiskClickPolicy.blockedTerms
 
     fun canHandlePackage(context: Context, packageName: String): Boolean {
         if (packageName.isBlank()) return false
@@ -234,7 +234,8 @@ object SafetyGuard {
 
     fun isSensitiveText(text: String): Boolean {
         val lower = text.lowercase(Locale.ROOT)
-        return protectedPageKeywords.any { lower.contains(it.lowercase(Locale.ROOT)) }
+        return protectedPageKeywords.any { lower.contains(it.lowercase(Locale.ROOT)) } ||
+            HighRiskClickPolicy.isHighRiskText(text)
     }
 
     fun protectedSummary(): String {

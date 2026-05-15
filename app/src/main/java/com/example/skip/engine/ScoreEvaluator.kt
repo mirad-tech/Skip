@@ -2,6 +2,7 @@ package com.example.skip.engine
 
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.skip.model.MatchMode
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
@@ -24,6 +25,9 @@ object ScoreEvaluator {
     private val closeNeedsAdContext = listOf(
         "关闭",
         "close",
+        "×",
+        "✕",
+        "x",
         "我知道了",
         "知道了"
     )
@@ -37,7 +41,6 @@ object ScoreEvaluator {
         if (!node.isVisibleToUser) return null
         if (!node.isEnabled) return null
         if (node.isPassword || node.isInputNode()) return null
-        if (isDangerousButtonText(node)) return null
         if (appElapsedMs > rule.validDurationMs) {
             return ScoreEvaluation(rule, 0, rule.minScore, "", node.areaInScreen(), false, "skipped_by_time_window")
         }
@@ -45,15 +48,30 @@ object ScoreEvaluator {
         val textValue = node.text?.toString().orEmpty()
         val descriptionValue = node.contentDescription?.toString().orEmpty()
         val viewId = node.viewIdResourceName.orEmpty()
-        val textRule = matchedTextRule(listOf(textValue), rule.matchTexts)
-        val descriptionRule = matchedTextRule(listOf(descriptionValue), rule.matchContentDescriptions)
-        val idRule = matchedIdRule(viewId, rule.matchViewIds)
+        val textRule = matchedTextRule(listOf(textValue), rule.matchTexts, rule.textMatchMode)
+        val descriptionRule = matchedTextRule(
+            listOf(descriptionValue),
+            rule.matchContentDescriptions,
+            rule.contentDescriptionMatchMode
+        )
+        val idRule = matchedIdRule(viewId, rule.matchViewIds, rule.viewIdMatchMode)
 
         if (textRule == null && descriptionRule == null && idRule == null) return null
 
         var score = 0
         val area = node.areaInScreen()
         val matchedKeyword = textRule ?: descriptionRule ?: idRule ?: rule.name
+        if (isDangerousButtonText(node)) {
+            return ScoreEvaluation(
+                rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = matchedKeyword,
+                area = area,
+                passesMinScore = false,
+                failureReason = HighRiskClickPolicy.BLOCKED_REASON
+            )
+        }
         val defaultRule = rule.source == RuleSource.BuiltIn
         val textKeywordIsStandaloneSkip = listOf(textValue, descriptionValue)
             .any(SafetyGuard::isStandaloneSkipText)
@@ -144,21 +162,33 @@ object ScoreEvaluator {
         )
     }
 
-    private fun matchedTextRule(values: List<String>, keywords: List<String>): String? {
+    private fun matchedTextRule(values: List<String>, keywords: List<String>, mode: MatchMode): String? {
         return values.firstNotNullOfOrNull { value ->
             val normalized = value.trim()
             if (normalized.isEmpty() || normalized.length > MAX_SKIP_TEXT_LENGTH) return@firstNotNullOfOrNull null
             val lower = normalized.lowercase(Locale.ROOT)
             if (blockedTextFragments.any { lower.contains(it) }) return@firstNotNullOfOrNull null
-            keywords.firstOrNull { keyword -> lower.contains(keyword.lowercase(Locale.ROOT)) }
+            keywords.firstOrNull { keyword -> lower.matchesRuleKeyword(keyword, mode) }
         }
     }
 
-    private fun matchedIdRule(viewId: String, keywords: List<String>): String? {
+    private fun matchedIdRule(viewId: String, keywords: List<String>, mode: MatchMode): String? {
         val normalizedViewId = viewId.normalizeForRuleMatch()
         if (normalizedViewId.isEmpty()) return null
         return keywords.firstOrNull { keyword ->
-            normalizedViewId.contains(keyword.normalizeForRuleMatch())
+            normalizedViewId.matchesRuleKeyword(keyword.normalizeForRuleMatch(), mode)
+        }
+    }
+
+    private fun String.matchesRuleKeyword(keyword: String, mode: MatchMode): Boolean {
+        val normalizedKeyword = keyword.trim().lowercase(Locale.ROOT)
+        if (normalizedKeyword.isEmpty()) return false
+        return when (mode) {
+            MatchMode.Contains -> contains(normalizedKeyword)
+            MatchMode.Exact -> this == normalizedKeyword
+            MatchMode.Regex -> runCatching {
+                Regex(normalizedKeyword, RegexOption.IGNORE_CASE).containsMatchIn(this)
+            }.getOrDefault(false)
         }
     }
 

@@ -1,16 +1,21 @@
 package com.example.skip.data
 
+import com.example.skip.model.AppPolicy
+import com.example.skip.model.CoordinateFallback
+import com.example.skip.model.MatchMode
 import com.example.skip.model.RuleAction
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleImportResult
 import com.example.skip.model.RulePackage
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
-import org.json.JSONObject
+import com.example.skip.engine.HighRiskClickPolicy
+import com.example.skip.util.SimpleJson
+import com.example.skip.util.SimpleJsonArray
+import com.example.skip.util.SimpleJsonObject
 import java.util.UUID
 
 object RuleImportManager {
-    private const val LONG_DURATION_WARNING_MS = 30_000L
     private const val MIN_COOLDOWN_MS = 800L
 
     fun parseRulePackage(jsonText: String, selfPackageName: String = ""): RuleImportResult {
@@ -18,7 +23,7 @@ object RuleImportManager {
             return RuleImportResult(false, "JSON 不能为空")
         }
 
-        val root = runCatching { JSONObject(jsonText) }.getOrElse {
+        val root = runCatching { SimpleJson.parseObject(jsonText) }.getOrElse {
             return RuleImportResult(false, "JSON 格式错误：${it.message.orEmpty()}")
         }
 
@@ -30,6 +35,32 @@ object RuleImportManager {
 
         val warnings = mutableListOf<String>()
         val rules = mutableListOf<SkipRule>()
+        val appPolicies = mutableListOf<AppPolicy>()
+        val schemaVersion = root.optInt("schemaVersion", 1)
+        if (schemaVersion > 2) {
+            warnings += "schemaVersion=$schemaVersion 高于当前支持版本，未知字段会被忽略。"
+        }
+        val policyArray = root.optJSONArray("appPolicies")
+        if (policyArray != null) {
+            for (index in 0 until policyArray.length()) {
+                val policyJson = policyArray.optJSONObject(index)
+                    ?: return RuleImportResult(false, "第 ${index + 1} 个 appPolicy 不是对象")
+                val policyPackage = policyJson.optString("packageName").trim()
+                if (policyPackage.isBlank()) {
+                    return RuleImportResult(false, "第 ${index + 1} 个 appPolicy 的 packageName 不能为空")
+                }
+                if (selfPackageName.isNotBlank() && policyPackage == selfPackageName) {
+                    warnings += "已忽略 Skip 自身的 appPolicy。"
+                    continue
+                }
+                appPolicies += AppPolicy(
+                    packageName = policyPackage,
+                    defaultRuleEnabled = policyJson.optBoolean("defaultRuleEnabled", true),
+                    customRulesEnabled = policyJson.optBoolean("customRulesEnabled", true),
+                    migratedFromBlacklist = policyJson.optBoolean("migratedFromBlacklist", false)
+                )
+            }
+        }
         val packageId = "json_${UUID.randomUUID()}"
         val rulePackage = RulePackage(
             id = packageId,
@@ -79,7 +110,8 @@ object RuleImportManager {
             parsedAppCount = apps.length(),
             parsedRuleCount = rules.size,
             rulePackage = rulePackage,
-            rules = rules
+            rules = rules,
+            appPolicies = appPolicies.distinctBy { it.packageName }
         )
     }
 
@@ -93,42 +125,99 @@ object RuleImportManager {
         avoidRepeatClick: Boolean,
         selfPackageName: String = ""
     ): RuleImportResult {
+        return createLocalRule(
+            packageName = packageName,
+            appName = appName,
+            name = name,
+            texts = texts,
+            contentDescriptions = texts,
+            viewIds = emptyList(),
+            area = area,
+            enabled = true,
+            priority = 100,
+            cooldownMs = if (avoidRepeatClick) 1200L else 800L,
+            validDurationMs = validDurationMs,
+            minScore = if (area == RuleArea.Any) 85 else 72,
+            coordinateFallback = null,
+            selfPackageName = selfPackageName
+        )
+    }
+
+    fun createLocalRule(
+        packageName: String,
+        appName: String,
+        name: String,
+        texts: List<String>,
+        contentDescriptions: List<String>,
+        viewIds: List<String>,
+        area: RuleArea,
+        enabled: Boolean,
+        priority: Int,
+        cooldownMs: Long,
+        validDurationMs: Long,
+        minScore: Int,
+        coordinateFallback: CoordinateFallback?,
+        selfPackageName: String = ""
+    ): RuleImportResult {
         val cleanTexts = texts.cleanItems()
+        val cleanDescriptions = contentDescriptions.cleanItems()
+        val cleanViewIds = viewIds.cleanItems()
         if (packageName.isBlank()) return RuleImportResult(false, "请选择应用")
         if (selfPackageName.isNotBlank() && packageName == selfPackageName) {
             return RuleImportResult(false, "不能为 Skip 自身创建自动跳过规则")
         }
-        if (cleanTexts.isEmpty()) return RuleImportResult(false, "按钮文字不能为空")
+        if (minScore !in 0..100) return RuleImportResult(false, "最低分必须在 0 到 100 之间")
+        if (cooldownMs < MIN_COOLDOWN_MS) return RuleImportResult(false, "点击间隔不能低于 800ms")
+        if (coordinateFallback?.isValid() == false) {
+            return RuleImportResult(false, "坐标兜底比例必须在 0 到 1 之间")
+        }
+        if (coordinateFallback?.enabled == true && !coordinateFallback.hasAnchorRequirement()) {
+            return RuleImportResult(false, "坐标兜底必须配置锚点规则")
+        }
+        val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
+            listOf(name) + cleanTexts + cleanDescriptions +
+                (coordinateFallback?.anchorTexts.orEmpty()) +
+                (coordinateFallback?.anchorContentDescriptions.orEmpty())
+        )
+        if (!highRiskDecision.allowed) {
+            return RuleImportResult(
+                false,
+                "规则包含高风险点击内容：${HighRiskClickPolicy.BLOCKED_REASON}（${highRiskDecision.matchedTerm}）"
+            )
+        }
+        if (cleanTexts.isEmpty() &&
+            cleanDescriptions.isEmpty() &&
+            cleanViewIds.isEmpty() &&
+            coordinateFallback?.enabled != true
+        ) {
+            return RuleImportResult(false, "至少需要填写文字、描述、View ID 或启用坐标兜底")
+        }
 
         val warnings = buildList {
-            if (area == RuleArea.Any) add("位置选择“不确定”会提高误触风险，已自动提高匹配分数要求。")
-            if (validDurationMs > LONG_DURATION_WARNING_MS) {
-                add("任意时间规则会提高误触风险，请只用于按钮文字明确的弹窗。")
+            if (area == RuleArea.Any) add("位置选为“不确定”会提高误触风险，已自动提高匹配分数要求。")
+            if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
+                add("为减少误触，自定义规则已统一收紧为应用前台后的 6 秒内生效。")
             }
-        }
-        val safeName = name.ifBlank {
-            "首页弹窗关闭"
-        }
-        val minScore = when {
-            area == RuleArea.Any && validDurationMs > LONG_DURATION_WARNING_MS -> 90
-            area == RuleArea.Any -> 85
-            validDurationMs > LONG_DURATION_WARNING_MS -> 82
-            else -> 72
+            if (coordinateFallback?.enabled == true) {
+                add("坐标兜底只会在普通节点匹配失败后执行，并仍受包名、时间窗和安全保护限制。")
+            }
         }
         val rule = SkipRule(
             id = "user_rule_${UUID.randomUUID()}",
             source = RuleSource.UserSimple,
-            name = safeName,
+            name = name.ifBlank { "首页弹窗关闭" },
             packageName = packageName,
             appName = appName.ifBlank { packageName },
+            enabled = enabled,
             matchTexts = cleanTexts,
-            matchContentDescriptions = cleanTexts,
-            matchViewIds = emptyList(),
+            matchContentDescriptions = cleanDescriptions,
+            matchViewIds = cleanViewIds,
             area = area,
-            priority = 100,
-            cooldownMs = if (avoidRepeatClick) 1200L else 800L,
-            validDurationMs = validDurationMs,
+            priority = priority,
+            cooldownMs = cooldownMs,
+            validDurationMs = RuleRepository.DEFAULT_RULE_WINDOW_MS,
             minScore = minScore,
+            coordinateFallback = coordinateFallback,
             packageId = "local"
         )
         return RuleImportResult(
@@ -144,19 +233,28 @@ object RuleImportManager {
         return buildList {
             if (rule.area == RuleArea.Any) add("位置为“不确定”，建议只用于按钮文字非常明确的场景。")
             if (rule.minScore < 60) add("最低分过低，可能增加误触风险。")
-            if (rule.validDurationMs > LONG_DURATION_WARNING_MS) add("任意时间规则风险更高，请确认关键词明确。")
+            if (rule.validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
+                add("当前版本默认只在应用打开后的前 6 秒执行自定义规则。")
+            }
             if (rule.cooldownMs < MIN_COOLDOWN_MS) add("点击间隔低于 800ms，可能导致重复点击。")
+            rule.coordinateFallback?.let { fallback ->
+                if (fallback.enabled) {
+                    add("坐标兜底只建议用于包名明确、锚点明确且普通节点匹配失败的场景。")
+                }
+                if (!fallback.isValid()) add("坐标兜底比例必须在 0 到 1 之间。")
+            }
         }
     }
 
     fun sampleJson(): String {
         return """
             {
-              "name": "开屏跳过规则包",
+              "name": "开屏页面助手规则包",
+              "schemaVersion": 2,
               "version": 1,
               "author": "local",
               "updateTime": "2026-01-01",
-              "description": "用于开屏辅助点击的规则包",
+              "description": "用于开屏页面低风险辅助点击的规则包",
               "apps": [
                 {
                   "packageName": "com.example.app",
@@ -165,18 +263,27 @@ object RuleImportManager {
                   "rules": [
                     {
                       "id": "example_skip_001",
-                      "name": "开屏跳过按钮",
+                      "name": "开屏页面跳过控件",
                       "enabled": true,
                       "activityName": "*",
-                      "matchTexts": ["跳过", "跳过广告", "Skip"],
+                      "matchTexts": ["跳过", "关闭", "Skip"],
                       "matchContentDescriptions": ["跳过", "Skip"],
-                      "matchViewIds": ["skip", "ad_skip", "close"],
+                      "matchViewIds": ["skip", "close"],
+                      "textMatchMode": "contains",
+                      "contentDescriptionMatchMode": "contains",
+                      "viewIdMatchMode": "contains",
                       "area": "top_right",
                       "action": "click",
                       "priority": 10,
                       "cooldownMs": 1200,
-                      "validDurationMs": 10000,
-                      "minScore": 70
+                      "validDurationMs": 6000,
+                      "minScore": 70,
+                      "coordinateFallback": {
+                        "enabled": false,
+                        "xRatio": 0.9,
+                        "yRatio": 0.12,
+                        "anchorTexts": ["开屏提示"]
+                      }
                     }
                   ]
                 }
@@ -189,7 +296,7 @@ object RuleImportManager {
         appPackageName: String,
         appName: String,
         packageId: String,
-        ruleJson: JSONObject,
+        ruleJson: SimpleJsonObject,
         warningMessages: MutableList<String>
     ): RuleImportResult {
         val id = ruleJson.optString("id").trim()
@@ -201,21 +308,59 @@ object RuleImportManager {
             ?: return RuleImportResult(false, "$id 的 area 不合法")
 
         val cooldownMs = ruleJson.optLong("cooldownMs", 1200L)
-        val validDurationMs = ruleJson.optLong("validDurationMs", 10_000L)
+        val validDurationMs = ruleJson.optLong("validDurationMs", RuleRepository.DEFAULT_RULE_WINDOW_MS)
         val minScore = ruleJson.optInt("minScore", 70)
         val matchTexts = ruleJson.optJSONArray("matchTexts").toStringList()
         val matchContentDescriptions = ruleJson
             .optJSONArray("matchContentDescriptions")
             .toStringList()
         val matchViewIds = ruleJson.optJSONArray("matchViewIds").toStringList()
+        val coordinateJson = ruleJson.optJSONObject("coordinateFallback")
+        if (coordinateJson?.optBoolean("enabled", false) == true &&
+            (!coordinateJson.has("xRatio") || !coordinateJson.has("yRatio"))
+        ) {
+            return RuleImportResult(false, "$id 的 coordinateFallback 需要 xRatio 和 yRatio")
+        }
+        val coordinateFallback = coordinateJson
+            ?.toCoordinateFallback()
+            ?.also { fallback ->
+                if (!fallback.isValid()) {
+                    return RuleImportResult(false, "$id 的 coordinateFallback 坐标比例必须在 0 到 1 之间")
+                }
+                if (fallback.enabled && !fallback.hasAnchorRequirement()) {
+                    return RuleImportResult(false, "$id 的 coordinateFallback 必须配置锚点")
+                }
+            }
 
+        if (coordinateFallback?.enabled == true && cooldownMs < MIN_COOLDOWN_MS) {
+            return RuleImportResult(false, "$id 启用 coordinateFallback 时 cooldownMs 不能低于 800")
+        }
         if (cooldownMs < MIN_COOLDOWN_MS) warningMessages += "$id 的 cooldownMs 低于 800，已导入但不推荐。"
-        if (validDurationMs > LONG_DURATION_WARNING_MS) warningMessages += "$id 的 validDurationMs 较长，可能增加误触风险。"
+        if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
+            warningMessages += "$id 的 validDurationMs 已收紧到 6000ms，使用过程中不再默认扫描。"
+        }
         if (minScore !in 0..100) return RuleImportResult(false, "$id 的 minScore 必须在 0 到 100 之间")
         if (minScore < 60) warningMessages += "$id 的 minScore 较低，可能增加误触风险。"
         if (area == RuleArea.Any) warningMessages += "$id 使用 area=any，请确认关键词足够明确。"
-        if (matchTexts.isEmpty() && matchContentDescriptions.isEmpty() && matchViewIds.isEmpty()) {
+        if (matchTexts.isEmpty() &&
+            matchContentDescriptions.isEmpty() &&
+            matchViewIds.isEmpty() &&
+            coordinateFallback?.enabled != true
+        ) {
             return RuleImportResult(false, "$id 至少需要一种匹配字段")
+        }
+        val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
+            listOf(ruleJson.optString("name", id)) +
+                matchTexts +
+                matchContentDescriptions +
+                coordinateFallback?.anchorTexts.orEmpty() +
+                coordinateFallback?.anchorContentDescriptions.orEmpty()
+        )
+        if (!highRiskDecision.allowed) {
+            return RuleImportResult(
+                false,
+                "$id 被安全策略拦截：${HighRiskClickPolicy.BLOCKED_REASON}（${highRiskDecision.matchedTerm}）"
+            )
         }
 
         return RuleImportResult(
@@ -232,19 +377,29 @@ object RuleImportManager {
                     matchTexts = matchTexts,
                     matchContentDescriptions = matchContentDescriptions,
                     matchViewIds = matchViewIds,
+                    textMatchMode = MatchMode.fromValue(
+                        ruleJson.optString("textMatchMode", MatchMode.Contains.value)
+                    ),
+                    contentDescriptionMatchMode = MatchMode.fromValue(
+                        ruleJson.optString("contentDescriptionMatchMode", MatchMode.Contains.value)
+                    ),
+                    viewIdMatchMode = MatchMode.fromValue(
+                        ruleJson.optString("viewIdMatchMode", MatchMode.Contains.value)
+                    ),
                     area = area,
                     action = action,
                     priority = ruleJson.optInt("priority", 10),
                     cooldownMs = cooldownMs,
-                    validDurationMs = validDurationMs,
+                    validDurationMs = RuleRepository.DEFAULT_RULE_WINDOW_MS,
                     minScore = minScore,
+                    coordinateFallback = coordinateFallback,
                     packageId = packageId
                 )
             )
         )
     }
 
-    private fun org.json.JSONArray?.toStringList(): List<String> {
+    private fun SimpleJsonArray?.toStringList(): List<String> {
         if (this == null) return emptyList()
         return buildList {
             for (index in 0 until length()) {
@@ -258,5 +413,16 @@ object RuleImportManager {
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
+    }
+
+    private fun SimpleJsonObject.toCoordinateFallback(): CoordinateFallback {
+        return CoordinateFallback(
+            enabled = optBoolean("enabled", false),
+            xRatio = optDouble("xRatio", 0.0).toFloat(),
+            yRatio = optDouble("yRatio", 0.0).toFloat(),
+            anchorTexts = optJSONArray("anchorTexts").toStringList(),
+            anchorContentDescriptions = optJSONArray("anchorContentDescriptions").toStringList(),
+            anchorViewIds = optJSONArray("anchorViewIds").toStringList()
+        )
     }
 }

@@ -40,7 +40,13 @@ data class ClickLog(
     val retryCount: Int = 0,
     val deviceRom: String = "",
     val elapsedSinceAppStartMs: Long? = null,
+    val foregroundPackage: String = "",
+    val foregroundStartTimeMillis: Long? = null,
+    val elapsedSinceForegroundMs: Long? = null,
     val defaultRuleWindowMs: Long? = null,
+    val isWithinDefaultRuleWindow: Boolean? = null,
+    val ruleScope: String = "",
+    val timeWindowDecision: String = "",
     val isSystemPackage: Boolean = false,
     val isLauncherPackage: Boolean = false,
     val isSelfPackage: Boolean = false,
@@ -83,12 +89,14 @@ enum class ClickLogStage(val value: String, val label: String, val isDebugOnly: 
     ClickCancelledPackageUnknown("click_cancelled_package_unknown", "包名未知"),
     ClickCancelledPackageChanged("click_cancelled_package_changed", "包名已变化"),
     ClickCancelledSelfPackage("click_cancelled_self_package", "取消自身点击"),
+    ClickCancelledTimeWindowExpired("click_cancelled_time_window_expired", "取消超时点击"),
     ClickSkippedBySafetyMode("click_skipped_by_safety_mode", "安全模式跳过点击"),
     ClickFailed("click_failed", "点击失败"),
     SkippedBySafety("skipped_by_safety", "安全保护"),
     SkippedByBlacklist("skipped_by_blacklist", "黑名单拦截"),
     SkippedSelfPackage("skipped_self_package", "忽略自身"),
     SkippedByDisabledSetting("skipped_by_disabled_setting", "总开关关闭"),
+    SkippedByCooldown("skipped_by_cooldown", "冷却中"),
     SkippedByTimeWindow("skipped_by_time_window", "时间窗外"),
     SkippedByLowScore("skipped_by_low_score", "分数不足");
 
@@ -115,6 +123,7 @@ enum class ClickTargetSourceLog(val value: String, val label: String) {
     NodeSelf("NODE_SELF", "节点"),
     ClickableParent("CLICKABLE_PARENT", "父节点"),
     GestureOnNodeCenter("GESTURE_ON_NODE_CENTER", "节点中心"),
+    CoordinateFallback("COORDINATE_FALLBACK", "坐标兜底"),
     FixedPositionForbidden("FIXED_POSITION_FORBIDDEN", "固定位置已禁用"),
     None("NONE", "NONE");
 

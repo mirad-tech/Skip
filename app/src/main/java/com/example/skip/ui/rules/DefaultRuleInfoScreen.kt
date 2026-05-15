@@ -21,11 +21,11 @@ fun DefaultRuleInfoScreen(onBack: () -> Unit) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             InfoCard(
                 title = "启用范围",
-                body = "非黑名单且非安全保护 App，默认启用开屏跳过。"
+                body = "非黑名单且非安全保护 App，默认启用开屏页面助手。"
             )
             InfoCard(
                 title = "匹配方式",
-                body = "默认仅在应用打开后的短时间内尝试跳过，以减少误触。"
+                body = "仅在应用切到前台后的前 6 秒内识别明确的跳过、关闭类开屏页面控件。"
             )
             InfoCard(
                 title = "安全限制",

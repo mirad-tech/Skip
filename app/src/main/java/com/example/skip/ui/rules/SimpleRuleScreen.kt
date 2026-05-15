@@ -1,10 +1,11 @@
-package com.example.skip.ui.rules
+﻿package com.example.skip.ui.rules
 
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,6 +37,7 @@ import androidx.core.graphics.drawable.toBitmap
 import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleImportManager
 import com.example.skip.data.RuleRepository
+import com.example.skip.model.CoordinateFallback
 import com.example.skip.model.InstalledApp
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleLog
@@ -58,25 +61,41 @@ fun SimpleRuleScreen(
         if (fixedPackageName.isBlank()) InstalledAppUtils.loadLaunchableApps(context) else emptyList()
     }
     val fixedApp = remember(fixedPackageName) {
-        fixedPackageName.takeIf { it.isNotBlank() }?.let {
-            InstalledAppUtils.resolveApp(context, it)
-        }
+        fixedPackageName.takeIf { it.isNotBlank() }?.let { InstalledAppUtils.resolveApp(context, it) }
     }
+
     var appQuery by remember { mutableStateOf("") }
     var packageName by remember { mutableStateOf(fixedPackageName) }
-    var appName by remember {
-        mutableStateOf(editingRule?.appName ?: fixedApp?.label.orEmpty())
-    }
+    var appName by remember { mutableStateOf(editingRule?.appName ?: fixedApp?.label.orEmpty()) }
     var ruleName by remember { mutableStateOf(editingRule?.name ?: "首页弹窗关闭") }
     var texts by remember {
+        mutableStateOf(editingRule?.matchTexts?.joinToString("，") ?: "关闭，跳过，以后再说，我知道了")
+    }
+    var descriptions by remember {
         mutableStateOf(
-            editingRule?.matchTexts?.joinToString("，")
+            editingRule?.matchContentDescriptions?.joinToString("，")
                 ?: "关闭，跳过，以后再说，我知道了"
         )
     }
+    var viewIds by remember {
+        mutableStateOf(editingRule?.matchViewIds?.joinToString("，") ?: "")
+    }
     var area by remember { mutableStateOf(editingRule?.area ?: RuleArea.TopRight) }
-    var validDurationMs by remember { mutableStateOf(editingRule?.validDurationMs ?: 6_000L) }
-    var avoidRepeat by remember { mutableStateOf((editingRule?.cooldownMs ?: 1200L) >= 1200L) }
+    var validDurationMs by remember { mutableLongStateOf(RuleRepository.DEFAULT_RULE_WINDOW_MS) }
+    var enabled by remember { mutableStateOf(editingRule?.enabled ?: true) }
+    var priorityText by remember { mutableStateOf((editingRule?.priority ?: 100).toString()) }
+    var minScoreText by remember { mutableStateOf((editingRule?.minScore ?: 72).toString()) }
+    var cooldownText by remember { mutableStateOf((editingRule?.cooldownMs ?: 1200L).toString()) }
+    var coordinateEnabled by remember { mutableStateOf(editingRule?.coordinateFallback?.enabled == true) }
+    var coordinateXRatio by remember {
+        mutableStateOf(editingRule?.coordinateFallback?.xRatio?.toString() ?: "0.90")
+    }
+    var coordinateYRatio by remember {
+        mutableStateOf(editingRule?.coordinateFallback?.yRatio?.toString() ?: "0.12")
+    }
+    var coordinateAnchors by remember {
+        mutableStateOf(editingRule?.coordinateFallback?.anchorTexts?.joinToString("，") ?: "")
+    }
     var previewRule by remember { mutableStateOf<SkipRule?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
 
@@ -85,12 +104,14 @@ fun SimpleRuleScreen(
         onBack = onBack
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(
+                text = "为减少误触，规则默认只在应用打开后的前 6 秒内生效。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             if (fixedApp != null) {
-                AppPickItem(
-                    app = fixedApp,
-                    selected = true,
-                    onClick = {}
-                )
+                AppPickItem(app = fixedApp, selected = true, onClick = {})
             } else {
                 OutlinedTextField(
                     value = appQuery,
@@ -100,24 +121,20 @@ fun SimpleRuleScreen(
                     singleLine = true
                 )
 
-                val filteredApps = apps.filter {
+                apps.filter {
                     appQuery.isBlank() ||
                         it.label.contains(appQuery, ignoreCase = true) ||
                         it.packageName.contains(appQuery, ignoreCase = true)
-                }.take(8)
-
-                if (filteredApps.isNotEmpty()) {
-                    filteredApps.forEach { app ->
-                        AppPickItem(
-                            app = app,
-                            selected = app.packageName == packageName,
-                            onClick = {
-                                packageName = app.packageName
-                                appName = app.label
-                                if (ruleName.isBlank()) ruleName = "首页弹窗关闭"
-                            }
-                        )
-                    }
+                }.take(8).forEach { app ->
+                    AppPickItem(
+                        app = app,
+                        selected = app.packageName == packageName,
+                        onClick = {
+                            packageName = app.packageName
+                            appName = app.label
+                            if (ruleName.isBlank()) ruleName = "首页弹窗关闭"
+                        }
+                    )
                 }
             }
 
@@ -126,7 +143,25 @@ fun SimpleRuleScreen(
                 onValueChange = { texts = it },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("按钮文字") },
-                placeholder = { Text("例如：跳过、跳过广告、Skip、关闭") },
+                placeholder = { Text("例如：跳过、跳过广告、关闭") },
+                minLines = 2
+            )
+
+            OutlinedTextField(
+                value = descriptions,
+                onValueChange = { descriptions = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("内容描述") },
+                placeholder = { Text("例如：关闭、跳过、Skip") },
+                minLines = 2
+            )
+
+            OutlinedTextField(
+                value = viewIds,
+                onValueChange = { viewIds = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("View ID 关键词") },
+                placeholder = { Text("例如：skip、ad_skip、close_btn") },
                 minLines = 2
             )
 
@@ -140,7 +175,7 @@ fun SimpleRuleScreen(
 
             Text("规则生效时间", style = MaterialTheme.typography.titleSmall)
             ChipGrid(
-                values = listOf(6_000L, 10_000L, 30_000L, Long.MAX_VALUE),
+                values = listOf(RuleRepository.DEFAULT_RULE_WINDOW_MS),
                 selected = validDurationMs,
                 label = { formatDuration(it) },
                 onSelected = { validDurationMs = it }
@@ -150,15 +185,97 @@ fun SimpleRuleScreen(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("避免连续重复点击")
-                    Switch(checked = avoidRepeat, onCheckedChange = { avoidRepeat = it })
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("启用规则")
+                        Switch(checked = enabled, onCheckedChange = { enabled = it })
+                    }
+                    OutlinedTextField(
+                        value = priorityText,
+                        onValueChange = { priorityText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("优先级") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = minScoreText,
+                        onValueChange = { minScoreText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("最低分") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = cooldownText,
+                        onValueChange = { cooldownText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("点击间隔 ms") },
+                        singleLine = true
+                    )
+                }
+            }
+
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("坐标兜底")
+                            Text(
+                                "默认关闭，仅限绑定包名、启动时间窗、锚点和冷却时间完整的低风险规则",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = coordinateEnabled,
+                            onCheckedChange = { coordinateEnabled = it }
+                        )
+                    }
+                    if (coordinateEnabled) {
+                        OutlinedTextField(
+                            value = coordinateXRatio,
+                            onValueChange = { coordinateXRatio = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("X 比例 0-1") },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = coordinateYRatio,
+                            onValueChange = { coordinateYRatio = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Y 比例 0-1") },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = coordinateAnchors,
+                            onValueChange = { coordinateAnchors = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("兜底锚点文字") },
+                            placeholder = { Text("例如：开屏提示、跳过") },
+                            minLines = 2
+                        )
+                        Text(
+                            text = "不得用于支付、授权、登录、隐私同意、安装、删除、转账、发送、提交等场景。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
 
@@ -170,9 +287,7 @@ fun SimpleRuleScreen(
                 singleLine = true
             )
 
-            message?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
+            message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
             Button(
                 modifier = Modifier.fillMaxWidth(),
@@ -181,14 +296,43 @@ fun SimpleRuleScreen(
                         message = "请选择应用"
                         return@Button
                     }
-                    val result = RuleImportManager.createSimpleRule(
+                    val priority = priorityText.toIntOrNull()
+                    val minScore = minScoreText.toIntOrNull()
+                    val cooldownMs = cooldownText.toLongOrNull()
+                    val xRatio = coordinateXRatio.toFloatOrNull()
+                    val yRatio = coordinateYRatio.toFloatOrNull()
+                    if (priority == null || minScore == null || cooldownMs == null) {
+                        message = "优先级、最低分和点击间隔需要填写数字"
+                        return@Button
+                    }
+                    if (coordinateEnabled && (xRatio == null || yRatio == null)) {
+                        message = "坐标比例需要填写 0 到 1 之间的小数"
+                        return@Button
+                    }
+                    val coordinateFallback = if (coordinateEnabled) {
+                        CoordinateFallback(
+                            enabled = true,
+                            xRatio = xRatio ?: 0f,
+                            yRatio = yRatio ?: 0f,
+                            anchorTexts = splitInput(coordinateAnchors)
+                        )
+                    } else {
+                        null
+                    }
+                    val result = RuleImportManager.createLocalRule(
                         packageName = packageName,
                         appName = appName.ifBlank { packageName },
                         name = ruleName,
                         texts = splitInput(texts),
+                        contentDescriptions = splitInput(descriptions),
+                        viewIds = splitInput(viewIds),
                         area = area,
+                        enabled = enabled,
+                        priority = priority,
+                        cooldownMs = cooldownMs,
                         validDurationMs = validDurationMs,
-                        avoidRepeatClick = avoidRepeat,
+                        minScore = minScore,
+                        coordinateFallback = coordinateFallback,
                         selfPackageName = context.packageName
                     )
                     if (!result.success) {
@@ -196,11 +340,7 @@ fun SimpleRuleScreen(
                     } else {
                         previewRule = result.rules.first().let { newRule ->
                             editingRule?.let {
-                                newRule.copy(
-                                    id = it.id,
-                                    createdAt = it.createdAt,
-                                    enabled = it.enabled
-                                )
+                                newRule.copy(id = it.id, createdAt = it.createdAt)
                             } ?: newRule
                         }
                     }
@@ -247,11 +387,7 @@ private fun AppPickItem(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surface
-            }
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
         )
     ) {
         Row(
@@ -291,7 +427,7 @@ private fun <T> ChipGrid(
     label: (T) -> String,
     onSelected: (T) -> Unit
 ) {
-    androidx.compose.foundation.layout.FlowRow(
+    FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -320,24 +456,24 @@ private fun RulePreviewDialog(
                 Text("规则：${rule.name}")
                 Text("目标：${rule.appName}")
                 Text("包名：${rule.packageName}")
-                Text("文字：${rule.matchTexts.joinToString("、")}")
+                Text("文字：${rule.matchTexts.joinToString("、").ifBlank { "-" }}")
+                Text("描述：${rule.matchContentDescriptions.joinToString("、").ifBlank { "-" }}")
+                Text("View ID：${rule.matchViewIds.joinToString("、").ifBlank { "-" }}")
                 Text("位置：${rule.area.label}")
                 Text("生效：${formatDuration(rule.validDurationMs)}")
-                Text("防重复点击：${if (rule.cooldownMs >= 1200) "开启" else "关闭"}")
-                warnings.forEach {
-                    Text("提示：$it", color = MaterialTheme.colorScheme.error)
+                Text("最低分：${rule.minScore} · 优先级：${rule.priority} · 间隔：${rule.cooldownMs}ms")
+                rule.coordinateFallback?.takeIf { it.enabled }?.let { fallback ->
+                    Text("坐标兜底：${fallback.xRatio}, ${fallback.yRatio}")
+                    Text("兜底锚点：${fallback.anchorTexts.joinToString("、").ifBlank { "-" }}")
                 }
+                warnings.forEach { Text("提示：$it", color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
-            Button(onClick = onConfirm) {
-                Text("确认保存")
-            }
+            Button(onClick = onConfirm) { Text("确认保存") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
-            }
+            TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
 }
@@ -350,5 +486,5 @@ private fun splitInput(text: String): List<String> {
 }
 
 private fun formatDuration(durationMs: Long): String {
-    return if (durationMs > 30_000L) "任意时间" else "启动后 ${durationMs / 1000} 秒内"
+    return "启动后 ${durationMs / 1000} 秒内"
 }

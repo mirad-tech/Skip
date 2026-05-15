@@ -20,7 +20,12 @@ import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.engine.ClickAttempt
 import com.example.skip.engine.ClickExecutor
+import com.example.skip.engine.CoordinateFallbackMatch
+import com.example.skip.engine.CoordinateFallbackMatcher
+import com.example.skip.engine.HighRiskClickDecision
+import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.NodeScanner
+import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickLogStage
@@ -34,8 +39,7 @@ import com.example.skip.util.InstalledAppUtils
 import com.example.skip.util.RomUtils
 
 class SkipAccessibilityService : AccessibilityService() {
-    private var foregroundPackage: String? = null
-    private var foregroundSince = 0L
+    private var foregroundState = ForegroundWindowState()
     private val lastRuleClickAt = mutableMapOf<String, Long>()
     private var lastClickSignature: String? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -44,6 +48,9 @@ class SkipAccessibilityService : AccessibilityService() {
     private val lastToastAt = mutableMapOf<String, Long>()
     private var popupView: View? = null
 
+    private val foregroundPackage: String?
+        get() = foregroundState.currentForegroundPackage
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         SettingsRepository.markServiceConnected(this)
@@ -51,10 +58,11 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
-        if (!event.isSupportedEvent()) return
+        if (event == null || !event.isSupportedEvent()) return
 
         val now = System.currentTimeMillis()
+        val windowStateChanged = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             lastWindowStateChangedAt = now
         }
@@ -62,27 +70,34 @@ class SkipAccessibilityService : AccessibilityService() {
 
         val root = rootInActiveWindow
         val eventPackageName = event.packageName?.toString().orEmpty()
-        val currentPackage = eventPackageName.ifBlank {
-            root?.packageName?.toString().orEmpty()
-        }
+        val rootPackageName = root?.packageName?.toString().orEmpty()
+        val packageResolution = EventWindowTracker.resolveTrustedPackage(
+            eventPackageName = eventPackageName,
+            rootPackageName = rootPackageName
+        )
+        val currentPackage = packageResolution.resolvedPackageName
+        updateForegroundWindow(currentPackage, now, windowStateChanged)
+
         val activityName = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             event.className?.toString().orEmpty()
         } else {
             ""
         }
-        val eventContext = EventContext(
+        val eventContext = buildEventContext(
             eventType = event.eventType,
             eventPackageName = eventPackageName,
             packageName = currentPackage,
             activityName = activityName,
             windowId = event.windowId,
-            rootWindowNull = root == null,
-            rootChildCount = root?.childCount,
-            canRetrieveWindowContent = serviceInfo?.canRetrieveWindowContent == true,
-            elapsedSinceAppStartMs = now - foregroundSince
+            root = root,
+            now = now
         )
 
-        logEvent(ClickLogStage.ServiceEventReceived, eventContext)
+        logEvent(
+            stage = ClickLogStage.ServiceEventReceived,
+            eventContext = eventContext,
+            detail = packageResolution.detail
+        )
 
         if (currentPackage.isBlank()) {
             logEvent(
@@ -94,13 +109,10 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
-        updateForegroundWindow(currentPackage, now)
-        val activeContext = eventContext.copy(elapsedSinceAppStartMs = now - foregroundSince)
-
         if (SafetyGuard.isSelfPackage(this, currentPackage)) {
             logEvent(
                 stage = ClickLogStage.SkippedSelfPackage,
-                eventContext = activeContext,
+                eventContext = eventContext,
                 failureReason = "skipped_self_package"
             )
             return
@@ -116,13 +128,13 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             logEvent(
                 stage = ClickLogStage.SkippedBySafety,
-                eventContext = activeContext,
+                eventContext = eventContext,
                 ruleType = "safety",
-                failureReason = "skipped_by_safety",
+                failureReason = "safety_guard_blocked",
                 blockedReason = blockedReason,
                 isSelfAppLabelCandidate = ownLabelOnLauncher
             )
-            SettingsRepository.setLastFailureReason(this, "skipped_by_safety")
+            SettingsRepository.setLastFailureReason(this, "safety_guard_blocked")
             showDebugToast("已跳过自动点击：安全保护应用", "safety:$currentPackage")
             return
         }
@@ -130,16 +142,56 @@ class SkipAccessibilityService : AccessibilityService() {
         if (!SettingsRepository.isMasterEnabled(this)) {
             logEvent(
                 stage = ClickLogStage.SkippedByDisabledSetting,
-                eventContext = activeContext,
+                eventContext = eventContext,
                 failureReason = "skipped_by_disabled_setting"
             )
+            return
+        }
+
+        val rulePlan = RulePlanProvider.plan(
+            packageName = currentPackage,
+            selfPackageName = packageName,
+            policy = SettingsRepository.getAppPolicy(this, currentPackage),
+            customRules = RuleRepository.getEnabledCustomRulesForPackage(this, currentPackage),
+            builtInRule = RuleRepository.getBuiltInRuleForPackage(this, currentPackage)
+        )
+        val customRules = rulePlan.customRules
+        val rules = rulePlan.rules
+        val windowExpiredScope = rulePlan.scope
+
+        rulePlan.skipStage?.let { stage ->
+            logEvent(
+                stage = stage,
+                eventContext = eventContext,
+                ruleType = if (stage == ClickLogStage.SkippedBySafety) "safety" else "policy",
+                failureReason = rulePlan.failureReason
+            )
+            SettingsRepository.setLastFailureReason(this, rulePlan.failureReason)
+            return
+        }
+
+        if (!eventContext.isWithinDefaultRuleWindow) {
+            val failureReason = if (customRules.isNotEmpty()) {
+                "custom_rule_window_expired"
+            } else {
+                "default_rule_window_expired"
+            }
+            logEvent(
+                stage = ClickLogStage.SkippedByTimeWindow,
+                eventContext = eventContext,
+                ruleType = if (customRules.isNotEmpty()) "custom" else "default",
+                ruleName = if (customRules.isNotEmpty()) "自定义规则" else "默认开屏跳过",
+                failureReason = failureReason,
+                ruleScope = windowExpiredScope
+            )
+            SettingsRepository.setLastFailureReason(this, failureReason)
             return
         }
 
         if (root == null) {
             logEvent(
                 stage = ClickLogStage.RootWindowNull,
-                eventContext = activeContext,
+                eventContext = eventContext,
                 failureReason = "root_window_null"
             )
             SettingsRepository.setLastFailureReason(this, "root_window_null")
@@ -148,39 +200,6 @@ class SkipAccessibilityService : AccessibilityService() {
 
         if (pendingClick != null) return
 
-        val appElapsedMs = now - foregroundSince
-        val customRules = RuleRepository.getEnabledCustomRulesForPackage(this, currentPackage)
-        val blacklisted = SettingsRepository.isBlacklisted(this, currentPackage)
-        val defaultRuleEligible = !blacklisted && appElapsedMs <= RuleRepository.DEFAULT_RULE_WINDOW_MS
-        val defaultRule = if (defaultRuleEligible) {
-            listOf(RuleRepository.getBuiltInRuleForPackage(this, currentPackage))
-        } else {
-            emptyList()
-        }
-        val rules = (customRules + defaultRule)
-            .sortedWith(compareByDescending<SkipRule> { it.priority }.thenBy { it.createdAt })
-
-        if (blacklisted && customRules.isEmpty()) {
-            logEvent(
-                stage = ClickLogStage.SkippedByBlacklist,
-                eventContext = activeContext,
-                ruleType = "blacklist",
-                failureReason = "skipped_by_blacklist"
-            )
-            return
-        }
-
-        if (!defaultRuleEligible && customRules.isEmpty()) {
-            logEvent(
-                stage = ClickLogStage.SkippedByTimeWindow,
-                eventContext = activeContext,
-                ruleType = "default",
-                ruleName = "默认开屏跳过",
-                failureReason = "default_rule_time_window_expired"
-            )
-            return
-        }
-
         if (rules.isEmpty()) {
             SettingsRepository.setLastFailureReason(this, "no_enabled_rules")
             return
@@ -188,22 +207,49 @@ class SkipAccessibilityService : AccessibilityService() {
 
         val activeRules = rules.filter { rule ->
             val last = lastRuleClickAt[rule.id] ?: 0L
-            appElapsedMs <= rule.validDurationMs && now - last >= rule.cooldownMs
+            now - last >= rule.cooldownMs
         }
         if (activeRules.isEmpty()) {
             logEvent(
-                stage = ClickLogStage.SkippedByTimeWindow,
-                eventContext = activeContext,
-                failureReason = "rule_time_window_or_cooldown"
+                stage = ClickLogStage.SkippedByCooldown,
+                eventContext = eventContext,
+                failureReason = "cooldown_active",
+                ruleScope = windowExpiredScope
             )
+            SettingsRepository.setLastFailureReason(this, "cooldown_active")
             return
         }
 
+        val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
         val scan = NodeScanner.scan(root, activeRules, appElapsedMs)
-        logScan(scan, activeContext)
+        logScan(scan, eventContext)
         val match = scan.bestMatch
         if (match == null) {
+            val fallback = CoordinateFallbackMatcher.find(
+                root = root,
+                rules = activeRules,
+                packageName = currentPackage,
+                selfPackageName = packageName,
+                elapsedSinceForegroundMs = appElapsedMs,
+                screenWidth = resources.displayMetrics.widthPixels,
+                screenHeight = resources.displayMetrics.heightPixels
+            )
+            if (fallback != null) {
+                val signature = "$currentPackage:${fallback.rule.id}:coordinate:${fallback.x}:${fallback.y}"
+                val lastAnyRuleClick = lastRuleClickAt.values.maxOrNull() ?: 0L
+                if (signature == lastClickSignature && now - lastAnyRuleClick < REPEAT_CLICK_GUARD_MS) return
+                startStableCoordinateFallback(
+                    packageName = currentPackage,
+                    fallback = fallback,
+                    activeRules = activeRules,
+                    signature = signature,
+                    eventContext = eventContext,
+                    scan = scan
+                )
+                return
+            }
             val stage = when {
+                scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON -> ClickLogStage.SkippedBySafety
                 scan.candidateCount == 0 -> ClickLogStage.NoCandidateFound
                 scan.failureReason == "score_below_min_score" ||
                     scan.failureReason == "candidate_below_threshold" -> ClickLogStage.SkippedByLowScore
@@ -211,12 +257,23 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             logEvent(
                 stage = stage,
-                eventContext = activeContext,
+                eventContext = eventContext,
+                ruleType = scan.bestCandidateRuleSource?.toLogType().orEmpty(),
+                ruleName = scan.bestCandidateRuleName,
+                ruleId = scan.bestCandidateRuleId,
                 candidateCount = scan.candidateCount,
                 bestCandidateScore = scan.bestCandidateScore,
                 bestCandidateBounds = scan.bestCandidateBounds,
                 minScore = scan.bestCandidateMinScore,
-                failureReason = scan.failureReason
+                matchedKeyword = scan.bestCandidateMatchedKeyword,
+                failureReason = scan.failureReason,
+                reason = scan.failureReason,
+                detail = scan.bestCandidateMatchedKeyword,
+                blockedReason = if (scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON) {
+                    HighRiskClickPolicy.BLOCKED_REASON
+                } else {
+                    ""
+                }
             )
             SettingsRepository.setLastFailureReason(this, scan.failureReason)
             return
@@ -226,12 +283,24 @@ class SkipAccessibilityService : AccessibilityService() {
         val lastAnyRuleClick = lastRuleClickAt.values.maxOrNull() ?: 0L
         if (signature == lastClickSignature && now - lastAnyRuleClick < REPEAT_CLICK_GUARD_MS) return
 
-        logMatch(match, activeContext, scan)
+        val pendingMatch = PendingClick.fromMatch(match, eventContext)
+        val highRiskDecision = highRiskDecisionForPending(pendingMatch)
+        if (!highRiskDecision.allowed) {
+            logBlockedByHighRiskPolicy(
+                eventContext = eventContext,
+                pending = pendingMatch,
+                decision = highRiskDecision,
+                scan = scan
+            )
+            return
+        }
+
+        logMatch(match, eventContext, scan)
         if (SettingsRepository.isSafetyModeEnabled(this)) {
             logEvent(
                 stage = ClickLogStage.ClickSkippedBySafetyMode,
-                eventContext = activeContext,
-                pending = PendingClick.fromMatch(match, activeContext),
+                eventContext = eventContext,
+                pending = pendingMatch,
                 candidateCount = scan.candidateCount,
                 bestCandidateScore = scan.bestCandidateScore,
                 bestCandidateBounds = scan.bestCandidateBounds,
@@ -243,7 +312,8 @@ class SkipAccessibilityService : AccessibilityService() {
             SettingsRepository.setLastFailureReason(this, "click_skipped_by_safety_mode")
             return
         }
-        startStableClick(currentPackage, match, activeRules, signature, activeContext)
+
+        startStableClick(currentPackage, match, activeRules, signature, eventContext)
     }
 
     override fun onInterrupt() {
@@ -256,13 +326,52 @@ class SkipAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun updateForegroundWindow(packageName: String, now: Long) {
-        if (packageName.isBlank()) return
-        if (packageName != foregroundPackage) {
-            foregroundPackage = packageName
-            foregroundSince = now
+    private fun updateForegroundWindow(packageName: String, now: Long, windowStateChanged: Boolean) {
+        val previous = foregroundState
+        foregroundState = EventWindowTracker.updateForegroundWindow(
+            state = foregroundState,
+            resolvedPackageName = packageName,
+            now = now,
+            selfPackageName = this.packageName,
+            windowStateChanged = windowStateChanged
+        )
+        if (foregroundState != previous) {
             lastClickSignature = null
         }
+    }
+
+    private fun buildEventContext(
+        eventType: Int,
+        eventPackageName: String,
+        packageName: String,
+        activityName: String,
+        windowId: Int,
+        root: AccessibilityNodeInfo?,
+        now: Long
+    ): EventContext {
+        val snapshot = EventWindowTracker.snapshot(
+            state = foregroundState,
+            activePackageName = packageName,
+            now = now,
+            defaultRuleWindowMs = RuleRepository.DEFAULT_RULE_WINDOW_MS
+        )
+        return EventContext(
+            eventType = eventType,
+            eventPackageName = eventPackageName,
+            packageName = packageName,
+            activityName = activityName,
+            windowId = windowId,
+            rootWindowNull = root == null,
+            rootChildCount = root?.childCount,
+            canRetrieveWindowContent = serviceInfo?.canRetrieveWindowContent == true,
+            elapsedSinceAppStartMs = snapshot.elapsedSinceForegroundMs,
+            foregroundPackage = snapshot.foregroundPackage,
+            foregroundStartTimeMillis = snapshot.foregroundStartTimeMillis,
+            elapsedSinceForegroundMs = snapshot.elapsedSinceForegroundMs,
+            defaultRuleWindowMs = snapshot.defaultRuleWindowMs,
+            isWithinDefaultRuleWindow = snapshot.isWithinDefaultRuleWindow,
+            timeWindowDecision = snapshot.timeWindowDecision
+        )
     }
 
     private fun AccessibilityEvent.isSupportedEvent(): Boolean {
@@ -286,6 +395,7 @@ class SkipAccessibilityService : AccessibilityService() {
             ruleId = match.ruleId,
             ruleName = match.ruleName,
             ruleSource = match.ruleSource,
+            ruleScope = match.ruleSource.toRuleScope(),
             score = match.score,
             minScore = match.minScore,
             matchedKeyword = match.matchedKeyword,
@@ -305,10 +415,92 @@ class SkipAccessibilityService : AccessibilityService() {
             delayBeforeClickMs = STABLE_CLICK_DELAY_MS
         )
         pendingClick = pending
-        mainHandler.postDelayed(
-            { relocateAndClick(pending) },
-            STABLE_CLICK_DELAY_MS
+        mainHandler.postDelayed({ relocateAndClick(pending) }, STABLE_CLICK_DELAY_MS)
+    }
+
+    private fun startStableCoordinateFallback(
+        packageName: String,
+        fallback: CoordinateFallbackMatch,
+        activeRules: List<SkipRule>,
+        signature: String,
+        eventContext: EventContext,
+        scan: ScanReport
+    ) {
+        val rule = fallback.rule
+        val pending = PendingClick(
+            packageName = packageName,
+            appName = rule.appName.ifBlank {
+                InstalledAppUtils.getAppLabel(this, packageName)
+            },
+            ruleId = rule.id,
+            ruleName = "${rule.name} / 坐标兜底",
+            ruleSource = rule.source,
+            ruleScope = rule.source.toRuleScope(),
+            score = rule.minScore,
+            minScore = rule.minScore,
+            matchedKeyword = "coordinate_fallback",
+            area = rule.area.value,
+            target = fallback.target,
+            candidate = fallback.target,
+            clickedParentDepth = 0,
+            candidateAreaRatio = 0f,
+            isLargeCandidateBounds = false,
+            defaultRuleAreaAllowed = null,
+            textKeywordIsStandaloneSkip = false,
+            clickTargetSource = ClickTargetSourceLog.CoordinateFallback,
+            startedAt = System.currentTimeMillis(),
+            eventContext = eventContext,
+            activeRules = activeRules,
+            signature = signature,
+            delayBeforeClickMs = STABLE_CLICK_DELAY_MS,
+            coordinateX = fallback.x,
+            coordinateY = fallback.y
         )
+
+        val highRiskDecision = highRiskDecisionForPending(pending)
+        if (!highRiskDecision.allowed) {
+            logBlockedByHighRiskPolicy(
+                eventContext = eventContext,
+                pending = pending,
+                decision = highRiskDecision,
+                scan = scan,
+                clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+            )
+            return
+        }
+
+        logEvent(
+            stage = ClickLogStage.RuleMatched,
+            eventContext = eventContext,
+            pending = pending,
+            candidateCount = scan.candidateCount,
+            bestCandidateScore = scan.bestCandidateScore,
+            bestCandidateBounds = scan.bestCandidateBounds,
+            minScore = rule.minScore,
+            reason = fallback.reason,
+            clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+        )
+
+        if (SettingsRepository.isSafetyModeEnabled(this)) {
+            logEvent(
+                stage = ClickLogStage.ClickSkippedBySafetyMode,
+                eventContext = eventContext,
+                pending = pending,
+                candidateCount = scan.candidateCount,
+                bestCandidateScore = scan.bestCandidateScore,
+                bestCandidateBounds = scan.bestCandidateBounds,
+                minScore = rule.minScore,
+                failureReason = "click_skipped_by_safety_mode",
+                reason = "click_skipped_by_safety_mode",
+                clickSkippedBySafetyMode = true,
+                clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+            )
+            SettingsRepository.setLastFailureReason(this, "click_skipped_by_safety_mode")
+            return
+        }
+
+        pendingClick = pending
+        mainHandler.postDelayed({ runCoordinateFallback(pending) }, STABLE_CLICK_DELAY_MS)
     }
 
     private fun relocateAndClick(pending: PendingClick) {
@@ -316,7 +508,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow
         if (cancelIfUnsafeDelayedClickWindow(pending, root)) return
 
-        val elapsed = System.currentTimeMillis() - foregroundSince
+        val elapsed = (System.currentTimeMillis() - foregroundState.foregroundStartTimeMillis).coerceAtLeast(0L)
         val currentRules = pending.activeRules.filter { it.packageName == pending.packageName }
         val scan = NodeScanner.scan(root ?: return, currentRules, elapsed)
         val match = scan.bestMatch
@@ -336,6 +528,7 @@ class SkipAccessibilityService : AccessibilityService() {
             ruleId = match.ruleId,
             ruleName = match.ruleName,
             ruleSource = match.ruleSource,
+            ruleScope = match.ruleSource.toRuleScope(),
             score = match.score,
             minScore = match.minScore,
             matchedKeyword = match.matchedKeyword,
@@ -350,6 +543,17 @@ class SkipAccessibilityService : AccessibilityService() {
             clickTargetSource = match.clickTargetSource
         )
         pendingClick = updated
+        val highRiskDecision = highRiskDecisionForPending(updated)
+        if (!highRiskDecision.allowed) {
+            logBlockedByHighRiskPolicy(
+                eventContext = updated.eventContext,
+                pending = updated,
+                decision = highRiskDecision,
+                scan = scan,
+                clearPending = true
+            )
+            return
+        }
         lastRuleClickAt[match.ruleId] = System.currentTimeMillis()
         lastClickSignature = pending.signature
 
@@ -378,6 +582,68 @@ class SkipAccessibilityService : AccessibilityService() {
             )
         } else {
             runGestureFallback(updated.copy(firstAttempt = attempt))
+        }
+    }
+
+    private fun runCoordinateFallback(pending: PendingClick) {
+        if (pendingClick !== pending) return
+        if (cancelIfUnsafeDelayedClickWindow(pending, rootInActiveWindow)) return
+        val x = pending.coordinateX ?: pending.candidate.bounds.centerX()
+        val y = pending.coordinateY ?: pending.candidate.bounds.centerY()
+        lastRuleClickAt[pending.ruleId] = System.currentTimeMillis()
+        lastClickSignature = pending.signature
+
+        logEvent(
+            stage = ClickLogStage.ClickAttempted,
+            eventContext = pending.eventContext,
+            pending = pending,
+            clickMethod = ClickMethodLog.DispatchGesture,
+            delayBeforeClickMs = pending.delayBeforeClickMs,
+            clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+        )
+
+        ClickExecutor.gestureClickPoint(this, pending.candidate, x, y) { attempt ->
+            if (pendingClick?.signature != pending.signature) return@gestureClickPoint
+            if (!attempt.accepted) {
+                finishPendingClick(
+                    pending = pending.copy(firstAttempt = attempt),
+                    stage = ClickLogStage.ClickFailed,
+                    success = false,
+                    reason = attempt.reason,
+                    attempt = attempt,
+                    clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+                )
+                return@gestureClickPoint
+            }
+            val updated = pending.copy(firstAttempt = attempt)
+            pendingClick = updated
+            logEvent(
+                stage = ClickLogStage.ClickActionSuccess,
+                eventContext = updated.eventContext,
+                pending = updated,
+                clickMethod = attempt.method,
+                actionReturnValue = true,
+                clickResult = true,
+                delayBeforeClickMs = updated.delayBeforeClickMs,
+                clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+            )
+            mainHandler.postDelayed(
+                {
+                    if (pendingClick?.signature == updated.signature) {
+                        val result = verifyClickEffect(updated)
+                        finishPendingClick(
+                            pending = updated,
+                            stage = result.stage,
+                            success = result.success,
+                            reason = result.reason,
+                            attempt = attempt,
+                            effectConfirmReason = result.reason,
+                            clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+                        )
+                    }
+                },
+                GESTURE_VERIFY_DELAY_MS
+            )
         }
     }
 
@@ -462,45 +728,15 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun verifyClickEffect(pending: PendingClick): ClickVerification {
-        if (foregroundPackage == packageName) {
-            return ClickVerification(
-                stage = ClickLogStage.ClickMisfireSelfOpened,
-                success = false,
-                reason = "self_app_opened_after_click"
-            )
-        }
-        if (!foregroundPackage.isNullOrBlank() && foregroundPackage != pending.packageName) {
-            return ClickVerification(
-                stage = ClickLogStage.ClickEffectConfirmed,
-                success = true,
-                reason = "package_changed_after_click"
-            )
-        }
-        if (SafetyGuard.isProtectedPackage(pending.packageName)) {
-            return ClickVerification(
-                stage = ClickLogStage.ClickEffectUnknown,
-                success = false,
-                reason = "protected_package_never_confirmed"
-            )
-        }
-        val root = rootInActiveWindow ?: return ClickVerification(
-            stage = ClickLogStage.ClickEffectUnknown,
-            success = false,
-            reason = "root_window_null_after_click"
+        val root = rootInActiveWindow
+        return ClickEffectVerifier.evaluate(
+            pendingPackageName = pending.packageName,
+            selfPackageName = packageName,
+            rootPackageName = root?.packageName?.toString().orEmpty(),
+            foregroundPackageName = foregroundPackage.orEmpty(),
+            rootWindowNull = root == null,
+            targetStillPresent = root?.let { ClickExecutor.isTargetPresent(it, pending.candidate) } ?: false
         )
-        return if (!ClickExecutor.isTargetPresent(root, pending.candidate)) {
-            ClickVerification(
-                stage = ClickLogStage.ClickEffectConfirmed,
-                success = true,
-                reason = "candidate_node_disappeared"
-            )
-        } else {
-            ClickVerification(
-                stage = ClickLogStage.ClickEffectUnknown,
-                success = false,
-                reason = "candidate_still_present"
-            )
-        }
     }
 
     private fun finishPendingClick(
@@ -513,7 +749,8 @@ class SkipAccessibilityService : AccessibilityService() {
         effectConfirmReason: String = "",
         clickTargetSource: ClickTargetSourceLog = pending.clickTargetSource,
         blockedReason: String = "",
-        detail: String = ""
+        detail: String = "",
+        eventContext: EventContext = pending.eventContext
     ) {
         if (pendingClick?.signature != pending.signature) return
         pendingClick = null
@@ -527,7 +764,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         logEvent(
             stage = stage,
-            eventContext = pending.eventContext,
+            eventContext = eventContext,
             pending = pending,
             success = success,
             failureReason = if (success) "" else reason,
@@ -553,15 +790,27 @@ class SkipAccessibilityService : AccessibilityService() {
         pending: PendingClick,
         root: AccessibilityNodeInfo?
     ): Boolean {
-        val currentPackageName = if (root == null) {
-            ""
-        } else {
-            root.packageName?.toString().orEmpty().ifBlank { foregroundPackage.orEmpty() }
+        val currentPackageName = root?.packageName?.toString().orEmpty().ifBlank {
+            foregroundPackage.orEmpty()
         }
+        val delayedEventContext = buildEventContext(
+            eventType = pending.eventContext.eventType,
+            eventPackageName = pending.eventContext.eventPackageName,
+            packageName = currentPackageName,
+            activityName = pending.eventContext.activityName,
+            windowId = pending.eventContext.windowId,
+            root = root,
+            now = System.currentTimeMillis()
+        )
         val result = DelayedClickSafetyCheck.evaluate(
             pendingPackageName = pending.packageName,
             currentPackageName = currentPackageName,
-            selfPackageName = packageName
+            selfPackageName = packageName,
+            foregroundPackageName = delayedEventContext.foregroundPackage,
+            foregroundStartTimeMillis = delayedEventContext.foregroundStartTimeMillis ?: 0L,
+            now = System.currentTimeMillis(),
+            defaultRuleWindowMs = delayedEventContext.defaultRuleWindowMs,
+            rootWindowNull = root == null
         )
         if (result.allowed) return false
         finishPendingClick(
@@ -572,20 +821,26 @@ class SkipAccessibilityService : AccessibilityService() {
             attempt = pending.firstAttempt,
             effectConfirmReason = result.reason,
             blockedReason = result.blockedReason,
-            detail = result.detail
+            detail = result.detail,
+            eventContext = delayedEventContext
         )
         return true
     }
 
     private fun logScan(scan: ScanReport, eventContext: EventContext) {
+        if (scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON) return
         if (scan.candidateCount > 0) {
             logEvent(
                 stage = ClickLogStage.CandidateFound,
                 eventContext = eventContext,
+                ruleType = scan.bestCandidateRuleSource?.toLogType().orEmpty(),
+                ruleName = scan.bestCandidateRuleName,
+                ruleId = scan.bestCandidateRuleId,
                 candidateCount = scan.candidateCount,
                 bestCandidateScore = scan.bestCandidateScore,
                 bestCandidateBounds = scan.bestCandidateBounds,
                 minScore = scan.bestCandidateMinScore,
+                matchedKeyword = scan.bestCandidateMatchedKeyword,
                 failureReason = scan.failureReason,
                 defaultRuleAreaAllowed = scan.defaultRuleAreaAllowed,
                 textKeywordIsStandaloneSkip = scan.textKeywordIsStandaloneSkip,
@@ -608,6 +863,51 @@ class SkipAccessibilityService : AccessibilityService() {
         )
     }
 
+    private fun highRiskDecisionForPending(pending: PendingClick): HighRiskClickDecision {
+        return HighRiskClickPolicy.evaluateTexts(
+            listOf(
+                pending.ruleName,
+                pending.matchedKeyword,
+                pending.target.text,
+                pending.target.contentDescription,
+                pending.candidate.text,
+                pending.candidate.contentDescription,
+                pending.target.viewId,
+                pending.candidate.viewId
+            )
+        )
+    }
+
+    private fun logBlockedByHighRiskPolicy(
+        eventContext: EventContext,
+        pending: PendingClick,
+        decision: HighRiskClickDecision,
+        scan: ScanReport? = null,
+        clickTargetSource: ClickTargetSourceLog = pending.clickTargetSource,
+        clearPending: Boolean = false
+    ) {
+        if (clearPending && pendingClick?.signature == pending.signature) {
+            pendingClick = null
+        }
+        SettingsRepository.setLastFailureReason(this, HighRiskClickPolicy.BLOCKED_REASON)
+        showDebugToast("安全策略已阻止高风险点击，已记录日志", "safety:${pending.packageName}:${pending.ruleId}")
+        logEvent(
+            stage = ClickLogStage.SkippedBySafety,
+            eventContext = eventContext,
+            pending = pending,
+            success = false,
+            reason = HighRiskClickPolicy.BLOCKED_REASON,
+            failureReason = HighRiskClickPolicy.BLOCKED_REASON,
+            detail = decision.matchedTerm,
+            candidateCount = scan?.candidateCount,
+            bestCandidateScore = scan?.bestCandidateScore,
+            bestCandidateBounds = scan?.bestCandidateBounds.orEmpty(),
+            minScore = scan?.bestCandidateMinScore ?: pending.minScore,
+            blockedReason = HighRiskClickPolicy.BLOCKED_REASON,
+            clickTargetSource = clickTargetSource
+        )
+    }
+
     private fun logEvent(
         stage: ClickLogStage,
         eventContext: EventContext,
@@ -622,6 +922,7 @@ class SkipAccessibilityService : AccessibilityService() {
         bestCandidateScore: Int? = null,
         bestCandidateBounds: String = "",
         minScore: Int? = null,
+        matchedKeyword: String = pending?.matchedKeyword.orEmpty(),
         clickMethod: ClickMethodLog = ClickMethodLog.None,
         actionReturnValue: Boolean? = null,
         clickResult: Boolean? = null,
@@ -639,13 +940,22 @@ class SkipAccessibilityService : AccessibilityService() {
         } == true,
         candidateAreaRatio: Float? = pending?.candidateAreaRatio,
         isLargeCandidateBounds: Boolean = pending?.isLargeCandidateBounds == true,
-        clickTargetSource: ClickTargetSourceLog = pending?.clickTargetSource ?: ClickTargetSourceLog.None
+        clickTargetSource: ClickTargetSourceLog = pending?.clickTargetSource ?: ClickTargetSourceLog.None,
+        ruleScope: String = pending?.ruleScope.orEmpty()
     ) {
         val safetyModeEnabled = SettingsRepository.isSafetyModeEnabled(this)
         val candidate = pending?.candidate
         val target = pending?.target
-        val gestureX = if (clickMethod == ClickMethodLog.DispatchGesture) candidate?.bounds?.centerX() else null
-        val gestureY = if (clickMethod == ClickMethodLog.DispatchGesture) candidate?.bounds?.centerY() else null
+        val gestureX = if (clickMethod == ClickMethodLog.DispatchGesture) {
+            pending?.coordinateX ?: candidate?.bounds?.centerX()
+        } else {
+            null
+        }
+        val gestureY = if (clickMethod == ClickMethodLog.DispatchGesture) {
+            pending?.coordinateY ?: candidate?.bounds?.centerY()
+        } else {
+            null
+        }
         LogRepository.addClickLog(
             context = this,
             log = ClickLog(
@@ -673,7 +983,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 bestCandidateScore = bestCandidateScore,
                 bestCandidateBounds = bestCandidateBounds,
                 minScore = minScore ?: pending?.minScore,
-                matchedKeyword = pending?.matchedKeyword.orEmpty(),
+                matchedKeyword = matchedKeyword,
                 nodeText = pending?.target?.text.orEmpty(),
                 contentDescription = pending?.target?.contentDescription.orEmpty(),
                 viewIdResourceName = pending?.target?.viewId.orEmpty(),
@@ -690,7 +1000,13 @@ class SkipAccessibilityService : AccessibilityService() {
                 retryCount = retryCount,
                 deviceRom = RomUtils.detectRom().label,
                 elapsedSinceAppStartMs = eventContext.elapsedSinceAppStartMs,
-                defaultRuleWindowMs = RuleRepository.DEFAULT_RULE_WINDOW_MS,
+                foregroundPackage = eventContext.foregroundPackage,
+                foregroundStartTimeMillis = eventContext.foregroundStartTimeMillis,
+                elapsedSinceForegroundMs = eventContext.elapsedSinceForegroundMs,
+                defaultRuleWindowMs = eventContext.defaultRuleWindowMs,
+                isWithinDefaultRuleWindow = eventContext.isWithinDefaultRuleWindow,
+                ruleScope = ruleScope,
+                timeWindowDecision = eventContext.timeWindowDecision,
                 isSystemPackage = SafetyGuard.isSystemPackage(eventContext.packageName),
                 isLauncherPackage = SafetyGuard.isLauncherPackage(eventContext.packageName),
                 isSelfPackage = SafetyGuard.isSelfPackage(this, eventContext.packageName),
@@ -714,7 +1030,8 @@ class SkipAccessibilityService : AccessibilityService() {
                 gestureX = gestureX,
                 gestureY = gestureY,
                 isLargeCandidateBounds = isLargeCandidateBounds,
-                isFixedCoordinateClick = clickTargetSource == ClickTargetSourceLog.FixedPositionForbidden,
+                isFixedCoordinateClick = clickTargetSource == ClickTargetSourceLog.CoordinateFallback ||
+                    clickTargetSource == ClickTargetSourceLog.FixedPositionForbidden,
                 clickTargetSource = clickTargetSource
             )
         )
@@ -756,9 +1073,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val last = lastToastAt[key] ?: 0L
         if (now - last < TOAST_COOLDOWN_MS) return
         lastToastAt[key] = now
-        mainHandler.post {
-            showOverlayPopup(message)
-        }
+        mainHandler.post { showOverlayPopup(message) }
     }
 
     private fun showOverlayPopup(message: String) {
@@ -832,6 +1147,15 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun RuleSource.toRuleScope(): String {
+        return when (this) {
+            RuleSource.BuiltIn -> "default_splash_only"
+            RuleSource.UserSimple,
+            RuleSource.JsonFile,
+            RuleSource.Subscription -> "custom_splash_only"
+        }
+    }
+
     companion object {
         private const val REPEAT_CLICK_GUARD_MS = 3000L
         private const val STABLE_CLICK_DELAY_MS = 260L
@@ -851,7 +1175,13 @@ private data class EventContext(
     val rootWindowNull: Boolean,
     val rootChildCount: Int?,
     val canRetrieveWindowContent: Boolean,
-    val elapsedSinceAppStartMs: Long
+    val elapsedSinceAppStartMs: Long?,
+    val foregroundPackage: String,
+    val foregroundStartTimeMillis: Long?,
+    val elapsedSinceForegroundMs: Long?,
+    val defaultRuleWindowMs: Long,
+    val isWithinDefaultRuleWindow: Boolean,
+    val timeWindowDecision: String
 )
 
 private data class PendingClick(
@@ -860,6 +1190,7 @@ private data class PendingClick(
     val ruleId: String,
     val ruleName: String,
     val ruleSource: RuleSource,
+    val ruleScope: String,
     val score: Int,
     val minScore: Int,
     val matchedKeyword: String,
@@ -878,7 +1209,9 @@ private data class PendingClick(
     val signature: String = "",
     val delayBeforeClickMs: Long? = null,
     val retryCount: Int = 0,
-    val firstAttempt: ClickAttempt? = null
+    val firstAttempt: ClickAttempt? = null,
+    val coordinateX: Int? = null,
+    val coordinateY: Int? = null
 ) {
     companion object {
         fun fromMatch(match: MatchResult, eventContext: EventContext): PendingClick {
@@ -888,6 +1221,12 @@ private data class PendingClick(
                 ruleId = match.ruleId,
                 ruleName = match.ruleName,
                 ruleSource = match.ruleSource,
+                ruleScope = when (match.ruleSource) {
+                    RuleSource.BuiltIn -> "default_splash_only"
+                    RuleSource.UserSimple,
+                    RuleSource.JsonFile,
+                    RuleSource.Subscription -> "custom_splash_only"
+                },
                 score = match.score,
                 minScore = match.minScore,
                 matchedKeyword = match.matchedKeyword,
@@ -907,21 +1246,113 @@ private data class PendingClick(
     }
 }
 
-private data class ClickVerification(
+internal data class ClickVerification(
     val stage: ClickLogStage,
     val success: Boolean,
     val reason: String
 )
 
+internal object ClickEffectVerifier {
+    fun evaluate(
+        pendingPackageName: String,
+        selfPackageName: String,
+        rootPackageName: String?,
+        foregroundPackageName: String?,
+        rootWindowNull: Boolean,
+        targetStillPresent: Boolean
+    ): ClickVerification {
+        val pending = pendingPackageName.trim()
+        val self = selfPackageName.trim()
+        val rootPackage = rootPackageName.orEmpty().trim()
+        val foregroundPackage = foregroundPackageName.orEmpty().trim()
+
+        if (rootWindowNull) {
+            return ClickVerification(
+                stage = ClickLogStage.ClickEffectUnknown,
+                success = false,
+                reason = "root_window_null_after_click"
+            )
+        }
+        if (rootPackage == self || foregroundPackage == self) {
+            return ClickVerification(
+                stage = ClickLogStage.ClickMisfireSelfOpened,
+                success = false,
+                reason = "self_app_opened_after_click"
+            )
+        }
+        if (rootPackage.isNotBlank() && SafetyGuard.isProtectedPackage(rootPackage)) {
+            return ClickVerification(
+                stage = ClickLogStage.ClickEffectUnknown,
+                success = false,
+                reason = "protected_package_after_click"
+            )
+        }
+        if (rootPackage.isNotBlank() && rootPackage != pending) {
+            return ClickVerification(
+                stage = ClickLogStage.ClickEffectConfirmed,
+                success = true,
+                reason = "package_changed_after_click"
+            )
+        }
+        if (foregroundPackage.isNotBlank() && SafetyGuard.isProtectedPackage(foregroundPackage)) {
+            return ClickVerification(
+                stage = ClickLogStage.ClickEffectUnknown,
+                success = false,
+                reason = "protected_package_after_click"
+            )
+        }
+        if (foregroundPackage.isNotBlank() && foregroundPackage != pending) {
+            return ClickVerification(
+                stage = ClickLogStage.ClickEffectConfirmed,
+                success = true,
+                reason = "package_changed_after_click"
+            )
+        }
+        if (SafetyGuard.isProtectedPackage(pending)) {
+            return ClickVerification(
+                stage = ClickLogStage.ClickEffectUnknown,
+                success = false,
+                reason = "protected_package_never_confirmed"
+            )
+        }
+        return if (targetStillPresent) {
+            ClickVerification(
+                stage = ClickLogStage.ClickEffectUnknown,
+                success = false,
+                reason = "candidate_still_present"
+            )
+        } else {
+            ClickVerification(
+                stage = ClickLogStage.ClickEffectConfirmed,
+                success = true,
+                reason = "candidate_node_disappeared"
+            )
+        }
+    }
+}
+
 internal object DelayedClickSafetyCheck {
     fun evaluate(
         pendingPackageName: String,
         currentPackageName: String?,
-        selfPackageName: String
+        selfPackageName: String,
+        foregroundPackageName: String,
+        foregroundStartTimeMillis: Long,
+        now: Long,
+        defaultRuleWindowMs: Long,
+        rootWindowNull: Boolean
     ): DelayedClickSafetyResult {
         val pending = pendingPackageName.trim()
         val current = currentPackageName.orEmpty().trim()
-        val detail = "pendingPackageName=$pending;currentPackageName=$current"
+        val detail = "pendingPackageName=$pending;currentPackageName=$current;foregroundPackage=$foregroundPackageName"
+        if (rootWindowNull) {
+            return DelayedClickSafetyResult(
+                allowed = false,
+                stage = ClickLogStage.RootWindowNull,
+                reason = "root_window_null_before_click",
+                detail = detail
+            )
+        }
         if (current.isBlank()) {
             return DelayedClickSafetyResult(
                 allowed = false,
@@ -942,7 +1373,7 @@ internal object DelayedClickSafetyCheck {
             return DelayedClickSafetyResult(
                 allowed = false,
                 stage = ClickLogStage.SkippedBySafety,
-                reason = "skipped_by_safety",
+                reason = "safety_guard_blocked",
                 blockedReason = "safety_guard_before_delayed_click",
                 detail = detail
             )
@@ -955,11 +1386,28 @@ internal object DelayedClickSafetyCheck {
                 detail = detail
             )
         }
+        if (foregroundPackageName != pending) {
+            return DelayedClickSafetyResult(
+                allowed = false,
+                stage = ClickLogStage.ClickCancelledPackageChanged,
+                reason = "package_changed_before_click",
+                detail = detail
+            )
+        }
+        val elapsed = (now - foregroundStartTimeMillis).coerceAtLeast(0L)
+        if (foregroundStartTimeMillis <= 0L || elapsed > defaultRuleWindowMs) {
+            return DelayedClickSafetyResult(
+                allowed = false,
+                stage = ClickLogStage.ClickCancelledTimeWindowExpired,
+                reason = "click_cancelled_time_window_expired",
+                detail = "$detail;elapsedSinceForegroundMs=$elapsed"
+            )
+        }
         return DelayedClickSafetyResult(
             allowed = true,
             stage = ClickLogStage.ClickEffectUnknown,
             reason = "",
-            detail = detail
+            detail = "$detail;elapsedSinceForegroundMs=$elapsed"
         )
     }
 }

@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -15,6 +17,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -26,9 +29,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.InstalledAppRepository
+import com.example.skip.data.InstalledAppStatus
 import com.example.skip.data.SettingsRepository
 import com.example.skip.ui.common.AppIconView
-import com.example.skip.ui.common.SimpleScreenScaffold
+import com.example.skip.ui.common.AutoLoadMoreEffect
+import com.example.skip.ui.common.LazyScreenScaffold
+import com.example.skip.ui.common.initialVisibleCount
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+private const val BLACKLIST_BATCH_SIZE = 30
 
 @Composable
 fun BlacklistScreen(
@@ -36,88 +46,109 @@ fun BlacklistScreen(
     onOpenApp: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val listState = rememberLazyListState()
     var refreshKey by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var showClearConfirm by remember { mutableStateOf(false) }
-    val packages = remember(refreshKey) { SettingsRepository.getBlacklistPackages(context) }
-    val items = packages
-        .filter { query.isBlank() || it.contains(query, ignoreCase = true) }
-        .map { InstalledAppRepository.resolve(context, it) }
-        .filter { status ->
-            query.isBlank() ||
-                status.app.label.contains(query, ignoreCase = true) ||
-                status.app.packageName.contains(query, ignoreCase = true)
+    var loading by remember { mutableStateOf(true) }
+    var packages by remember { mutableStateOf<List<String>>(emptyList()) }
+    var statuses by remember { mutableStateOf<List<InstalledAppStatus>>(emptyList()) }
+
+    LaunchedEffect(context, refreshKey) {
+        loading = true
+        val loaded = withContext(Dispatchers.IO) {
+            val blacklistPackages = SettingsRepository.getBlacklistPackages(context)
+            blacklistPackages to blacklistPackages.map {
+                InstalledAppRepository.resolve(context, it)
+            }
         }
+        packages = loaded.first
+        statuses = loaded.second
+        loading = false
+    }
 
-    SimpleScreenScaffold(title = "黑名单应用", onBack = onBack) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                text = "黑名单不执行默认开屏跳过。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+    val filteredItems = remember(statuses, query) {
+        filterBlacklistStatuses(statuses, query)
+    }
+    var visibleCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(filteredItems.size, query) {
+        listState.scrollToItem(0)
+        visibleCount = initialVisibleCount(filteredItems.size, BLACKLIST_BATCH_SIZE)
+    }
+    AutoLoadMoreEffect(
+        listState = listState,
+        visibleCount = visibleCount,
+        totalCount = filteredItems.size,
+        batchSize = BLACKLIST_BATCH_SIZE,
+        onVisibleCountChange = { visibleCount = it }
+    )
 
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("搜索黑名单") },
-                singleLine = true
-            )
+    LazyScreenScaffold(
+        title = "黑名单应用",
+        onBack = onBack,
+        listState = listState
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "黑名单不执行默认开屏跳过。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(
-                    enabled = packages.isNotEmpty(),
-                    onClick = { showClearConfirm = true }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("搜索黑名单") },
+                    singleLine = true
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("清空")
+                    TextButton(
+                        enabled = packages.isNotEmpty(),
+                        onClick = { showClearConfirm = true }
+                    ) {
+                        Text("清空")
+                    }
                 }
             }
+        }
 
-            if (items.isEmpty()) {
+        when {
+            loading -> item { InfoCard("正在加载黑名单...") }
+            filteredItems.isEmpty() -> item {
                 InfoCard(if (packages.isEmpty()) "暂无数据" else "没有匹配项")
-            } else {
-                items.forEach { status ->
-                    Card(
-                        onClick = { onOpenApp(status.app.packageName) },
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            AppIconView(status.app.icon, status.app.label)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(status.app.label, fontWeight = FontWeight.Medium)
-                                Text(
-                                    status.app.packageName,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            TextButton(
-                                onClick = {
-                                    SettingsRepository.setBlacklisted(
-                                        context,
-                                        status.app.packageName,
-                                        false
-                                    )
-                                    refreshKey++
-                                }
-                            ) {
-                                Text("移出")
-                            }
+            }
+            else -> {
+                items(
+                    items = filteredItems.take(visibleCount),
+                    key = { it.app.packageName }
+                ) { status ->
+                    BlacklistRow(
+                        status = status,
+                        onOpen = { onOpenApp(status.app.packageName) },
+                        onRemove = {
+                            SettingsRepository.setBlacklisted(
+                                context,
+                                status.app.packageName,
+                                false
+                            )
+                            refreshKey++
                         }
+                    )
+                }
+                if (visibleCount < filteredItems.size) {
+                    item {
+                        Text(
+                            text = "继续滚动加载 ${filteredItems.size - visibleCount} 个应用",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -150,9 +181,57 @@ fun BlacklistScreen(
 }
 
 @Composable
+private fun BlacklistRow(
+    status: InstalledAppStatus,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit
+) {
+    Card(
+        onClick = onOpen,
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AppIconView(status.app.icon, status.app.label)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(status.app.label, fontWeight = FontWeight.Medium)
+                Text(
+                    status.app.packageName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(onClick = onRemove) {
+                Text("移出")
+            }
+        }
+    }
+}
+
+internal fun filterBlacklistStatuses(
+    statuses: List<InstalledAppStatus>,
+    query: String
+): List<InstalledAppStatus> {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isBlank()) return statuses
+    return statuses.filter { status ->
+        status.app.label.contains(normalizedQuery, ignoreCase = true) ||
+            status.app.packageName.contains(normalizedQuery, ignoreCase = true)
+    }
+}
+
+@Composable
 private fun InfoCard(text: String) {
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
     ) {
         Text(

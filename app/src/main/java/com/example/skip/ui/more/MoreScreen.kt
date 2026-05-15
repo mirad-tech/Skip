@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -22,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.IconManager
+import com.example.skip.ui.common.BackIconButton
 
 enum class MoreDestination {
     AppHub,
@@ -36,9 +38,11 @@ enum class MoreDestination {
     RuleFormat,
     SystemCompat,
     AccessibilitySettings,
+    Permissions,
     BatterySettings,
     RuleLogs,
     Logs,
+    Stats,
     Safety,
     Privacy,
     About
@@ -56,7 +60,11 @@ fun MoreScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("更多") }
+                navigationIcon = { BackIconButton(onBack = onBack) },
+                title = { Text("更多") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
             )
         }
     ) { innerPadding ->
@@ -95,7 +103,7 @@ private fun MoreItem(
 ) {
     Card(
         onClick = onClick,
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         )

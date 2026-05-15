@@ -2,7 +2,6 @@ package com.example.skip.util
 
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import com.example.skip.model.InstalledApp
@@ -11,7 +10,7 @@ object InstalledAppUtils {
     fun loadLaunchableApps(context: Context): List<InstalledApp> {
         val packageManager = context.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val launchableApps = runCatching {
+        return runCatching {
             packageManager.queryIntentActivitiesCompat(intent)
                 .map { resolveInfo ->
                     val packageName = resolveInfo.activityInfo.packageName
@@ -22,25 +21,6 @@ object InstalledAppUtils {
                     )
                 }
                 .filterNot { it.packageName == context.packageName }
-                .distinctBy { it.packageName }
-                .sortedBy { it.label.lowercase() }
-        }.getOrDefault(emptyList())
-        if (launchableApps.isNotEmpty()) return launchableApps
-
-        return runCatching {
-            packageManager.getInstalledApplicationsCompat()
-                .filter { info ->
-                    info.packageName != context.packageName &&
-                        (info.flags and ApplicationInfo.FLAG_SYSTEM == 0 ||
-                            info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
-                }
-                .map { info ->
-                    InstalledApp(
-                        label = packageManager.getApplicationLabel(info).toString(),
-                        packageName = info.packageName,
-                        icon = runCatching { packageManager.getApplicationIcon(info) }.getOrNull()
-                    )
-                }
                 .distinctBy { it.packageName }
                 .sortedBy { it.label.lowercase() }
         }.getOrDefault(emptyList())
@@ -77,14 +57,6 @@ object InstalledAppUtils {
             queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
         } else {
             queryIntentActivities(intent, 0)
-        }
-
-    @Suppress("DEPRECATION")
-    private fun PackageManager.getInstalledApplicationsCompat() =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getInstalledApplications(PackageManager.ApplicationInfoFlags.of(PackageManager.MATCH_ALL.toLong()))
-        } else {
-            getInstalledApplications(PackageManager.MATCH_ALL)
         }
 
     @Suppress("DEPRECATION")

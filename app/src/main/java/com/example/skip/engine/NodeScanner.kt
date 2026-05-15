@@ -65,6 +65,15 @@ object NodeScanner {
                 bestMatch == null -> lastFailureReason.ifBlank { "candidate_below_threshold" }
                 else -> ""
             },
+            bestCandidateRuleId = bestCandidate?.rule?.id.orEmpty(),
+            bestCandidateRuleName = bestCandidate?.let { candidate ->
+                listOf(candidate.rule.name, candidate.matchedKeyword)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" / ")
+            }.orEmpty(),
+            bestCandidateRuleSource = bestCandidate?.rule?.source,
+            bestCandidateAppName = bestCandidate?.rule?.appName.orEmpty(),
+            bestCandidateMatchedKeyword = bestCandidate?.matchedKeyword.orEmpty(),
             defaultRuleAreaAllowed = bestCandidate?.defaultRuleAreaAllowed,
             textKeywordIsStandaloneSkip = bestCandidate?.textKeywordIsStandaloneSkip == true,
             candidateAreaRatio = bestCandidate?.candidateAreaRatio,

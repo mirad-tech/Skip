@@ -28,18 +28,26 @@ fun RuleFormatScreen(onBack: () -> Unit) {
     SimpleScreenScaffold(title = "规则格式说明", onBack = onBack) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
-                text = "这是给高级用户看的 JSON 规则格式。",
+                text = "导入规则默认也只在应用打开后的前 6 秒生效。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             InfoCard(
                 title = "主要字段",
-                body = "name、version、author、apps、packageName、rules、id、matchTexts、matchContentDescriptions、matchViewIds、area、action、cooldownMs、validDurationMs、minScore。"
+                body = "schemaVersion、name、version、author、appPolicies、apps、packageName、rules、id、matchTexts、matchContentDescriptions、matchViewIds、textMatchMode、contentDescriptionMatchMode、viewIdMatchMode、area、action、cooldownMs、validDurationMs、minScore、coordinateFallback。"
+            )
+            InfoCard(
+                title = "按应用策略",
+                body = "appPolicies 可导入 defaultRuleEnabled 和 customRulesEnabled；Skip 自身策略会被忽略，受保护应用仍不会执行规则。"
             )
             InfoCard(
                 title = "area 支持",
                 body = "top_left、top_center、top_right、middle_left、center、middle_right、bottom_left、bottom_center、bottom_right、any。"
+            )
+            InfoCard(
+                title = "matchMode 支持",
+                body = "contains、exact、regex。默认 contains；regex 仅建议用于范围很明确的本地规则。"
             )
             InfoCard(
                 title = "常见错误",
@@ -47,7 +55,11 @@ fun RuleFormatScreen(onBack: () -> Unit) {
             )
             InfoCard(
                 title = "建议",
-                body = "validDurationMs 不建议超过 15000，cooldownMs 不建议小于 800，area=any 和低 minScore 都会增加误触风险。"
+                body = "validDurationMs 会统一收紧到 6000，cooldownMs 不建议小于 800，area=any 和低 minScore 都会增加误触风险。"
+            )
+            InfoCard(
+                title = "坐标兜底限制",
+                body = "coordinateFallback 默认关闭；启用时必须绑定 packageName、限制启动后 6 秒内、配置 anchorTexts/anchorContentDescriptions/anchorViewIds、cooldownMs 不低于 800，并且不能包含同意、授权、允许、支付、购买、确认支付、登录、注册、隐私政策、用户协议、安装、删除、卸载、转账、发送、提交等高风险内容。"
             )
 
             Button(
