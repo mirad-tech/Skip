@@ -1241,8 +1241,53 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
-    fun homeScreenIconUsesDrawableAssetInsteadOfAdaptiveIcon() {
-        assertEquals(R.drawable.ic_skip_wordmark, IconManager.homeImageRes)
+    fun iconThemesUseSharedWordmarkWithSchemeLauncherColors() {
+        val expectedIcons = mapOf(
+            "sky_blue" to R.mipmap.ic_launcher_sky_blue,
+            "mint_green" to R.mipmap.ic_launcher_mint_green,
+            "violet_glow" to R.mipmap.ic_launcher_violet_glow,
+            "sunset_orange" to R.mipmap.ic_launcher_sunset_orange,
+            "cherry_pink" to R.mipmap.ic_launcher_cherry_pink,
+            "obsidian_gold" to R.mipmap.ic_launcher_obsidian_gold
+        )
+        val expectedColors = mapOf(
+            "sky_blue" to 0xFF2F7CF6.toInt(),
+            "mint_green" to 0xFF1FAF7A.toInt(),
+            "violet_glow" to 0xFF7C4DFF.toInt(),
+            "sunset_orange" to 0xFFFF7A1A.toInt(),
+            "cherry_pink" to 0xFFE83F7D.toInt(),
+            "obsidian_gold" to 0xFF1D1A16.toInt()
+        )
+
+        assertEquals(R.drawable.ic_skip_wordmark_text, IconManager.homeImageRes)
+        IconManager.schemes.forEach { scheme ->
+            assertEquals(expectedIcons.getValue(scheme.id), scheme.iconRes)
+            assertEquals(expectedColors.getValue(scheme.id), scheme.previewColor)
+            assertEquals(scheme.iconRes, IconManager.displayIconRes(scheme))
+        }
+    }
+
+    @Test
+    fun debugManifestDoesNotBypassLauncherAliases() {
+        val debugManifest = File("src/debug/AndroidManifest.xml")
+        if (!debugManifest.exists()) return
+
+        val manifestText = debugManifest.readText()
+
+        assertFalse(
+            "debug manifest must not add a direct launcher entry to MainActivity",
+            manifestText.contains("android:name=\".MainActivity\"") &&
+                manifestText.contains("android.intent.category.LAUNCHER")
+        )
+        assertFalse(
+            "debug manifest must not remove launcher filters from icon aliases",
+            manifestText.contains("tools:node=\"remove\"")
+        )
+    }
+
+    @Test
+    fun safetyModeDefaultsToOff() {
+        assertFalse(SettingsRepository.defaultSafetyModeEnabled())
     }
 
     @Test

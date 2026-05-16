@@ -1091,7 +1091,9 @@ class SkipAccessibilityService : AccessibilityService() {
             elevation = dp(8).toFloat()
         }
         val icon = ImageView(this).apply {
-            setImageResource(IconManager.currentScheme(this@SkipAccessibilityService).iconRes)
+            setImageResource(
+                IconManager.displayIconRes(IconManager.currentScheme(this@SkipAccessibilityService))
+            )
             layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
                 marginEnd = dp(8)
             }

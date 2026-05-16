@@ -1,7 +1,6 @@
 package com.example.skip.data
 
 import android.content.Context
-import android.content.pm.ApplicationInfo
 import androidx.core.content.edit
 import com.example.skip.model.AppPolicy
 import com.example.skip.util.AccessibilityUtil
@@ -79,8 +78,10 @@ object SettingsRepository {
     }
 
     fun isSafetyModeEnabled(context: Context): Boolean {
-        return prefs(context).getBoolean(KEY_SAFETY_MODE_ENABLED, isDebuggable(context))
+        return prefs(context).getBoolean(KEY_SAFETY_MODE_ENABLED, defaultSafetyModeEnabled())
     }
+
+    internal fun defaultSafetyModeEnabled(): Boolean = false
 
     fun setSafetyModeEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit { putBoolean(KEY_SAFETY_MODE_ENABLED, enabled) }
@@ -321,10 +322,6 @@ object SettingsRepository {
 
     private fun iconPrefs(context: Context) =
         context.applicationContext.getSharedPreferences(ICON_PREFS_NAME, Context.MODE_PRIVATE)
-
-    private fun isDebuggable(context: Context): Boolean {
-        return context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
-    }
 
     private fun Collection<String>.cleanPackageNames(): List<String> {
         return map { it.trim() }
