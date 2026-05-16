@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/icon_obsidian_gold_background" />
-    <foreground android:drawable="@drawable/ic_skip_wordmark" />
-    <monochrome android:drawable="@drawable/ic_skip_wordmark" />
+    <foreground android:drawable="@drawable/ic_skip_wordmark_text" />
+    <monochrome android:drawable="@drawable/ic_skip_wordmark_text" />
 </adaptive-icon>
