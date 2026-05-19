@@ -1082,7 +1082,7 @@ class SafetyAndLogUnitTest {
     fun diagnosticReportContainsStableSchemaSanitizedLogsAndSummaryCounts() {
         val now = 10_000L
         val json = DiagnosticReportRepository.buildReportJson(
-            versionName = "1.4.0",
+            versionName = "1.0.0",
             exportTimeMillis = now,
             deviceInfo = RomUtils.DeviceInfo(
                 manufacturer = "Google",
@@ -1228,7 +1228,7 @@ class SafetyAndLogUnitTest {
         val firstRuleLog = ruleLogs.optJSONObject(0)!!
 
         assertEquals(2, report.optInt("schemaVersion"))
-        assertEquals("1.4.0", report.optString("skipVersion"))
+        assertEquals("1.0.0", report.optString("skipVersion"))
         assertEquals("Pixel", device.optString("model"))
         assertTrue(runtime.optBoolean("masterEnabled"))
         assertTrue(runtime.optBoolean("accessibilityServiceEnabled"))
@@ -1310,7 +1310,7 @@ class SafetyAndLogUnitTest {
     @Test
     fun diagnosticReportKeepsRequiredSectionsWhenLogsAreEmpty() {
         val json = DiagnosticReportRepository.buildReportJson(
-            versionName = "1.4.0",
+            versionName = "1.0.0",
             exportTimeMillis = 1_000L,
             deviceInfo = RomUtils.DeviceInfo(
                 manufacturer = "",
