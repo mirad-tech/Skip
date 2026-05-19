@@ -1,6 +1,8 @@
 package com.example.skip.data
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.edit
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickLogStage
@@ -16,6 +18,7 @@ import java.time.Instant
 
 object LogRepository {
     private const val KEY_CLICK_LOGS = "click_logs"
+    private const val KEY_CLICK_LOG_THROTTLE_COUNTS = "click_log_throttle_counts"
     private const val KEY_RULE_LOGS = "rule_logs"
     private const val MAX_CLICK_LOG_COUNT = 1000
     private const val MAX_RULE_LOG_COUNT = 100
@@ -23,8 +26,21 @@ object LogRepository {
     private const val FIELD_SEPARATOR = "\t"
     private const val ROW_SEPARATOR = "\n"
     private const val DUPLICATE_WINDOW_MS = 5000L
+    private const val FLUSH_DELAY_MS = 1_500L
 
     internal object JsonNullValue
+    private val lock = Any()
+    private val clickLogBuffer = ClickLogBuffer(
+        maxCount = MAX_CLICK_LOG_COUNT,
+        maxAgeMs = MAX_LOG_AGE_MS,
+        duplicateWindowMs = DUPLICATE_WINDOW_MS
+    )
+    private val rateLimiter = ClickLogRateLimiter()
+    private val throttleCounts = linkedMapOf<String, Int>()
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    private var clickLogsLoaded = false
+    private var flushScheduled = false
+    private var appContext: Context? = null
 
     fun addClickLog(context: Context, log: ClickLog) {
         if (log.stage.isDebugOnly && !SettingsRepository.isDebugToastEnabled(context)) return
@@ -37,23 +53,33 @@ object LogRepository {
             failureReason = PrivacySanitizer.sanitizeText(log.failureReason),
             detail = PrivacySanitizer.sanitizeText(log.detail)
         )
-        val existing = getClickLogs(context)
-            .filter { now - it.timeMillis <= MAX_LOG_AGE_MS }
-            .filterNot { it.isDuplicateOf(cleaned, now) }
-        val logs = buildList {
-            add(cleaned)
-            addAll(existing)
-        }.take(MAX_CLICK_LOG_COUNT)
-
-        SettingsRepository.prefs(context)
-            .edit {
-                putString(KEY_CLICK_LOGS, JSONArray().apply {
-                    logs.forEach { put(it.toJson()) }
-                }.toString())
+        synchronized(lock) {
+            ensureClickLogsLoadedLocked(context)
+            val rateLimit = rateLimiter.shouldStore(cleaned, now)
+            if (rateLimit.allowed) {
+                clickLogBuffer.add(cleaned, now)
+            } else {
+                throttleCounts[rateLimit.key] = (throttleCounts[rateLimit.key] ?: 0) + 1
             }
+        }
+        scheduleFlush(context)
     }
 
     fun getClickLogs(context: Context): List<ClickLog> {
+        synchronized(lock) {
+            ensureClickLogsLoadedLocked(context)
+            return clickLogBuffer.snapshot()
+        }
+    }
+
+    fun getClickLogThrottleCounts(context: Context): Map<String, Int> {
+        synchronized(lock) {
+            ensureClickLogsLoadedLocked(context)
+            return throttleCounts.toMap()
+        }
+    }
+
+    private fun readClickLogsFromPrefs(context: Context): List<ClickLog> {
         val raw = SettingsRepository.prefs(context).getString(KEY_CLICK_LOGS, null).orEmpty()
         if (raw.isBlank()) return emptyList()
         return if (raw.trimStart().startsWith("[")) {
@@ -71,7 +97,15 @@ object LogRepository {
     }
 
     fun clearClickLogs(context: Context) {
-        SettingsRepository.prefs(context).edit { remove(KEY_CLICK_LOGS) }
+        synchronized(lock) {
+            ensureClickLogsLoadedLocked(context)
+            clickLogBuffer.clear()
+            throttleCounts.clear()
+        }
+        SettingsRepository.prefs(context).edit {
+            remove(KEY_CLICK_LOGS)
+            remove(KEY_CLICK_LOG_THROTTLE_COUNTS)
+        }
     }
 
     fun exportClickLogsAsJson(
@@ -97,6 +131,26 @@ object LogRepository {
             .toString(2)
     }
 
+    internal fun flushPendingClickLogs(context: Context) {
+        val logs: List<ClickLog>
+        val counts: Map<String, Int>
+        synchronized(lock) {
+            ensureClickLogsLoadedLocked(context)
+            flushScheduled = false
+            logs = clickLogBuffer.snapshot()
+            counts = throttleCounts.toMap()
+        }
+
+        SettingsRepository.prefs(context).edit {
+            putString(KEY_CLICK_LOGS, JSONArray().apply {
+                logs.forEach { put(it.toJson()) }
+            }.toString())
+            putString(KEY_CLICK_LOG_THROTTLE_COUNTS, JSONObject().apply {
+                counts.forEach { (key, count) -> put(key, count) }
+            }.toString())
+        }
+    }
+
     fun addRuleLog(context: Context, log: RuleLog) {
         val logs = buildList {
             add(log)
@@ -118,14 +172,6 @@ object LogRepository {
 
     fun clearRuleLogs(context: Context) {
         SettingsRepository.prefs(context).edit { remove(KEY_RULE_LOGS) }
-    }
-
-    private fun ClickLog.isDuplicateOf(other: ClickLog, now: Long): Boolean {
-        if (now - timeMillis > DUPLICATE_WINDOW_MS) return false
-        return packageName == other.packageName &&
-            ruleId == other.ruleId &&
-            stage == other.stage &&
-            failureReason == other.failureReason
     }
 
     internal fun clickLogToJson(log: ClickLog): JSONObject {
@@ -363,6 +409,48 @@ object LogRepository {
         return replace(FIELD_SEPARATOR, " ").replace(ROW_SEPARATOR, " ")
     }
 
+    private fun ensureClickLogsLoadedLocked(context: Context) {
+        appContext = context.applicationContext
+        if (clickLogsLoaded) return
+        clickLogBuffer.replaceAll(readClickLogsFromPrefs(context))
+        throttleCounts.clear()
+        throttleCounts.putAll(readThrottleCounts(context))
+        clickLogsLoaded = true
+    }
+
+    private fun readThrottleCounts(context: Context): Map<String, Int> {
+        val raw = SettingsRepository.prefs(context)
+            .getString(KEY_CLICK_LOG_THROTTLE_COUNTS, null)
+            .orEmpty()
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val json = JSONObject(raw)
+            buildMap {
+                json.keys().forEach { key ->
+                    val count = json.optInt(key, 0)
+                    if (key.isNotBlank() && count > 0) put(key, count)
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun scheduleFlush(context: Context) {
+        val targetContext = context.applicationContext
+        val shouldSchedule = synchronized(lock) {
+            appContext = targetContext
+            if (flushScheduled) {
+                false
+            } else {
+                flushScheduled = true
+                true
+            }
+        }
+        if (!shouldSchedule) return
+        mainHandler.postDelayed({
+            flushPendingClickLogs(appContext ?: targetContext)
+        }, FLUSH_DELAY_MS)
+    }
+
     private fun JSONObject.optNullableInt(key: String): Int? {
         return if (has(key) && !isNull(key)) optInt(key) else null
     }
@@ -383,3 +471,93 @@ object LogRepository {
         return value ?: JsonNullValue
     }
 }
+
+internal class ClickLogBuffer(
+    private val maxCount: Int,
+    private val maxAgeMs: Long,
+    private val duplicateWindowMs: Long
+) {
+    private val logs = mutableListOf<ClickLog>()
+
+    fun replaceAll(values: List<ClickLog>) {
+        logs.clear()
+        logs.addAll(values.sortedByDescending { it.timeMillis }.take(maxCount))
+    }
+
+    fun add(log: ClickLog, now: Long) {
+        logs.removeAll { existing ->
+            now - existing.timeMillis > maxAgeMs || existing.isDuplicateOf(log, now)
+        }
+        logs.add(0, log)
+        if (logs.size > maxCount) {
+            logs.subList(maxCount, logs.size).clear()
+        }
+    }
+
+    fun snapshot(): List<ClickLog> = logs.toList()
+
+    fun clear() {
+        logs.clear()
+    }
+
+    private fun ClickLog.isDuplicateOf(other: ClickLog, now: Long): Boolean {
+        if (now - timeMillis > duplicateWindowMs) return false
+        return packageName == other.packageName &&
+            ruleId == other.ruleId &&
+            stage == other.stage &&
+            failureReason == other.failureReason
+    }
+}
+
+internal class ClickLogRateLimiter(
+    private val windowMs: Long = 2_000L
+) {
+    private val lastStoredAtByKey = mutableMapOf<String, Long>()
+
+    fun shouldStore(log: ClickLog, now: Long): RateLimitDecision {
+        val key = log.rateLimitKey()
+        if (key.isBlank()) return RateLimitDecision(allowed = true, key = "")
+        val last = lastStoredAtByKey[key]
+        if (last == null) {
+            lastStoredAtByKey[key] = now
+            return RateLimitDecision(allowed = true, key = key)
+        }
+        if (now - last < windowMs) {
+            return RateLimitDecision(allowed = false, key = key)
+        }
+        lastStoredAtByKey[key] = now
+        return RateLimitDecision(allowed = true, key = key)
+    }
+
+    private fun ClickLog.rateLimitKey(): String {
+        if (!stage.isNoisyStage()) return ""
+        if (stage == ClickLogStage.SkippedBySafety &&
+            !isSystemPackage &&
+            !isLauncherPackage &&
+            blockedReason != "system_or_launcher_package"
+        ) {
+            return ""
+        }
+        val reason = PrivacySanitizer.sanitizeText(
+            failureReason.ifBlank { this.reason }.ifBlank { blockedReason }
+        )
+        return listOf(packageName, stage.value, reason)
+            .filter { it.isNotBlank() }
+            .joinToString("|")
+    }
+
+    private fun ClickLogStage.isNoisyStage(): Boolean {
+        return this == ClickLogStage.NoCandidateFound ||
+            this == ClickLogStage.SkippedByTimeWindow ||
+            this == ClickLogStage.SkippedByCooldown ||
+            this == ClickLogStage.SkippedBySafety ||
+            this == ClickLogStage.RootWindowNull ||
+            this == ClickLogStage.EventPackageNull ||
+            this == ClickLogStage.SkippedSelfPackage
+    }
+}
+
+internal data class RateLimitDecision(
+    val allowed: Boolean,
+    val key: String
+)

@@ -31,7 +31,9 @@ object DiagnosticReportRepository {
             clickLogs = LogRepository.getClickLogs(context),
             ruleLogs = LogRepository.getRuleLogs(context),
             keywords = RuleRepository.getKeywords(context),
-            viewIdKeywords = RuleRepository.getViewIdKeywords(context)
+            viewIdKeywords = RuleRepository.getViewIdKeywords(context),
+            defaultRuleConfig = RuleRepository.getDefaultRuleConfig(context),
+            logThrottleCounts = LogRepository.getClickLogThrottleCounts(context)
         )
     }
 
@@ -45,7 +47,9 @@ object DiagnosticReportRepository {
         clickLogs: List<ClickLog>,
         ruleLogs: List<RuleLog>,
         keywords: List<String>,
-        viewIdKeywords: List<String>
+        viewIdKeywords: List<String>,
+        defaultRuleConfig: RuleRepository.DefaultRuleConfig = RuleRepository.defaultDefaultRuleConfig(),
+        logThrottleCounts: Map<String, Int> = emptyMap()
     ): String {
         val sanitizedClickLogs = clickLogs.map(::sanitizeClickLog)
         return jsonObject(
@@ -60,11 +64,18 @@ object DiagnosticReportRepository {
                 rulePackages = rulePackages,
                 appPolicies = runtimeState.appPolicies,
                 keywords = keywords,
-                viewIdKeywords = viewIdKeywords
+                viewIdKeywords = viewIdKeywords,
+                defaultRuleConfig = defaultRuleConfig
             ),
             "clickLogs" to jsonArray(sanitizedClickLogs.map(::clickLogJson)),
             "ruleLogs" to jsonArray(ruleLogs.map(::ruleLogJson)),
-            "diagnosticSummary" to diagnosticSummaryJson(sanitizedClickLogs, ruleLogs, exportTimeMillis)
+            "diagnosticSummary" to diagnosticSummaryJson(
+                clickLogs = sanitizedClickLogs,
+                ruleLogs = ruleLogs,
+                now = exportTimeMillis,
+                otherAccessibilityServices = runtimeState.otherAccessibilityServices,
+                logThrottleCounts = logThrottleCounts
+            )
         ).toJsonString()
     }
 
@@ -103,7 +114,8 @@ object DiagnosticReportRepository {
             "lastFailureReason" to PrivacySanitizer.sanitizeText(snapshot.lastFailureReason),
             "appPolicyCount" to snapshot.appPolicies.size,
             "defaultRuleDisabledPackageCount" to snapshot.appPolicies.count { !it.defaultRuleEnabled },
-            "customRulesDisabledPackageCount" to snapshot.appPolicies.count { !it.customRulesEnabled }
+            "customRulesDisabledPackageCount" to snapshot.appPolicies.count { !it.customRulesEnabled },
+            "otherAccessibilityServices" to componentStringsJson(snapshot.otherAccessibilityServices)
         )
     }
 
@@ -112,7 +124,8 @@ object DiagnosticReportRepository {
         rulePackages: List<RulePackage>,
         appPolicies: List<AppPolicy>,
         keywords: List<String>,
-        viewIdKeywords: List<String>
+        viewIdKeywords: List<String>,
+        defaultRuleConfig: RuleRepository.DefaultRuleConfig
     ): JsonObjectValue {
         return jsonObject(
             "ruleCount" to rules.size,
@@ -121,7 +134,8 @@ object DiagnosticReportRepository {
             "coordinateFallbackEnabledRuleCount" to rules.count { it.coordinateFallback?.enabled == true },
             "defaultRuleRuntime" to defaultRuleRuntimeJson(
                 keywordCount = keywords.size,
-                viewIdKeywordCount = viewIdKeywords.size
+                viewIdKeywordCount = viewIdKeywords.size,
+                defaultRuleConfig = defaultRuleConfig
             ),
             "ruleSourceCounts" to countsJson(rules.groupingBy { it.source.value }.eachCount()),
             "keywords" to stringsJson(keywords),
@@ -134,11 +148,15 @@ object DiagnosticReportRepository {
 
     private fun defaultRuleRuntimeJson(
         keywordCount: Int,
-        viewIdKeywordCount: Int
+        viewIdKeywordCount: Int,
+        defaultRuleConfig: RuleRepository.DefaultRuleConfig
     ): JsonObjectValue {
+        val config = RuleRepository.sanitizeDefaultRuleConfig(defaultRuleConfig)
         return jsonObject(
-            "defaultRuleWindowMs" to RuleRepository.DEFAULT_RULE_WINDOW_MS,
-            "defaultRuleMinScore" to RuleRepository.DEFAULT_RULE_MIN_SCORE,
+            "defaultRuleWindowMs" to config.validDurationMs,
+            "defaultRuleMinScore" to config.minScore,
+            "defaultRuleArea" to config.area.value,
+            "defaultRuleCooldownMs" to config.cooldownMs,
             "keywordCount" to keywordCount,
             "viewIdKeywordCount" to viewIdKeywordCount
         )
@@ -235,7 +253,9 @@ object DiagnosticReportRepository {
     private fun diagnosticSummaryJson(
         clickLogs: List<ClickLog>,
         ruleLogs: List<RuleLog>,
-        now: Long
+        now: Long,
+        otherAccessibilityServices: List<String>,
+        logThrottleCounts: Map<String, Int>
     ): JsonObjectValue {
         val stageCounts = clickLogs.groupingBy { it.stage.value }.eachCount()
         val reasonCounts = clickLogs
@@ -267,7 +287,9 @@ object DiagnosticReportRepository {
             "ruleCounts" to countsJson(ruleCounts),
             "recentWindows" to recentWindowsJson(clickLogs, now),
             "rawSignalCounts" to rawSignalCountsJson(clickLogs),
-            "categoryCounts" to categoryCountsJson(clickLogs)
+            "categoryCounts" to categoryCountsJson(clickLogs),
+            "otherAccessibilityServices" to componentStringsJson(otherAccessibilityServices),
+            "logThrottleCounts" to countsJson(logThrottleCounts)
         )
     }
 
@@ -379,6 +401,10 @@ object DiagnosticReportRepository {
 
     private fun stringsJson(values: Collection<String>): JsonArrayValue {
         return jsonArray(values.map { PrivacySanitizer.sanitizeText(it) })
+    }
+
+    private fun componentStringsJson(values: Collection<String>): JsonArrayValue {
+        return jsonArray(values.map { it.trim() }.filter { it.isNotBlank() }.distinct())
     }
 
     private fun countsJson(counts: Map<String, Int>): JsonObjectValue {

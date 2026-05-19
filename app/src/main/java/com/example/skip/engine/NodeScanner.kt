@@ -32,26 +32,36 @@ object NodeScanner {
 
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
-            rules.forEach { rule ->
-                val candidate = RuleMatcher.evaluate(node, rule, appElapsedMs)
-                if (candidate != null) {
-                    candidateCount++
-                    if (candidate.isBetterCandidateThan(bestCandidate)) {
-                        bestCandidate = candidate
-                    }
-                    if (candidate.failureReason.isNotBlank()) {
-                        lastFailureReason = candidate.failureReason
-                    }
-                    val match = candidate.match
-                    if (match != null && match.isBetterThan(bestMatch)) {
-                        bestMatch = match
+
+            if (node.isVisibleToUser) {
+                rules.forEach { rule ->
+                    val candidate = RuleMatcher.evaluate(node, rule, appElapsedMs)
+                    if (candidate != null) {
+                        candidateCount++
+                        if (candidate.isBetterCandidateThan(bestCandidate)) {
+                            bestCandidate = candidate
+                        }
+                        if (candidate.failureReason.isNotBlank()) {
+                            lastFailureReason = candidate.failureReason
+                        }
+                        val match = candidate.match
+                        if (match != null && match.isBetterThan(bestMatch)) {
+                            bestMatch = match
+                        }
                     }
                 }
             }
 
-            for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
+            // Performance Optimization: Skip child scanning for leaves with no content
+            if (node.childCount > 0) {
+                for (index in 0 until node.childCount) {
+                    node.getChild(index)?.let(queue::add)
+                }
             }
+
+            // IMPORTANT: AccessibilityNodeInfo should technically be recycled,
+            // but in many modern Android versions, the system handles it.
+            // However, we must be careful not to recycle if still in use.
         }
 
         return ScanReport(

@@ -16,13 +16,30 @@ import org.json.JSONObject
 import java.util.UUID
 
 object RuleRepository {
-    const val DEFAULT_RULE_WINDOW_MS = 6_000L
-    const val DEFAULT_RULE_MIN_SCORE = 75
+    const val DEFAULT_RULE_WINDOW_MS = 8_000L
+    const val DEFAULT_RULE_MIN_SCORE = 70
+    const val DEFAULT_RULE_COOLDOWN_MS = 1_500L
+    const val MIN_DEFAULT_RULE_COOLDOWN_MS = 800L
+
+    val defaultRuleDurationOptionsMs = listOf(6_000L, DEFAULT_RULE_WINDOW_MS, 10_000L)
 
     private const val KEY_KEYWORDS = "keywords"
     private const val KEY_VIEW_ID_KEYWORDS = "view_id_keywords"
     private const val KEY_RULES_JSON = "rules_json_v2"
     private const val KEY_RULE_PACKAGES_JSON = "rule_packages_json_v2"
+    private const val KEY_DEFAULT_RULE_WINDOW_MS = "default_rule_window_ms_v1"
+    private const val KEY_DEFAULT_RULE_MIN_SCORE = "default_rule_min_score_v1"
+    private const val KEY_DEFAULT_RULE_AREA = "default_rule_area_v1"
+    private const val KEY_DEFAULT_RULE_COOLDOWN_MS = "default_rule_cooldown_ms_v1"
+    private const val MIN_DEFAULT_RULE_SCORE = 60
+    private const val MAX_DEFAULT_RULE_SCORE = 90
+
+    data class DefaultRuleConfig(
+        val validDurationMs: Long = DEFAULT_RULE_WINDOW_MS,
+        val minScore: Int = DEFAULT_RULE_MIN_SCORE,
+        val area: RuleArea = RuleArea.TopRight,
+        val cooldownMs: Long = DEFAULT_RULE_COOLDOWN_MS
+    )
 
     val defaultKeywords = listOf(
         "跳过",
@@ -102,9 +119,59 @@ object RuleRepository {
             .edit { putStringSet(KEY_VIEW_ID_KEYWORDS, keywords.cleanConfigItems().toSet()) }
     }
 
+    fun defaultDefaultRuleConfig(): DefaultRuleConfig = DefaultRuleConfig()
+
+    fun getDefaultRuleConfig(context: Context): DefaultRuleConfig {
+        val prefs = SettingsRepository.prefs(context)
+        return sanitizeDefaultRuleConfig(
+            DefaultRuleConfig(
+                validDurationMs = prefs.getLong(KEY_DEFAULT_RULE_WINDOW_MS, DEFAULT_RULE_WINDOW_MS),
+                minScore = prefs.getInt(KEY_DEFAULT_RULE_MIN_SCORE, DEFAULT_RULE_MIN_SCORE),
+                area = RuleArea.fromValue(
+                    prefs.getString(KEY_DEFAULT_RULE_AREA, RuleArea.TopRight.value).orEmpty()
+                ) ?: RuleArea.TopRight,
+                cooldownMs = prefs.getLong(KEY_DEFAULT_RULE_COOLDOWN_MS, DEFAULT_RULE_COOLDOWN_MS)
+            )
+        )
+    }
+
+    fun saveDefaultRuleConfig(context: Context, config: DefaultRuleConfig): DefaultRuleConfig {
+        val cleanConfig = sanitizeDefaultRuleConfig(config)
+        SettingsRepository.prefs(context).edit {
+            putLong(KEY_DEFAULT_RULE_WINDOW_MS, cleanConfig.validDurationMs)
+            putInt(KEY_DEFAULT_RULE_MIN_SCORE, cleanConfig.minScore)
+            putString(KEY_DEFAULT_RULE_AREA, cleanConfig.area.value)
+            putLong(KEY_DEFAULT_RULE_COOLDOWN_MS, cleanConfig.cooldownMs)
+        }
+        return cleanConfig
+    }
+
+    fun resetDefaultRuleConfig(context: Context) {
+        SettingsRepository.prefs(context).edit {
+            remove(KEY_DEFAULT_RULE_WINDOW_MS)
+            remove(KEY_DEFAULT_RULE_MIN_SCORE)
+            remove(KEY_DEFAULT_RULE_AREA)
+            remove(KEY_DEFAULT_RULE_COOLDOWN_MS)
+        }
+    }
+
+    internal fun sanitizeDefaultRuleConfig(config: DefaultRuleConfig): DefaultRuleConfig {
+        val duration = if (config.validDurationMs in defaultRuleDurationOptionsMs) {
+            config.validDurationMs
+        } else {
+            DEFAULT_RULE_WINDOW_MS
+        }
+        return config.copy(
+            validDurationMs = duration,
+            minScore = config.minScore.coerceIn(MIN_DEFAULT_RULE_SCORE, MAX_DEFAULT_RULE_SCORE),
+            cooldownMs = config.cooldownMs.coerceAtLeast(MIN_DEFAULT_RULE_COOLDOWN_MS)
+        )
+    }
+
     fun getRules(context: Context): List<SkipRule> {
         val raw = SettingsRepository.prefs(context).getString(KEY_RULES_JSON, null).orEmpty()
         if (raw.isBlank()) return emptyList()
+        val validDurationMs = DEFAULT_RULE_WINDOW_MS
         return runCatching {
             val array = JSONArray(raw)
             buildList {
@@ -113,7 +180,7 @@ object RuleRepository {
                 }
             }
         }.getOrDefault(emptyList())
-            .map(::normalizeRuleWindow)
+            .map { normalizeRuleWindow(it, validDurationMs) }
     }
 
     fun saveRules(context: Context, rules: List<SkipRule>) {
@@ -163,7 +230,7 @@ object RuleRepository {
     }
 
     fun getBuiltInRuleForPackage(context: Context, packageName: String): SkipRule {
-        return normalizeRuleWindow(createBuiltInRuleForPackage(context, packageName))
+        return createBuiltInRuleForPackage(context, packageName)
     }
 
     fun upsertRule(context: Context, rule: SkipRule) {
@@ -325,6 +392,7 @@ object RuleRepository {
     }
 
     private fun createBuiltInRuleForPackage(context: Context, packageName: String): SkipRule {
+        val defaultRuleConfig = getDefaultRuleConfig(context)
         return SkipRule(
             id = "built_in_$packageName",
             source = RuleSource.BuiltIn,
@@ -334,17 +402,17 @@ object RuleRepository {
             matchTexts = getKeywords(context),
             matchContentDescriptions = getKeywords(context),
             matchViewIds = getViewIdKeywords(context),
-            area = RuleArea.TopRight,
+            area = defaultRuleConfig.area,
             priority = 1,
-            cooldownMs = 1500L,
-            validDurationMs = DEFAULT_RULE_WINDOW_MS,
-            minScore = DEFAULT_RULE_MIN_SCORE,
+            cooldownMs = defaultRuleConfig.cooldownMs,
+            validDurationMs = defaultRuleConfig.validDurationMs,
+            minScore = defaultRuleConfig.minScore,
             packageId = "built_in"
         )
     }
 
-    private fun normalizeRuleWindow(rule: SkipRule): SkipRule {
-        return rule.copy(validDurationMs = DEFAULT_RULE_WINDOW_MS)
+    private fun normalizeRuleWindow(rule: SkipRule, validDurationMs: Long = DEFAULT_RULE_WINDOW_MS): SkipRule {
+        return rule.copy(validDurationMs = validDurationMs)
     }
 
     private fun upsertRulePackage(context: Context, rulePackage: RulePackage) {

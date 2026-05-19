@@ -196,7 +196,7 @@ object RuleImportManager {
         val warnings = buildList {
             if (area == RuleArea.Any) add("位置选为“不确定”会提高误触风险，已自动提高匹配分数要求。")
             if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
-                add("为减少误触，自定义规则已统一收紧为应用前台后的 6 秒内生效。")
+                add("为减少误触，自定义规则已统一收紧为应用前台后的 ${defaultWindowSeconds()} 秒内生效。")
             }
             if (coordinateFallback?.enabled == true) {
                 add("坐标兜底只会在普通节点匹配失败后执行，并仍受包名、时间窗和安全保护限制。")
@@ -234,7 +234,7 @@ object RuleImportManager {
             if (rule.area == RuleArea.Any) add("位置为“不确定”，建议只用于按钮文字非常明确的场景。")
             if (rule.minScore < 60) add("最低分过低，可能增加误触风险。")
             if (rule.validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
-                add("当前版本默认只在应用打开后的前 6 秒执行自定义规则。")
+                add("当前版本默认只在应用打开后的前 ${defaultWindowSeconds()} 秒执行自定义规则。")
             }
             if (rule.cooldownMs < MIN_COOLDOWN_MS) add("点击间隔低于 800ms，可能导致重复点击。")
             rule.coordinateFallback?.let { fallback ->
@@ -276,7 +276,7 @@ object RuleImportManager {
                       "action": "click",
                       "priority": 10,
                       "cooldownMs": 1200,
-                      "validDurationMs": 6000,
+                      "validDurationMs": 8000,
                       "minScore": 70,
                       "coordinateFallback": {
                         "enabled": false,
@@ -337,7 +337,7 @@ object RuleImportManager {
         }
         if (cooldownMs < MIN_COOLDOWN_MS) warningMessages += "$id 的 cooldownMs 低于 800，已导入但不推荐。"
         if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
-            warningMessages += "$id 的 validDurationMs 已收紧到 6000ms，使用过程中不再默认扫描。"
+            warningMessages += "$id 的 validDurationMs 已收紧到 ${RuleRepository.DEFAULT_RULE_WINDOW_MS}ms，使用过程中不再默认扫描。"
         }
         if (minScore !in 0..100) return RuleImportResult(false, "$id 的 minScore 必须在 0 到 100 之间")
         if (minScore < 60) warningMessages += "$id 的 minScore 较低，可能增加误触风险。"
@@ -424,5 +424,9 @@ object RuleImportManager {
             anchorContentDescriptions = optJSONArray("anchorContentDescriptions").toStringList(),
             anchorViewIds = optJSONArray("anchorViewIds").toStringList()
         )
+    }
+
+    private fun defaultWindowSeconds(): Long {
+        return RuleRepository.DEFAULT_RULE_WINDOW_MS / 1000
     }
 }

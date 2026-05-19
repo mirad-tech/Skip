@@ -18,7 +18,7 @@ data class SkipRule(
     val action: RuleAction = RuleAction.Click,
     val priority: Int = 10,
     val cooldownMs: Long = 1200L,
-    val validDurationMs: Long = 6_000L,
+    val validDurationMs: Long = 8_000L,
     val minScore: Int = 70,
     val coordinateFallback: CoordinateFallback? = null,
     val packageId: String = "local",

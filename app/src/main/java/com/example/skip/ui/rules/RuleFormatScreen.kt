@@ -28,7 +28,7 @@ fun RuleFormatScreen(onBack: () -> Unit) {
     SimpleScreenScaffold(title = "规则格式说明", onBack = onBack) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
-                text = "导入规则默认也只在应用打开后的前 6 秒生效。",
+                text = "导入规则默认也只在应用打开后的前 8 秒生效。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -55,11 +55,11 @@ fun RuleFormatScreen(onBack: () -> Unit) {
             )
             InfoCard(
                 title = "建议",
-                body = "validDurationMs 会统一收紧到 6000，cooldownMs 不建议小于 800，area=any 和低 minScore 都会增加误触风险。"
+                body = "validDurationMs 会统一收紧到 8000，cooldownMs 不建议小于 800，area=any 和低 minScore 都会增加误触风险。"
             )
             InfoCard(
                 title = "坐标兜底限制",
-                body = "coordinateFallback 默认关闭；启用时必须绑定 packageName、限制启动后 6 秒内、配置 anchorTexts/anchorContentDescriptions/anchorViewIds、cooldownMs 不低于 800，并且不能包含同意、授权、允许、支付、购买、确认支付、登录、注册、隐私政策、用户协议、安装、删除、卸载、转账、发送、提交等高风险内容。"
+                body = "coordinateFallback 默认关闭；启用时必须绑定 packageName、限制启动后 8 秒内、配置 anchorTexts/anchorContentDescriptions/anchorViewIds、cooldownMs 不低于 800，并且不能包含同意、授权、允许、支付、购买、确认支付、登录、注册、隐私政策、用户协议、安装、删除、卸载、转账、发送、提交等高风险内容。"
             )
 
             Button(

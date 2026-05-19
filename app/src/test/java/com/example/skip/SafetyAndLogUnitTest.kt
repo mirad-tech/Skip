@@ -1,6 +1,8 @@
 package com.example.skip
 
 import com.example.skip.data.LogRepository
+import com.example.skip.data.ClickLogBuffer
+import com.example.skip.data.ClickLogRateLimiter
 import com.example.skip.data.DiagnosticReportRepository
 import com.example.skip.data.IconManager
 import com.example.skip.data.InstalledAppStatus
@@ -28,6 +30,7 @@ import com.example.skip.model.SkipRule
 import com.example.skip.model.StatsWindow
 import com.example.skip.service.ClickEffectVerifier
 import com.example.skip.service.DelayedClickSafetyCheck
+import com.example.skip.service.SkipAccessibilityService
 import com.example.skip.ui.logs.CLICK_LOG_DISPLAY_LIMIT
 import com.example.skip.ui.logs.displayLogsForScreen
 import com.example.skip.ui.onboarding.ReleaseDisclosureCopy
@@ -144,13 +147,64 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
-    fun defaultRuleWindowIsSixSeconds() {
-        assertEquals(6_000L, RuleRepository.DEFAULT_RULE_WINDOW_MS)
+    fun defaultRuleWindowIsEightSeconds() {
+        assertEquals(8_000L, RuleRepository.DEFAULT_RULE_WINDOW_MS)
     }
 
     @Test
     fun defaultRuleMinScoreIsStableForDiagnostics() {
-        assertEquals(75, RuleRepository.DEFAULT_RULE_MIN_SCORE)
+        assertEquals(70, RuleRepository.DEFAULT_RULE_MIN_SCORE)
+    }
+
+    @Test
+    fun stableClickDelayIsShortEnoughForSplashSkips() {
+        assertEquals(100L, SkipAccessibilityService.STABLE_CLICK_DELAY_MS)
+    }
+
+    @Test
+    fun accessibilityNotificationTimeoutIsFiftyMs() {
+        val xml = File("src/main/res/xml/accessibility_service_config.xml").readText()
+
+        assertTrue(xml.contains("android:notificationTimeout=\"50\""))
+    }
+
+    @Test
+    fun defaultRuleConfigUsesEditableGlobalDefaults() {
+        val config = RuleRepository.defaultDefaultRuleConfig()
+
+        assertEquals(8_000L, config.validDurationMs)
+        assertEquals(70, config.minScore)
+        assertEquals(RuleArea.TopRight, config.area)
+        assertEquals(1_500L, config.cooldownMs)
+    }
+
+    @Test
+    fun defaultRuleConfigValidationKeepsSafeBounds() {
+        val high = RuleRepository.sanitizeDefaultRuleConfig(
+            RuleRepository.DefaultRuleConfig(
+                validDurationMs = 12_345L,
+                minScore = 95,
+                area = RuleArea.Any,
+                cooldownMs = 799L
+            )
+        )
+        val low = RuleRepository.sanitizeDefaultRuleConfig(
+            RuleRepository.DefaultRuleConfig(
+                validDurationMs = 6_000L,
+                minScore = 10,
+                area = RuleArea.BottomRight,
+                cooldownMs = 1_200L
+            )
+        )
+
+        assertEquals(8_000L, high.validDurationMs)
+        assertEquals(90, high.minScore)
+        assertEquals(RuleArea.Any, high.area)
+        assertEquals(800L, high.cooldownMs)
+        assertEquals(6_000L, low.validDurationMs)
+        assertEquals(60, low.minScore)
+        assertEquals(RuleArea.BottomRight, low.area)
+        assertEquals(1_200L, low.cooldownMs)
     }
 
     @Test
@@ -235,7 +289,7 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
-    fun customRuleFactoryAlsoUsesSixSeconds() {
+    fun customRuleFactoryAlsoUsesDefaultWindow() {
         val result = RuleImportManager.createSimpleRule(
             packageName = "com.example.news",
             appName = "News",
@@ -248,7 +302,7 @@ class SafetyAndLogUnitTest {
 
         assertTrue(result.success)
         assertEquals(RuleRepository.DEFAULT_RULE_WINDOW_MS, result.rules.first().validDurationMs)
-        assertTrue(result.warningMessages.any { it.contains("6 秒") })
+        assertTrue(result.warningMessages.any { it.contains("8 秒") })
     }
 
     @Test
@@ -537,7 +591,9 @@ class SafetyAndLogUnitTest {
             packageName = "com.example.news",
             appName = "News",
             matchTexts = listOf("跳过广告"),
-            coordinateFallback = fallback
+            coordinateFallback = fallback,
+            validDurationMs = 5000L,
+            cooldownMs = 1000L
         )
         val allowed = CoordinateFallbackMatcher.evaluate(
             rule = rule,
@@ -965,6 +1021,64 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun clickLogBufferReplacesDuplicatesAndCapsHistory() {
+        val buffer = ClickLogBuffer(maxCount = 3, maxAgeMs = 10_000L, duplicateWindowMs = 5_000L)
+
+        buffer.replaceAll(
+            listOf(
+                ClickLog(timeMillis = 1_000L, packageName = "com.example.news", stage = ClickLogStage.NoCandidateFound)
+            )
+        )
+        buffer.add(
+            ClickLog(timeMillis = 2_000L, packageName = "com.example.news", stage = ClickLogStage.NoCandidateFound),
+            now = 2_000L
+        )
+        buffer.add(
+            ClickLog(timeMillis = 3_000L, packageName = "com.example.video", stage = ClickLogStage.SkippedByTimeWindow),
+            now = 3_000L
+        )
+        buffer.add(
+            ClickLog(timeMillis = 4_000L, packageName = "com.example.chat", stage = ClickLogStage.RootWindowNull),
+            now = 4_000L
+        )
+        buffer.add(
+            ClickLog(timeMillis = 5_000L, packageName = "com.example.shop", stage = ClickLogStage.SkippedByLowScore),
+            now = 5_000L
+        )
+
+        val logs = buffer.snapshot()
+        assertEquals(3, logs.size)
+        assertEquals(listOf(5_000L, 4_000L, 3_000L), logs.map { it.timeMillis })
+        assertFalse(logs.any { it.timeMillis == 1_000L })
+    }
+
+    @Test
+    fun clickLogRateLimiterDropsNoisyRepeatsButKeepsClickResults() {
+        val limiter = ClickLogRateLimiter(windowMs = 2_000L)
+        val noisy = ClickLog(
+            timeMillis = 1_000L,
+            packageName = "com.android.systemui",
+            stage = ClickLogStage.SkippedBySafety,
+            failureReason = "safety_guard_blocked",
+            blockedReason = "system_or_launcher_package",
+            isSystemPackage = true,
+            blockedBySafety = true
+        )
+        val clickResult = ClickLog(
+            timeMillis = 1_000L,
+            packageName = "com.example.news",
+            stage = ClickLogStage.ClickActionSuccess,
+            success = true
+        )
+
+        assertTrue(limiter.shouldStore(noisy, now = 1_000L).allowed)
+        assertFalse(limiter.shouldStore(noisy.copy(timeMillis = 1_500L), now = 1_500L).allowed)
+        assertTrue(limiter.shouldStore(noisy.copy(timeMillis = 3_100L), now = 3_100L).allowed)
+        assertTrue(limiter.shouldStore(clickResult, now = 1_000L).allowed)
+        assertTrue(limiter.shouldStore(clickResult.copy(timeMillis = 1_100L), now = 1_100L).allowed)
+    }
+
+    @Test
     fun diagnosticReportContainsStableSchemaSanitizedLogsAndSummaryCounts() {
         val now = 10_000L
         val json = DiagnosticReportRepository.buildReportJson(
@@ -989,6 +1103,7 @@ class SafetyAndLogUnitTest {
                 serviceInterruptedAt = 0L,
                 lastClickAt = 9_000L,
                 lastFailureReason = "root_window_null",
+                otherAccessibilityServices = listOf("hello.litiaotiao.app/hello.litiaotiao.app.LttService"),
                 appPolicies = listOf(
                     AppPolicy(
                         packageName = "com.example.news",
@@ -1085,7 +1200,13 @@ class SafetyAndLogUnitTest {
                 )
             ),
             keywords = listOf("跳过"),
-            viewIdKeywords = listOf("skip")
+            viewIdKeywords = listOf("skip"),
+            defaultRuleConfig = RuleRepository.DefaultRuleConfig(
+                validDurationMs = 10_000L,
+                minScore = 65,
+                area = RuleArea.BottomRight,
+                cooldownMs = 1_800L
+            )
         )
 
         val report = com.example.skip.util.SimpleJson.parseObject(json)
@@ -1098,6 +1219,8 @@ class SafetyAndLogUnitTest {
         val reasonCounts = summary.optJSONObject("reasonCounts")!!
         val categoryCounts = summary.optJSONObject("categoryCounts")!!
         val rawSignalCounts = summary.optJSONObject("rawSignalCounts")!!
+        val otherAccessibilityServices = summary.optJSONArray("otherAccessibilityServices")!!
+        val logThrottleCounts = summary.optJSONObject("logThrottleCounts")!!
         val recentWindows = summary.optJSONObject("recentWindows")!!
         val defaultRuleRuntime = rulesSnapshot.optJSONObject("defaultRuleRuntime")!!
         val firstLog = clickLogs.optJSONObject(0)!!
@@ -1112,8 +1235,10 @@ class SafetyAndLogUnitTest {
         assertEquals(1, runtime.optInt("appPolicyCount"))
         assertEquals(1, rulesSnapshot.optInt("ruleCount"))
         assertEquals(1, rulesSnapshot.optInt("coordinateFallbackEnabledRuleCount"))
-        assertEquals(RuleRepository.DEFAULT_RULE_WINDOW_MS, defaultRuleRuntime.optLong("defaultRuleWindowMs"))
-        assertEquals(RuleRepository.DEFAULT_RULE_MIN_SCORE, defaultRuleRuntime.optInt("defaultRuleMinScore"))
+        assertEquals(10_000L, defaultRuleRuntime.optLong("defaultRuleWindowMs"))
+        assertEquals(65, defaultRuleRuntime.optInt("defaultRuleMinScore"))
+        assertEquals("bottom_right", defaultRuleRuntime.optString("defaultRuleArea"))
+        assertEquals(1_800L, defaultRuleRuntime.optLong("defaultRuleCooldownMs"))
         assertEquals(1, defaultRuleRuntime.optInt("keywordCount"))
         assertEquals(1, defaultRuleRuntime.optInt("viewIdKeywordCount"))
         assertEquals(6, clickLogs.length())
@@ -1135,6 +1260,9 @@ class SafetyAndLogUnitTest {
         assertEquals(1, categoryCounts.optInt("timeWindow"))
         assertEquals(2, rawSignalCounts.optInt("outsideDefaultWindow"))
         assertEquals(1, categoryCounts.optInt("safetyBlocked"))
+        assertEquals(1, otherAccessibilityServices.length())
+        assertEquals("hello.litiaotiao.app/hello.litiaotiao.app.LttService", otherAccessibilityServices.optString(0))
+        assertEquals(0, logThrottleCounts.values.size)
     }
 
     @Test

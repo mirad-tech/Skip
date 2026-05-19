@@ -1,5 +1,7 @@
 # AGENT.md
 
+最重要的是和我对话尽量用中文
+
 ## Project Summary
 
 Skip is a local-only Android AccessibilityService helper for low-risk splash-page skip/close controls. It is not an ad cracking, ad blocking, app bypass, reverse engineering, or code-copy project.

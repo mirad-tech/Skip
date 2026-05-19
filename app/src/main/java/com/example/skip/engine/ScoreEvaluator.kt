@@ -136,8 +136,9 @@ object ScoreEvaluator {
         if (listOf(textValue, descriptionValue).any { it.containsAdSignal() }) score += 10
         if (defaultRule && area == RuleArea.TopCenter) score -= 20
 
-        val onlyGenericClose = textRule != null &&
-            closeNeedsAdContext.any { textRule.equals(it, ignoreCase = true) } &&
+        val onlyGenericClose = (textRule != null || descriptionRule != null) &&
+            closeNeedsAdContext.any { matchedKeyword.equals(it, ignoreCase = true) } &&
+            idRule == null &&
             !viewId.containsAdOrSplashSignal() &&
             listOf(textValue, descriptionValue).none { it.containsAdSignal() }
         if (onlyGenericClose) score -= 35

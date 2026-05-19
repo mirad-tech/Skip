@@ -6,6 +6,7 @@
 /local.properties
 /keystore.properties
 /release.keystore
+/_google_drive_upload/
 /LITIAOTIAO_PLAN.md
 /tools/deep-clean-codex-git-loop.ps1
 /tools/codex-clean-backup-*/
@@ -29,4 +30,6 @@ local.properties
 
 *.apk
 *.aab
+downloads/diagnostics/
 downloads/*.apk
+!downloads/Skip-v1.0.0-release.apk

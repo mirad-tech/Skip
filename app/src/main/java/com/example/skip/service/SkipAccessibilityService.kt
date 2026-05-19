@@ -83,14 +83,15 @@ class SkipAccessibilityService : AccessibilityService() {
         } else {
             ""
         }
-        val eventContext = buildEventContext(
+        var eventContext = buildEventContext(
             eventType = event.eventType,
             eventPackageName = eventPackageName,
             packageName = currentPackage,
             activityName = activityName,
             windowId = event.windowId,
             root = root,
-            now = now
+            now = now,
+            defaultRuleWindowMs = RuleRepository.getDefaultRuleConfig(this).validDurationMs
         )
 
         logEvent(
@@ -158,6 +159,19 @@ class SkipAccessibilityService : AccessibilityService() {
         val customRules = rulePlan.customRules
         val rules = rulePlan.rules
         val windowExpiredScope = rulePlan.scope
+        val ruleWindowMs = rules.maxOfOrNull { it.validDurationMs } ?: eventContext.defaultRuleWindowMs
+        if (eventContext.defaultRuleWindowMs != ruleWindowMs) {
+            eventContext = buildEventContext(
+                eventType = event.eventType,
+                eventPackageName = eventPackageName,
+                packageName = currentPackage,
+                activityName = activityName,
+                windowId = event.windowId,
+                root = root,
+                now = now,
+                defaultRuleWindowMs = ruleWindowMs
+            )
+        }
 
         rulePlan.skipStage?.let { stage ->
             logEvent(
@@ -317,11 +331,13 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
+        mainHandler.removeCallbacksAndMessages(null)
         SettingsRepository.markServiceInterrupted(this)
         hidePopup()
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
         hidePopup()
         super.onDestroy()
     }
@@ -347,13 +363,14 @@ class SkipAccessibilityService : AccessibilityService() {
         activityName: String,
         windowId: Int,
         root: AccessibilityNodeInfo?,
-        now: Long
+        now: Long,
+        defaultRuleWindowMs: Long
     ): EventContext {
         val snapshot = EventWindowTracker.snapshot(
             state = foregroundState,
             activePackageName = packageName,
             now = now,
-            defaultRuleWindowMs = RuleRepository.DEFAULT_RULE_WINDOW_MS
+            defaultRuleWindowMs = defaultRuleWindowMs
         )
         return EventContext(
             eventType = eventType,
@@ -800,7 +817,8 @@ class SkipAccessibilityService : AccessibilityService() {
             activityName = pending.eventContext.activityName,
             windowId = pending.eventContext.windowId,
             root = root,
-            now = System.currentTimeMillis()
+            now = System.currentTimeMillis(),
+            defaultRuleWindowMs = pending.eventContext.defaultRuleWindowMs
         )
         val result = DelayedClickSafetyCheck.evaluate(
             pendingPackageName = pending.packageName,
@@ -1160,7 +1178,7 @@ class SkipAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val REPEAT_CLICK_GUARD_MS = 3000L
-        private const val STABLE_CLICK_DELAY_MS = 260L
+        internal const val STABLE_CLICK_DELAY_MS = 100L
         private const val CLICK_VERIFY_DELAY_MS = 360L
         private const val GESTURE_VERIFY_DELAY_MS = 460L
         private const val TOAST_COOLDOWN_MS = 60_000L
