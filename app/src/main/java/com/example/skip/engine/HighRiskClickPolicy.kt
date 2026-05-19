@@ -25,20 +25,21 @@ object HighRiskClickPolicy {
         "提交"
     )
     private val blockedTermsBySpecificity = blockedTerms.sortedByDescending { it.length }
+    private val normalizedBlockedTerms = blockedTermsBySpecificity.map { it.normalizeForPolicy() }
 
     fun evaluateTexts(values: Iterable<String>): HighRiskClickDecision {
         values.forEach { value ->
             val normalized = value.normalizeForPolicy()
             if (normalized.isBlank()) return@forEach
-            blockedTermsBySpecificity.firstOrNull { term ->
-                normalized.contains(term.normalizeForPolicy())
-            }?.let { term ->
-                return HighRiskClickDecision(
-                    allowed = false,
-                    reason = BLOCKED_REASON,
-                    matchedTerm = term,
-                    matchedText = value
-                )
+            normalizedBlockedTerms.forEachIndexed { index, normalizedTerm ->
+                if (normalized.contains(normalizedTerm)) {
+                    return HighRiskClickDecision(
+                        allowed = false,
+                        reason = BLOCKED_REASON,
+                        matchedTerm = blockedTermsBySpecificity[index],
+                        matchedText = value
+                    )
+                }
             }
         }
         return HighRiskClickDecision.Allowed

@@ -132,6 +132,9 @@ class MainActivity : ComponentActivity() {
                                 returnTarget = screen.returnTarget
                             )
                         },
+                        onDefaultRuleSettings = {
+                            currentScreen = AppScreen.DefaultRuleInfo
+                        },
                         onEditRule = { ruleId ->
                             currentScreen = AppScreen.CreateRule(
                                 ruleId = ruleId,

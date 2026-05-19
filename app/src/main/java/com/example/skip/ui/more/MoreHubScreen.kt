@@ -49,7 +49,7 @@ fun MoreHubScreen(
         MoreHubType.Apps -> listOf(
             HubItem("已安装应用", "搜索和配置", MoreDestination.InstalledApps),
             HubItem("黑名单", "关闭默认跳过", MoreDestination.Blacklist),
-            HubItem("默认规则", "开屏模板", MoreDestination.DefaultRuleInfo),
+            HubItem("默认规则", "全局模板", MoreDestination.DefaultRuleInfo),
             HubItem("规则列表", "启用和删除", MoreDestination.RuleList),
             HubItem("关键词", "默认匹配词", MoreDestination.Keywords),
             HubItem("格式说明", "JSON 示例", MoreDestination.RuleFormat)
@@ -105,7 +105,7 @@ fun MoreHubScreen(
                         }
                     )
                     Text(
-                        text = "为减少误触，Skip 默认只在应用打开后的前 6 秒工作，使用应用过程中不会自动点击弹窗。",
+                        text = "为减少误触，Skip 默认只在应用打开后的前 8 秒工作，使用应用过程中不会自动点击弹窗。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

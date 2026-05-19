@@ -120,11 +120,11 @@ class EventWindowTrackerUnitTest {
     }
 
     @Test
-    fun contentChangeAfterSixSecondsDoesNotRestartWindow() {
+    fun contentChangeAfterDefaultWindowDoesNotRestartWindow() {
         val snapshot = EventWindowTracker.snapshot(
             state = ForegroundWindowState("com.example.news", 1_000L),
             activePackageName = "com.example.news",
-            now = 7_100L,
+            now = 9_100L,
             defaultRuleWindowMs = RuleRepository.DEFAULT_RULE_WINDOW_MS
         )
 
@@ -133,11 +133,11 @@ class EventWindowTrackerUnitTest {
     }
 
     @Test
-    fun withinSixSecondsAllowsScanning() {
+    fun withinDefaultWindowAllowsScanning() {
         val snapshot = EventWindowTracker.snapshot(
             state = ForegroundWindowState("com.example.news", 1_000L),
             activePackageName = "com.example.news",
-            now = 6_000L,
+            now = 8_000L,
             defaultRuleWindowMs = RuleRepository.DEFAULT_RULE_WINDOW_MS
         )
 

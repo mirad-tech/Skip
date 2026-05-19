@@ -37,7 +37,8 @@ object SettingsRepository {
         val serviceInterruptedAt: Long,
         val lastClickAt: Long,
         val lastFailureReason: String,
-        val appPolicies: List<AppPolicy>
+        val appPolicies: List<AppPolicy>,
+        val otherAccessibilityServices: List<String> = emptyList()
     )
 
     fun isMasterEnabled(context: Context): Boolean {
@@ -313,6 +314,7 @@ object SettingsRepository {
             serviceInterruptedAt = getServiceInterruptedAt(context),
             lastClickAt = getLastClickAt(context),
             lastFailureReason = getLastFailureReason(context),
+            otherAccessibilityServices = AccessibilityUtil.getOtherEnabledAccessibilityServices(context),
             appPolicies = getAppPolicies(context)
         )
     }

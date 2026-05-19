@@ -105,7 +105,7 @@ fun SimpleRuleScreen(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
-                text = "为减少误触，规则默认只在应用打开后的前 6 秒内生效。",
+                text = "为减少误触，规则默认只在应用打开后的前 8 秒内生效。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

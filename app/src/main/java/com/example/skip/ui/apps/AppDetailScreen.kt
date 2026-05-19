@@ -43,6 +43,7 @@ fun AppDetailScreen(
     onBack: () -> Unit,
     onAddRule: (String) -> Unit,
     onImportJsonRule: (String) -> Unit,
+    onDefaultRuleSettings: () -> Unit,
     onEditRule: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -55,6 +56,9 @@ fun AppDetailScreen(
     }
     val logs = remember(packageName, refreshKey) {
         LogRepository.getClickLogs(context).filter { it.packageName == packageName }.take(5)
+    }
+    val defaultRuleConfig = remember(refreshKey) {
+        RuleRepository.getDefaultRuleConfig(context)
     }
     var showAddRuleOptions by remember { mutableStateOf(false) }
 
@@ -145,9 +149,16 @@ fun AppDetailScreen(
                     status.isSelfPackage -> "Skip 自身不会被扫描、匹配或自动点击。"
                     status.isProtected -> "该应用属于安全保护范围，默认不自动点击。"
                     !status.defaultSkipEnabled -> "已关闭本应用的默认开屏跳过，可继续保留自定义规则。"
-                    else -> "默认仅在应用打开后的前 6 秒内尝试跳过开屏广告。"
+                    else -> "默认模板：${formatDuration(defaultRuleConfig.validDurationMs)} · 最低分 ${defaultRuleConfig.minScore} · ${defaultRuleConfig.area.label} · 间隔 ${defaultRuleConfig.cooldownMs}ms。"
                 }
             )
+            TextButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !status.isProtected && !status.isSelfPackage,
+                onClick = onDefaultRuleSettings
+            ) {
+                Text("编辑默认规则设置")
+            }
 
             SectionTitle("自定义规则")
             if (rules.isEmpty()) {
