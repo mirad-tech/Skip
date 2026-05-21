@@ -18,6 +18,11 @@
 - `versionCode`：10
 - `versionName`：`1.0.2`
 
+### 发布文件
+
+- Release APK：`Skip-v1.0.2-release.apk`
+- SHA256：`670558DE4F87B235A307C975370C828AEAA8AB8B4D0B7038E6BF40419195C266`
+
 ### 验证摘要
 
 ```powershell
