@@ -1,4 +1,5 @@
 *.iml
+.codex-security-scans/
 .gradle/
 .gradle-home/
 .kotlin/
