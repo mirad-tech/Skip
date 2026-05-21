@@ -10,6 +10,8 @@ import java.util.Locale
 
 object ScoreEvaluator {
     private const val MAX_SKIP_TEXT_LENGTH = 32
+    private const val TRUSTED_GENERIC_CLOSE_BONUS = 15
+    private const val MAX_TRUSTED_GENERIC_CLOSE_AREA_RATIO = 0.02f
 
     private val blockedTextFragments = listOf(
         "跳过登录",
@@ -30,6 +32,10 @@ object ScoreEvaluator {
         "x",
         "我知道了",
         "知道了"
+    )
+
+    private val trustedGenericClosePackages = setOf(
+        "tv.danmaku.bili"
     )
 
     fun evaluate(
@@ -142,6 +148,13 @@ object ScoreEvaluator {
             !viewId.containsAdOrSplashSignal() &&
             listOf(textValue, descriptionValue).none { it.containsAdSignal() }
         if (onlyGenericClose) score -= 35
+        score += trustedGenericCloseBonusForDefaultRule(
+            packageName = rule.packageName,
+            matchedKeyword = matchedKeyword,
+            area = area,
+            candidateAreaRatio = areaRatio,
+            onlyGenericClose = onlyGenericClose
+        )
         val minScore = if (defaultRule && area == RuleArea.TopCenter) {
             rule.minScore + 20
         } else {
@@ -289,6 +302,23 @@ object ScoreEvaluator {
 
     internal fun isDefaultRuleAreaAllowedForCandidate(area: RuleArea): Boolean {
         return true
+    }
+
+    internal fun trustedGenericCloseBonusForDefaultRule(
+        packageName: String,
+        matchedKeyword: String,
+        area: RuleArea,
+        candidateAreaRatio: Float,
+        onlyGenericClose: Boolean
+    ): Int {
+        if (!onlyGenericClose) return 0
+        if (packageName.lowercase(Locale.ROOT) !in trustedGenericClosePackages) return 0
+        if (area != RuleArea.TopRight) return 0
+        if (candidateAreaRatio <= 0f || candidateAreaRatio > MAX_TRUSTED_GENERIC_CLOSE_AREA_RATIO) return 0
+        val isGenericCloseKeyword = closeNeedsAdContext.any { closeKeyword ->
+            matchedKeyword.equals(closeKeyword, ignoreCase = true)
+        }
+        return if (isGenericCloseKeyword) TRUSTED_GENERIC_CLOSE_BONUS else 0
     }
 
     data class ScoreEvaluation(
