@@ -9,16 +9,18 @@ object NodeScanner {
     fun scan(
         root: AccessibilityNodeInfo,
         rules: List<SkipRule>,
-        appElapsedMs: Long
+        appElapsedMs: Long,
+        currentActivityName: String = ""
     ): ScanReport {
-        if (rules.isEmpty()) {
+        val scopedRules = filterRulesForActivity(rules, currentActivityName)
+        if (scopedRules.isEmpty()) {
             return ScanReport(
                 bestMatch = null,
                 candidateCount = 0,
                 bestCandidateScore = null,
                 bestCandidateMinScore = null,
                 bestCandidateBounds = "",
-                failureReason = "no_enabled_rules"
+                failureReason = if (rules.isEmpty()) "no_enabled_rules" else "activity_scope_mismatch"
             )
         }
 
@@ -34,7 +36,7 @@ object NodeScanner {
             val node = queue.removeFirst()
 
             if (node.isVisibleToUser) {
-                rules.forEach { rule ->
+                scopedRules.forEach { rule ->
                     val candidate = RuleMatcher.evaluate(node, rule, appElapsedMs)
                     if (candidate != null) {
                         candidateCount++
@@ -96,9 +98,23 @@ object NodeScanner {
     fun findBestMatch(
         root: AccessibilityNodeInfo,
         rules: List<SkipRule>,
-        appElapsedMs: Long
+        appElapsedMs: Long,
+        currentActivityName: String = ""
     ): MatchResult? {
-        return scan(root, rules, appElapsedMs).bestMatch
+        return scan(root, rules, appElapsedMs, currentActivityName).bestMatch
+    }
+
+    fun filterRulesForActivity(
+        rules: List<SkipRule>,
+        currentActivityName: String
+    ): List<SkipRule> {
+        val current = currentActivityName.trim()
+        return rules.filter { rule ->
+            val scope = rule.activityName.trim()
+            scope.isBlank() ||
+                scope == "*" ||
+                (current.isNotBlank() && scope.equals(current, ignoreCase = true))
+        }
     }
 
     private fun MatchResult.isBetterThan(other: MatchResult?): Boolean {

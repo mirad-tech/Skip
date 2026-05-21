@@ -179,22 +179,21 @@ private fun JsonPreviewDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    val pkg = result.rulePackage
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("确认导入") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("规则包：${pkg?.name.orEmpty()}", fontWeight = FontWeight.Medium)
-                Text("作者：${pkg?.author.orEmpty()}")
-                Text("版本：${pkg?.version ?: 1}")
-                Text("更新时间：${pkg?.updateTime.orEmpty()}")
-                Text("描述：${pkg?.description.orEmpty()}")
-                Text("App 数量：${result.parsedAppCount}")
-                Text("规则数量：${result.parsedRuleCount}")
-                Text("重复处理：${strategy.label}")
-                result.warningMessages.forEach {
-                    Text("提示：$it", color = MaterialTheme.colorScheme.error)
+                RuleImportManager.previewImport(result, strategy).forEachIndexed { index, line ->
+                    Text(
+                        text = line,
+                        fontWeight = if (index == 0) FontWeight.Medium else null,
+                        color = if (line.startsWith("提示：") || line.startsWith("额外确认：")) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+                    )
                 }
             }
         },

@@ -2,6 +2,7 @@ package com.example.skip.data
 
 import com.example.skip.model.AppPolicy
 import com.example.skip.model.CoordinateFallback
+import com.example.skip.model.DuplicateStrategy
 import com.example.skip.model.MatchMode
 import com.example.skip.model.RuleAction
 import com.example.skip.model.RuleArea
@@ -175,9 +176,10 @@ object RuleImportManager {
             return RuleImportResult(false, "坐标兜底必须配置锚点规则")
         }
         val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
-            listOf(name) + cleanTexts + cleanDescriptions +
+            listOf(name) + cleanTexts + cleanDescriptions + cleanViewIds +
                 (coordinateFallback?.anchorTexts.orEmpty()) +
-                (coordinateFallback?.anchorContentDescriptions.orEmpty())
+                (coordinateFallback?.anchorContentDescriptions.orEmpty()) +
+                (coordinateFallback?.anchorViewIds.orEmpty())
         )
         if (!highRiskDecision.allowed) {
             return RuleImportResult(
@@ -353,8 +355,10 @@ object RuleImportManager {
             listOf(ruleJson.optString("name", id)) +
                 matchTexts +
                 matchContentDescriptions +
+                matchViewIds +
                 coordinateFallback?.anchorTexts.orEmpty() +
-                coordinateFallback?.anchorContentDescriptions.orEmpty()
+                coordinateFallback?.anchorContentDescriptions.orEmpty() +
+                coordinateFallback?.anchorViewIds.orEmpty()
         )
         if (!highRiskDecision.allowed) {
             return RuleImportResult(
@@ -426,7 +430,80 @@ object RuleImportManager {
         )
     }
 
+    fun previewImport(result: RuleImportResult, strategy: DuplicateStrategy): List<String> {
+        val pkg = result.rulePackage
+        return buildList {
+            add("规则包：${pkg?.name.orEmpty()}")
+            add("作者：${pkg?.author.orEmpty()}")
+            add("版本：${pkg?.version ?: 1}")
+            add("更新时间：${pkg?.updateTime.orEmpty()}")
+            add("描述：${pkg?.description.orEmpty()}")
+            add("App 数量：${result.parsedAppCount}")
+            add("规则数量：${result.parsedRuleCount}")
+            add("重复处理：${strategy.label}")
+            result.appPolicies.forEach { policy ->
+                add(
+                    "应用策略：${policy.packageName} defaultRuleEnabled=${policy.defaultRuleEnabled} " +
+                        "customRulesEnabled=${policy.customRulesEnabled}"
+                )
+            }
+            result.rules.forEach { rule ->
+                add(
+                    "规则：${rule.appName.ifBlank { rule.packageName }} (${rule.packageName}) / " +
+                        "${rule.name} enabled=${rule.enabled} activity=${rule.activityName}"
+                )
+                add(
+                    "匹配：matchTexts=${rule.matchTexts.previewValue()} " +
+                        "matchContentDescriptions=${rule.matchContentDescriptions.previewValue()} " +
+                        "matchViewIds=${rule.matchViewIds.previewValue()}"
+                )
+                add(
+                    "模式：textMatchMode=${rule.textMatchMode.value} " +
+                        "contentDescriptionMatchMode=${rule.contentDescriptionMatchMode.value} " +
+                        "viewIdMatchMode=${rule.viewIdMatchMode.value}"
+                )
+                add(
+                    "动作：action=${rule.action.value} area=${rule.area.value} " +
+                        "minScore=${rule.minScore} cooldownMs=${rule.cooldownMs}"
+                )
+                val fallback = rule.coordinateFallback
+                add(
+                    "坐标兜底：coordinateFallback=${if (fallback?.enabled == true) "enabled" else "disabled"} " +
+                        "xRatio=${fallback?.xRatio ?: 0f} yRatio=${fallback?.yRatio ?: 0f} " +
+                        "anchorTexts=${fallback?.anchorTexts.orEmpty().previewValue()} " +
+                        "anchorContentDescriptions=${fallback?.anchorContentDescriptions.orEmpty().previewValue()} " +
+                        "anchorViewIds=${fallback?.anchorViewIds.orEmpty().previewValue()}"
+                )
+                rule.extraConfirmationFlags().takeIf { it.isNotEmpty() }?.let { flags ->
+                    add("额外确认：${flags.joinToString("、")}")
+                }
+            }
+            result.warningMessages.forEach { add("提示：$it") }
+        }
+    }
+
     private fun defaultWindowSeconds(): Long {
         return RuleRepository.DEFAULT_RULE_WINDOW_MS / 1000
+    }
+
+    private fun List<String>.previewValue(): String {
+        return if (isEmpty()) "-" else joinToString(",")
+    }
+
+    private fun SkipRule.extraConfirmationFlags(): List<String> {
+        return buildList {
+            if (textMatchMode == MatchMode.Regex ||
+                contentDescriptionMatchMode == MatchMode.Regex ||
+                viewIdMatchMode == MatchMode.Regex
+            ) {
+                add("regex")
+            }
+            if (matchTexts.isEmpty() && matchContentDescriptions.isEmpty() && matchViewIds.isNotEmpty()) {
+                add("纯 View ID")
+            }
+            if (coordinateFallback?.enabled == true) add("坐标兜底")
+            if (minScore < 60) add("低 minScore")
+            if (area == RuleArea.Any) add("area=any")
+        }
     }
 }

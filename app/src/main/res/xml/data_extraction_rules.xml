@@ -5,9 +5,11 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
+        <exclude domain="sharedpref" path="skip_helper_config.xml" />
         <exclude domain="sharedpref" path="skip_icon_config.xml" />
     </cloud-backup>
     <device-transfer>
+        <exclude domain="sharedpref" path="skip_helper_config.xml" />
         <exclude domain="sharedpref" path="skip_icon_config.xml" />
     </device-transfer>
 </data-extraction-rules>

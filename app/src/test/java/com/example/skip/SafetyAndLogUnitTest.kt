@@ -1,5 +1,6 @@
 package com.example.skip
 
+import android.graphics.Rect
 import com.example.skip.data.LogRepository
 import com.example.skip.data.ClickLogBuffer
 import com.example.skip.data.ClickLogRateLimiter
@@ -12,7 +13,9 @@ import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.data.StatsRepository
 import com.example.skip.engine.CoordinateFallbackMatcher
+import com.example.skip.engine.ClickTargetInfo
 import com.example.skip.engine.HighRiskClickPolicy
+import com.example.skip.engine.NodeScanner
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.engine.ScoreEvaluator
@@ -22,6 +25,7 @@ import com.example.skip.model.ClickLogStage
 import com.example.skip.model.ClickMethodLog
 import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.CoordinateFallback
+import com.example.skip.model.DuplicateStrategy
 import com.example.skip.model.InstalledApp
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RulePackage
@@ -97,6 +101,43 @@ class SafetyAndLogUnitTest {
 
         assertTrue(decision.allowed)
         assertEquals("", decision.reason)
+    }
+
+    @Test
+    fun highRiskPolicyBlocksEnglishSensitiveTermsAndViewIds() {
+        listOf("pay", "login", "permission", "allow", "install").forEach { term ->
+            val decision = HighRiskClickPolicy.evaluateTexts(
+                listOf("com.example:id/${term}_button")
+            )
+
+            assertFalse("term should be blocked in View ID: $term", decision.allowed)
+            assertEquals(HighRiskClickPolicy.BLOCKED_REASON, decision.reason)
+        }
+    }
+
+    @Test
+    fun highRiskRuleEvaluationIncludesRuleAndCoordinateViewIds() {
+        val viewIdRule = SkipRule(
+            id = "view_id_pay",
+            source = RuleSource.JsonFile,
+            name = "关闭弹窗",
+            packageName = "com.example.news",
+            appName = "News",
+            matchViewIds = listOf("com.example:id/pay_button")
+        )
+        val coordinateAnchorRule = viewIdRule.copy(
+            id = "anchor_allow",
+            matchViewIds = emptyList(),
+            coordinateFallback = CoordinateFallback(
+                enabled = true,
+                xRatio = 0.9f,
+                yRatio = 0.12f,
+                anchorViewIds = listOf("com.example:id/allow_permission")
+            )
+        )
+
+        assertFalse(HighRiskClickPolicy.evaluateRule(viewIdRule).allowed)
+        assertFalse(HighRiskClickPolicy.evaluateRule(coordinateAnchorRule).allowed)
     }
 
     @Test
@@ -857,6 +898,58 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun coordinateFallbackRequiresActualSafeTargetAtGesturePoint() {
+        val safeTarget = ClickTargetInfo(
+            bounds = testRect(880, 200, 940, 260),
+            text = "跳过",
+            contentDescription = "",
+            viewId = "com.example.news:id/skip",
+            className = "android.widget.Button",
+            nodeClickable = true,
+            parentClickable = false,
+            enabled = true,
+            visibleToUser = true,
+            password = false,
+            input = false
+        )
+        val sensitiveTarget = safeTarget.copy(
+            text = "",
+            viewId = "com.example.news:id/pay_now"
+        )
+
+        val safeDecision = CoordinateFallbackMatcher.evaluateTargetAtPoint(
+            target = safeTarget,
+            targetPackageName = "com.example.news",
+            expectedPackageName = "com.example.news"
+        )
+        assertTrue(safeDecision.reason, safeDecision.allowed)
+        assertEquals(
+            "coordinate_fallback_target_missing",
+            CoordinateFallbackMatcher.evaluateTargetAtPoint(
+                target = null,
+                targetPackageName = "",
+                expectedPackageName = "com.example.news"
+            ).reason
+        )
+        assertEquals(
+            "coordinate_fallback_target_package_mismatch",
+            CoordinateFallbackMatcher.evaluateTargetAtPoint(
+                target = safeTarget,
+                targetPackageName = "com.android.settings",
+                expectedPackageName = "com.example.news"
+            ).reason
+        )
+        assertEquals(
+            HighRiskClickPolicy.BLOCKED_REASON,
+            CoordinateFallbackMatcher.evaluateTargetAtPoint(
+                target = sensitiveTarget,
+                targetPackageName = "com.example.news",
+                expectedPackageName = "com.example.news"
+            ).reason
+        )
+    }
+
+    @Test
     fun importedRulesRejectHighRiskTermsAndUnsafeCoordinateFallback() {
         val highRiskJson = """
             {
@@ -907,6 +1000,113 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun importedRulesRejectHighRiskViewIdsAndCoordinateAnchorViewIds() {
+        val highRiskViewIdJson = """
+            {
+              "name": "坏规则包",
+              "apps": [
+                {
+                  "packageName": "com.example.news",
+                  "rules": [
+                    {
+                      "id": "unsafe_view_id",
+                      "matchViewIds": ["com.example.news:id/pay_now"],
+                      "area": "top_right"
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+        val highRiskAnchorViewIdJson = """
+            {
+              "name": "坏规则包",
+              "apps": [
+                {
+                  "packageName": "com.example.news",
+                  "rules": [
+                    {
+                      "id": "unsafe_anchor_view_id",
+                      "matchTexts": ["跳过"],
+                      "coordinateFallback": {
+                        "enabled": true,
+                        "xRatio": 0.9,
+                        "yRatio": 0.12,
+                        "anchorViewIds": ["com.example.news:id/allow_permission"]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val highRiskViewId = RuleImportManager.parseRulePackage(highRiskViewIdJson)
+        val highRiskAnchorViewId = RuleImportManager.parseRulePackage(highRiskAnchorViewIdJson)
+
+        assertFalse(highRiskViewId.success)
+        assertTrue(highRiskViewId.errorMessage.contains(HighRiskClickPolicy.BLOCKED_REASON))
+        assertFalse(highRiskAnchorViewId.success)
+        assertTrue(highRiskAnchorViewId.errorMessage.contains(HighRiskClickPolicy.BLOCKED_REASON))
+    }
+
+    @Test
+    fun jsonImportPreviewIncludesAutomationScopeAndRiskFlags() {
+        val json = """
+            {
+              "name": "预览规则包",
+              "version": 2,
+              "author": "qa",
+              "appPolicies": [
+                {
+                  "packageName": "com.example.news",
+                  "defaultRuleEnabled": false,
+                  "customRulesEnabled": true
+                }
+              ],
+              "apps": [
+                {
+                  "packageName": "com.example.news",
+                  "appName": "News",
+                  "rules": [
+                    {
+                      "id": "preview_rule",
+                      "name": "右上角跳过",
+                      "enabled": true,
+                      "activityName": "com.example.news.SplashActivity",
+                      "matchTexts": ["跳过"],
+                      "matchViewIds": ["com.example.news:id/skip"],
+                      "textMatchMode": "regex",
+                      "area": "any",
+                      "minScore": 55,
+                      "coordinateFallback": {
+                        "enabled": true,
+                        "xRatio": 0.9,
+                        "yRatio": 0.12,
+                        "anchorTexts": ["开屏广告"]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+        val result = RuleImportManager.parseRulePackage(json)
+
+        val preview = RuleImportManager.previewImport(result, DuplicateStrategy.Override)
+            .joinToString("\n")
+
+        assertTrue(result.success)
+        assertTrue(preview.contains("com.example.news"))
+        assertTrue(preview.contains("右上角跳过"))
+        assertTrue(preview.contains("com.example.news.SplashActivity"))
+        assertTrue(preview.contains("matchViewIds=com.example.news:id/skip"))
+        assertTrue(preview.contains("textMatchMode=regex"))
+        assertTrue(preview.contains("coordinateFallback=enabled"))
+        assertTrue(preview.contains("额外确认"))
+    }
+
+    @Test
     fun sampleRulesJsonCanBeImportedSafely() {
         val sampleFile = listOf(
             File("sample_rules.json"),
@@ -922,6 +1122,29 @@ class SafetyAndLogUnitTest {
         assertTrue(
             HighRiskClickPolicy.evaluateRule(result.rules.first()).allowed
         )
+    }
+
+    @Test
+    fun activityScopedRulesOnlyMatchCurrentActivity() {
+        val scoped = SkipRule(
+            id = "splash_only",
+            source = RuleSource.JsonFile,
+            name = "开屏页跳过",
+            packageName = "com.example.news",
+            appName = "News",
+            activityName = "com.example.news.SplashActivity",
+            matchTexts = listOf("跳过")
+        )
+        val wildcard = scoped.copy(id = "wildcard", activityName = "*")
+
+        assertEquals(listOf(scoped, wildcard), NodeScanner.filterRulesForActivity(
+            rules = listOf(scoped, wildcard),
+            currentActivityName = "com.example.news.SplashActivity"
+        ))
+        assertEquals(listOf(wildcard), NodeScanner.filterRulesForActivity(
+            rules = listOf(scoped, wildcard),
+            currentActivityName = "com.example.news.HomeActivity"
+        ))
     }
 
     @Test
@@ -1397,6 +1620,83 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun diagnosticReportPrivacyLabelDisclosesTextOnlyRedactionAndMetadata() {
+        val json = DiagnosticReportRepository.buildReportJson(
+            versionName = "1.0.0",
+            exportTimeMillis = 1_000L,
+            deviceInfo = RomUtils.DeviceInfo(
+                manufacturer = "",
+                brand = "",
+                model = "",
+                androidVersion = "",
+                sdkInt = 0,
+                romType = RomUtils.RomType.Unknown
+            ),
+            runtimeState = SettingsRepository.DiagnosticSnapshot(
+                masterEnabled = true,
+                safetyModeEnabled = false,
+                debugLogEnabled = false,
+                releaseDisclosureAccepted = true,
+                accessibilityServiceEnabled = true,
+                serviceConnectedAt = 0L,
+                serviceActiveAt = 0L,
+                serviceInterruptedAt = 0L,
+                lastClickAt = 0L,
+                lastFailureReason = "",
+                appPolicies = listOf(AppPolicy(packageName = "com.example.news"))
+            ),
+            rules = listOf(
+                SkipRule(
+                    id = "metadata_rule",
+                    source = RuleSource.JsonFile,
+                    name = "跳过",
+                    packageName = "com.example.news",
+                    appName = "News",
+                    activityName = "com.example.news.SplashActivity",
+                    matchViewIds = listOf("com.example.news:id/skip")
+                )
+            ),
+            rulePackages = emptyList(),
+            clickLogs = listOf(
+                ClickLog(
+                    timeMillis = 1_000L,
+                    packageName = "com.example.news",
+                    activityName = "com.example.news.SplashActivity",
+                    viewIdResourceName = "com.example.news:id/skip"
+                )
+            ),
+            ruleLogs = emptyList(),
+            keywords = emptyList(),
+            viewIdKeywords = listOf("skip")
+        )
+
+        val report = com.example.skip.util.SimpleJson.parseObject(json)
+        val privacy = report.optJSONObject("privacy")!!
+
+        assertFalse(privacy.optBoolean("redacted"))
+        assertTrue(privacy.optBoolean("textRedacted"))
+        assertTrue(privacy.optBoolean("metadataIncluded"))
+        assertEquals("text_only", privacy.optString("redactionScope"))
+        assertTrue(privacy.optString("metadataNotice").contains("包名"))
+    }
+
+    @Test
+    fun backupRulesExcludeMainLocalAutomationState() {
+        val manifest = readProjectFile("app/src/main/AndroidManifest.xml")
+        val backupRules = readProjectFile("app/src/main/res/xml/backup_rules.xml")
+        val extractionRules = readProjectFile("app/src/main/res/xml/data_extraction_rules.xml")
+
+        assertTrue(manifest.contains("android:allowBackup=\"false\""))
+        assertTrue(backupRules.contains("path=\"skip_helper_config.xml\""))
+        assertEquals(2, Regex("path=\"skip_helper_config\\.xml\"").findAll(extractionRules).count())
+    }
+
+    @Test
+    fun disabledSettingLogsAreDebugOnly() {
+        assertTrue(ClickLogStage.SkippedByDisabledSetting.isDebugOnly)
+    }
+
+    @Test
     fun jsonExportWriterFailsWhenOutputStreamCannotBeOpened() {
         val result = runCatching {
             JsonExportWriter.writeJson(
@@ -1585,5 +1885,18 @@ class SafetyAndLogUnitTest {
             defaultSkipEnabled = false,
             isProtected = false
         )
+    }
+
+    private fun readProjectFile(path: String): String {
+        return listOf(File(path), File("../$path")).first { it.exists() }.readText()
+    }
+
+    private fun testRect(left: Int, top: Int, right: Int, bottom: Int): Rect {
+        return Rect().apply {
+            this.left = left
+            this.top = top
+            this.right = right
+            this.bottom = bottom
+        }
     }
 }

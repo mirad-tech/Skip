@@ -46,6 +46,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private var pendingClick: PendingClick? = null
     private var openingAdRescanKey: String? = null
     private var lastWindowStateChangedAt = 0L
+    private var currentActivityName: String = ""
     private val lastToastAt = mutableMapOf<String, Long>()
     private var popupView: View? = null
 
@@ -68,6 +69,11 @@ class SkipAccessibilityService : AccessibilityService() {
             lastWindowStateChangedAt = now
         }
         SettingsRepository.markServiceActive(this)
+        if (!SettingsRepository.isMasterEnabled(this)) {
+            currentActivityName = ""
+            SettingsRepository.setLastFailureReason(this, "automation_paused")
+            return
+        }
 
         val eventPackageName = event.packageName?.toString().orEmpty()
         val rootSelection = selectRootForEvent(eventPackageName)
@@ -80,11 +86,15 @@ class SkipAccessibilityService : AccessibilityService() {
         val currentPackage = packageResolution.resolvedPackageName
         updateForegroundWindow(currentPackage, now, windowStateChanged)
 
-        val activityName = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        val observedActivityName = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             event.className?.toString().orEmpty()
         } else {
             ""
         }
+        if (observedActivityName.isNotBlank()) {
+            currentActivityName = observedActivityName
+        }
+        val activityName = currentActivityName
         var eventContext = buildEventContext(
             eventType = event.eventType,
             eventPackageName = eventPackageName,
@@ -139,15 +149,6 @@ class SkipAccessibilityService : AccessibilityService() {
             )
             SettingsRepository.setLastFailureReason(this, "safety_guard_blocked")
             showDebugToast("已跳过自动点击：安全保护应用", "safety:$currentPackage")
-            return
-        }
-
-        if (!SettingsRepository.isMasterEnabled(this)) {
-            logEvent(
-                stage = ClickLogStage.SkippedByDisabledSetting,
-                eventContext = eventContext,
-                failureReason = "skipped_by_disabled_setting"
-            )
             return
         }
 
@@ -237,13 +238,14 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
-        val scan = NodeScanner.scan(root, activeRules, appElapsedMs)
+        val activityScopedRules = NodeScanner.filterRulesForActivity(activeRules, eventContext.activityName)
+        val scan = NodeScanner.scan(root, activeRules, appElapsedMs, eventContext.activityName)
         logScan(scan, eventContext)
         val match = scan.bestMatch
         if (match == null) {
             val fallback = CoordinateFallbackMatcher.find(
                 root = root,
-                rules = activeRules,
+                rules = activityScopedRules,
                 packageName = currentPackage,
                 selfPackageName = packageName,
                 elapsedSinceForegroundMs = appElapsedMs,
@@ -257,7 +259,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 startStableCoordinateFallback(
                     packageName = currentPackage,
                     fallback = fallback,
-                    activeRules = activeRules,
+                    activeRules = activityScopedRules,
                     signature = signature,
                     eventContext = eventContext,
                     scan = scan
@@ -328,6 +330,7 @@ class SkipAccessibilityService : AccessibilityService() {
         if (foregroundState != previous) {
             lastClickSignature = null
             openingAdRescanKey = null
+            currentActivityName = ""
         }
     }
 
@@ -483,7 +486,7 @@ class SkipAccessibilityService : AccessibilityService() {
             eventType = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             eventPackageName = packageName,
             packageName = currentPackage,
-            activityName = "opening_ad_rescan",
+            activityName = currentActivityName.ifBlank { "opening_ad_rescan" },
             windowId = root.windowId,
             root = root,
             now = now,
@@ -498,10 +501,11 @@ class SkipAccessibilityService : AccessibilityService() {
         if (activeRules.isEmpty()) return
 
         val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
-        val scan = NodeScanner.scan(root, activeRules, appElapsedMs)
+        val activityScopedRules = NodeScanner.filterRulesForActivity(activeRules, eventContext.activityName)
+        val scan = NodeScanner.scan(root, activeRules, appElapsedMs, eventContext.activityName)
         logScan(scan, eventContext)
         val match = scan.bestMatch ?: return
-        startClickFromMatch(currentPackage, match, activeRules, eventContext, scan)
+        startClickFromMatch(currentPackage, match, activityScopedRules, eventContext, scan)
     }
 
     private fun startClickFromMatch(
@@ -734,7 +738,7 @@ class SkipAccessibilityService : AccessibilityService() {
 
         val elapsed = (System.currentTimeMillis() - foregroundState.foregroundStartTimeMillis).coerceAtLeast(0L)
         val currentRules = pending.activeRules.filter { it.packageName == pending.packageName }
-        val scan = NodeScanner.scan(root ?: return, currentRules, elapsed)
+        val scan = NodeScanner.scan(root ?: return, currentRules, elapsed, pending.eventContext.activityName)
         val match = scan.bestMatch
         if (match == null) {
             finishPendingClick(

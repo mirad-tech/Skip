@@ -10,6 +10,7 @@ object HighRiskClickPolicy {
         "同意",
         "授权",
         "允许",
+        "付款",
         "支付",
         "购买",
         "确认支付",
@@ -22,7 +23,19 @@ object HighRiskClickPolicy {
         "卸载",
         "转账",
         "发送",
-        "提交"
+        "提交",
+        "验证码",
+        "密码",
+        "pay",
+        "payment",
+        "wallet",
+        "login",
+        "sign in",
+        "permission",
+        "allow",
+        "install",
+        "password",
+        "verify"
     )
     private val blockedTermsBySpecificity = blockedTerms.sortedByDescending { it.length }
     private val normalizedBlockedTerms = blockedTermsBySpecificity.map { it.normalizeForPolicy() }
@@ -50,10 +63,12 @@ object HighRiskClickPolicy {
             add(rule.name)
             addAll(rule.matchTexts)
             addAll(rule.matchContentDescriptions)
+            addAll(rule.matchViewIds)
             if (includeCoordinateAnchors) {
                 rule.coordinateFallback?.let { fallback ->
                     addAll(fallback.anchorTexts)
                     addAll(fallback.anchorContentDescriptions)
+                    addAll(fallback.anchorViewIds)
                 }
             }
         }
@@ -68,6 +83,11 @@ object HighRiskClickPolicy {
         return lowercase(Locale.ROOT)
             .replace("\\s+".toRegex(), "")
             .replace("　", "")
+            .replace("-", "")
+            .replace("_", "")
+            .replace(".", "")
+            .replace(":", "")
+            .replace("/", "")
             .trim()
     }
 }
