@@ -30,7 +30,10 @@ import com.example.skip.model.SkipRule
 import com.example.skip.model.StatsWindow
 import com.example.skip.service.ClickEffectVerifier
 import com.example.skip.service.DelayedClickSafetyCheck
+import com.example.skip.service.AppDisplayNamePolicy
+import com.example.skip.service.OpeningAdRescanPolicy
 import com.example.skip.service.SkipAccessibilityService
+import com.example.skip.service.StableClickDelayPolicy
 import com.example.skip.ui.logs.CLICK_LOG_DISPLAY_LIMIT
 import com.example.skip.ui.logs.displayLogsForScreen
 import com.example.skip.ui.onboarding.ReleaseDisclosureCopy
@@ -166,6 +169,13 @@ class SafetyAndLogUnitTest {
         val xml = File("src/main/res/xml/accessibility_service_config.xml").readText()
 
         assertTrue(xml.contains("android:notificationTimeout=\"50\""))
+    }
+
+    @Test
+    fun accessibilityServiceCanRetrieveInteractiveWindows() {
+        val xml = File("src/main/res/xml/accessibility_service_config.xml").readText()
+
+        assertTrue(xml.contains("flagReportViewIds|flagRetrieveInteractiveWindows"))
     }
 
     @Test
@@ -318,6 +328,127 @@ class SafetyAndLogUnitTest {
         ).forEach { area ->
             assertTrue(ScoreEvaluator.isDefaultRuleAreaAllowedForCandidate(area))
         }
+    }
+
+    @Test
+    fun bilibiliTrustedTopRightCloseGetsOnlyNarrowDefaultRuleBonus() {
+        val bilibiliBonus = ScoreEvaluator.trustedGenericCloseBonusForDefaultRule(
+            packageName = "tv.danmaku.bili",
+            matchedKeyword = "关闭",
+            area = RuleArea.TopRight,
+            candidateAreaRatio = 0.006f,
+            onlyGenericClose = true
+        )
+        val otherAppBonus = ScoreEvaluator.trustedGenericCloseBonusForDefaultRule(
+            packageName = "com.example.news",
+            matchedKeyword = "关闭",
+            area = RuleArea.TopRight,
+            candidateAreaRatio = 0.006f,
+            onlyGenericClose = true
+        )
+        val largeCandidateBonus = ScoreEvaluator.trustedGenericCloseBonusForDefaultRule(
+            packageName = "tv.danmaku.bili",
+            matchedKeyword = "关闭",
+            area = RuleArea.TopRight,
+            candidateAreaRatio = 0.08f,
+            onlyGenericClose = true
+        )
+
+        assertEquals(15, bilibiliBonus)
+        assertEquals(0, otherAppBonus)
+        assertEquals(0, largeCandidateBonus)
+    }
+
+    @Test
+    fun highConfidenceBuiltInSkipViewIdsClickWithoutStableDelay() {
+        val delay = StableClickDelayPolicy.delayMs(
+            ruleSource = RuleSource.BuiltIn,
+            score = 140,
+            minScore = 70,
+            candidateViewId = "com.duowan.kiwi:id/skip_time",
+            candidateText = "跳过",
+            candidateContentDescription = "",
+            isLargeCandidateBounds = false,
+            textKeywordIsStandaloneSkip = false,
+            clickTargetSource = ClickTargetSourceLog.NodeSelf,
+            defaultDelayMs = SkipAccessibilityService.STABLE_CLICK_DELAY_MS
+        )
+        val genericDelay = StableClickDelayPolicy.delayMs(
+            ruleSource = RuleSource.BuiltIn,
+            score = 80,
+            minScore = 70,
+            candidateViewId = "",
+            candidateText = "关闭",
+            candidateContentDescription = "",
+            isLargeCandidateBounds = false,
+            textKeywordIsStandaloneSkip = false,
+            clickTargetSource = ClickTargetSourceLog.NodeSelf,
+            defaultDelayMs = SkipAccessibilityService.STABLE_CLICK_DELAY_MS
+        )
+
+        assertEquals(0L, delay)
+        assertEquals(SkipAccessibilityService.STABLE_CLICK_DELAY_MS, genericDelay)
+    }
+
+    @Test
+    fun popupDisplayNameUsesResolvedAppLabelWhenRuleNameIsPackageName() {
+        val packageName = "com.duowan.kiwi"
+        val resolvedFromPackage = AppDisplayNamePolicy.displayName(
+            configuredAppName = packageName,
+            packageName = packageName,
+            resolveLabel = { "虎牙直播" }
+        )
+        val resolvedFromBlank = AppDisplayNamePolicy.displayName(
+            configuredAppName = "",
+            packageName = packageName,
+            resolveLabel = { "虎牙直播" }
+        )
+        val customName = AppDisplayNamePolicy.displayName(
+            configuredAppName = "自定义虎牙",
+            packageName = packageName,
+            resolveLabel = { "虎牙直播" }
+        )
+
+        assertEquals("虎牙直播", resolvedFromPackage)
+        assertEquals("虎牙直播", resolvedFromBlank)
+        assertEquals("自定义虎牙", customName)
+    }
+
+    @Test
+    fun openingAdRescanOnlySchedulesForEarlyRecoverableMisses() {
+        assertTrue(OpeningAdRescanPolicy.delaysMs.last() >= 3_000L)
+        assertTrue(
+            OpeningAdRescanPolicy.shouldSchedule(
+                stage = ClickLogStage.NoCandidateFound,
+                isWithinDefaultRuleWindow = true,
+                hasPendingClick = false,
+                hasActiveRules = true
+            )
+        )
+        assertTrue(
+            OpeningAdRescanPolicy.shouldSchedule(
+                stage = ClickLogStage.SkippedByLowScore,
+                isWithinDefaultRuleWindow = true,
+                hasPendingClick = false,
+                hasActiveRules = true
+            )
+        )
+        assertFalse(
+            OpeningAdRescanPolicy.shouldSchedule(
+                stage = ClickLogStage.NoCandidateFound,
+                isWithinDefaultRuleWindow = false,
+                hasPendingClick = false,
+                hasActiveRules = true
+            )
+        )
+        assertFalse(
+            OpeningAdRescanPolicy.shouldSchedule(
+                stage = ClickLogStage.SkippedBySafety,
+                isWithinDefaultRuleWindow = true,
+                hasPendingClick = false,
+                hasActiveRules = true
+            )
+        )
     }
 
     @Test
