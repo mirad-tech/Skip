@@ -1,5 +1,32 @@
 # Skip 发布说明
 
+## 1.0.2
+
+发布日期：2026-05-22
+
+### 更新内容
+
+- 修复安全扫描报告指出的坐标兜底边界：分发固定坐标手势前必须解析并检查坐标下真实控件。
+- 统一高风险点击策略，导入、保存、运行时检查都覆盖文本、content description、View ID 和坐标锚点。
+- 执行 `activityName` 规则作用域，避免 Activity 级规则在同包其它页面误命中。
+- JSON 导入预览展示目标应用、规则、匹配字段、动作、坐标兜底和额外确认风险点。
+- 关闭 Android 自动备份中的本地自动化状态备份，并明确诊断报告为“文本脱敏但保留元数据”。
+- 将首页操作文案从“关闭服务”调整为“暂停自动化”，暂停后不再持久化禁用状态事件日志。
+
+### 版本信息
+
+- `versionCode`：10
+- `versionName`：`1.0.2`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:assembleRelease
+git diff --check
+```
+
 ## 1.0.0
 
 发布日期：2026-05-19

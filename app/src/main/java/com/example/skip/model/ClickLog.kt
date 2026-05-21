@@ -95,7 +95,7 @@ enum class ClickLogStage(val value: String, val label: String, val isDebugOnly: 
     SkippedBySafety("skipped_by_safety", "安全保护"),
     SkippedByBlacklist("skipped_by_blacklist", "黑名单拦截"),
     SkippedSelfPackage("skipped_self_package", "忽略自身"),
-    SkippedByDisabledSetting("skipped_by_disabled_setting", "总开关关闭"),
+    SkippedByDisabledSetting("skipped_by_disabled_setting", "自动化已暂停", true),
     SkippedByCooldown("skipped_by_cooldown", "冷却中"),
     SkippedByTimeWindow("skipped_by_time_window", "时间窗外"),
     SkippedByLowScore("skipped_by_low_score", "分数不足");

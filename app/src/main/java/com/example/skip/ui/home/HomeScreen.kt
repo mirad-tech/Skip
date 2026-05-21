@@ -73,7 +73,7 @@ fun HomeScreen(
                         contentColor = Color.White
                     )
                 ) {
-                    Text(if (skipEnabled) "关闭服务" else "开启服务")
+                    Text(if (skipEnabled) "暂停自动化" else "开启自动化")
                 }
             }
 

@@ -94,27 +94,58 @@ object CoordinateFallbackMatcher {
                 hasAnchor = hasAnchor
             )
             if (!decision.allowed) return@firstNotNullOfOrNull null
-            val target = ClickTargetInfo(
-                bounds = Rect(decision.x, decision.y, decision.x + 1, decision.y + 1),
-                text = "",
-                contentDescription = "",
-                viewId = "",
-                className = "coordinate_fallback",
-                nodeClickable = false,
-                parentClickable = false,
-                enabled = true,
-                visibleToUser = true,
-                password = false,
-                input = false
+            val coordinateTarget = root.findTargetAtPoint(decision.x, decision.y)
+            val targetDecision = evaluateTargetAtPoint(
+                target = coordinateTarget?.target,
+                targetPackageName = coordinateTarget?.packageName.orEmpty(),
+                expectedPackageName = packageName
             )
+            if (!targetDecision.allowed || coordinateTarget == null) return@firstNotNullOfOrNull null
             CoordinateFallbackMatch(
                 rule = rule,
-                target = target,
+                target = coordinateTarget.target,
                 x = decision.x,
                 y = decision.y,
                 reason = decision.reason
             )
         }
+    }
+
+    fun evaluateTargetAtPoint(
+        target: ClickTargetInfo?,
+        targetPackageName: String,
+        expectedPackageName: String
+    ): CoordinateFallbackDecision {
+        if (target == null) {
+            return CoordinateFallbackDecision.blocked("coordinate_fallback_target_missing")
+        }
+        if (targetPackageName.isBlank() || targetPackageName != expectedPackageName) {
+            return CoordinateFallbackDecision.blocked("coordinate_fallback_target_package_mismatch")
+        }
+        if (SafetyGuard.isProtectedPackage(targetPackageName)) {
+            return CoordinateFallbackDecision.blocked("coordinate_fallback_safety_blocked")
+        }
+        if (target.bounds.isEmptyForPolicy() ||
+            !target.enabled ||
+            !target.visibleToUser ||
+            target.password ||
+            target.input
+        ) {
+            return CoordinateFallbackDecision.blocked("coordinate_fallback_target_unsafe")
+        }
+        val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
+            listOf(
+                target.text,
+                target.contentDescription,
+                target.viewId,
+                target.className,
+                targetPackageName
+            )
+        )
+        if (!highRiskDecision.allowed) {
+            return CoordinateFallbackDecision.blocked(highRiskDecision.reason)
+        }
+        return CoordinateFallbackDecision(allowed = true, reason = "coordinate_fallback_target_allowed")
     }
 
     private fun AccessibilityNodeInfo.containsAnchor(fallback: CoordinateFallback): Boolean {
@@ -128,6 +159,30 @@ object CoordinateFallbackMatcher {
             }
         }
         return false
+    }
+
+    private fun AccessibilityNodeInfo.findTargetAtPoint(x: Int, y: Int): CoordinateTarget? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(this)
+        var best: CoordinateTarget? = null
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (node.isVisibleToUser && bounds.containsForPolicy(x, y)) {
+                val candidate = CoordinateTarget(
+                    target = ClickExecutor.describeTarget(node),
+                    packageName = node.packageName?.toString().orEmpty()
+                )
+                if (best == null || bounds.area() < best!!.target.bounds.area()) {
+                    best = candidate
+                }
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
+            }
+        }
+        return best
     }
 
     private fun AccessibilityNodeInfo.matchesAnchor(fallback: CoordinateFallback): Boolean {
@@ -151,6 +206,18 @@ object CoordinateFallbackMatcher {
             .replace(".", "_")
             .replace(":", "_")
     }
+
+    private fun Rect.area(): Int {
+        return (right - left).coerceAtLeast(0) * (bottom - top).coerceAtLeast(0)
+    }
+
+    private fun Rect.isEmptyForPolicy(): Boolean {
+        return left >= right || top >= bottom
+    }
+
+    private fun Rect.containsForPolicy(x: Int, y: Int): Boolean {
+        return left < right && top < bottom && x >= left && x < right && y >= top && y < bottom
+    }
 }
 
 data class CoordinateFallbackDecision(
@@ -172,4 +239,9 @@ data class CoordinateFallbackMatch(
     val x: Int,
     val y: Int,
     val reason: String
+)
+
+private data class CoordinateTarget(
+    val target: ClickTargetInfo,
+    val packageName: String
 )

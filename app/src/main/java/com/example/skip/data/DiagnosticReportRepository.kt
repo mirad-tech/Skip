@@ -83,7 +83,11 @@ object DiagnosticReportRepository {
         return jsonObject(
             "localOnly" to true,
             "autoUpload" to false,
-            "redacted" to true,
+            "redacted" to false,
+            "textRedacted" to true,
+            "metadataIncluded" to true,
+            "redactionScope" to "text_only",
+            "metadataNotice" to "诊断报告会脱敏文本内容，但仍保留包名、Activity 和 View ID 等规则/日志元数据。",
             "screenContentIncluded" to false
         )
     }
