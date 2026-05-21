@@ -18,7 +18,7 @@ Current app version is defined in `app/build.gradle.kts`. Keep README and releas
 - Accessibility config: `app/src/main/res/xml/accessibility_service_config.xml`
 - Rule format: `RULES_GUIDE.md` and `sample_rules.json`
 - Diagnostics format: `LOG_DIAGNOSTIC_GUIDE.md`
-- Release procedure: `RELEASE_GUIDE.md`
+- Release procedure and compliance checklist: `RELEASE_GUIDE.md`
 
 Do not rely on stale local planning files. Check current source and current docs first.
 
@@ -59,6 +59,7 @@ Select-String -Path app\src\main\AndroidManifest.xml -Pattern "uses-permission"
 
 The following paths are local cache/build/output material and can be regenerated:
 
+- `.codex-security-scans/`
 - `.gradle/`
 - `.gradle-home/`
 - `.kotlin/`

@@ -38,12 +38,11 @@ Skip 是一款本地运行的 Android 开屏页面辅助工具。它基于 Andro
 
 ## 文档
 
-- [文档首页](docs/README.md)
-- [快速开始](docs/getting-started.md)
-- [应用管理与规则](docs/rules-and-apps.md)
-- [日志与诊断](docs/logs-and-reports.md)
-- [安全与隐私边界](docs/safety-and-privacy.md)
+- [使用文档](docs/README.md)
+- [规则指南](RULES_GUIDE.md)
+- [日志诊断包指南](LOG_DIAGNOSTIC_GUIDE.md)
 - [发布说明](RELEASE_NOTES.md)
+- [发布指南](RELEASE_GUIDE.md)
 
 ## 安全与隐私
 

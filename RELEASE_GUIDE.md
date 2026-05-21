@@ -10,9 +10,9 @@
 2. 确认发布文档已更新：
    - `README.md`
    - `RELEASE_NOTES.md`
-   - `COMPLIANCE_CHECKLIST.md`
    - `RELEASE_TEST_MATRIX.md`
    - `RULES_GUIDE.md`
+   - `LOG_DIAGNOSTIC_GUIDE.md`
 3. 确认 `sample_rules.json` 可导入。
 4. 确认没有新增无关敏感权限。
 
@@ -71,7 +71,24 @@ Select-String -Path app\src\debug\AndroidManifest.xml -Pattern "uses-permission"
 - 不出现定位、通讯录、相机、麦克风、短信、外部存储权限。
 - 主 Manifest 仅通过 service 声明 `android.permission.BIND_ACCESSIBILITY_SERVICE`。
 
-## 5. release 产物
+## 5. 合规检查
+
+每次发布前确认以下边界仍然成立：
+
+- 产品定位为本地自动点击辅助工具 / 开屏页面助手，不宣传为广告破解、广告屏蔽或绕过工具。
+- 不复制、不逆向、不照搬同类产品代码，不提交历史对照或逆向计划文件。
+- 默认本地处理，不上传屏幕内容、规则、日志、统计或个人数据。
+- 未接入广告 SDK、统计 SDK、联网 SDK 或远程规则订阅。
+- 导入、导出和诊断包生成必须由用户主动触发。
+- 首次启动展示明显披露页，用户未主动同意前不引导开启无障碍。
+- 用户拒绝后仍可查看隐私说明、权限说明和设置。
+- 不自动点击同意、授权、允许、支付、购买、确认支付、登录、注册、隐私政策、用户协议、安装、删除、卸载、转账、发送、提交等高风险控件。
+- 命中高风险内容时不执行 `ACTION_CLICK`、手势点击或坐标兜底，只写安全日志，原因标记为 `blocked_by_safety_policy`。
+- 坐标兜底默认关闭，不用于内置规则，只能用于用户手动创建或主动导入的低风险规则。
+- 坐标兜底规则必须绑定包名、限制启动后时间窗口、包含锚点、设置点击冷却，并通过高风险点击保护。
+- `keystore.properties` 和 `release.keystore` 不被 Git 跟踪，签名文件、密码和密钥未写入仓库。
+
+## 6. release 产物
 
 release APK 输出路径通常为：
 
@@ -88,7 +105,7 @@ app/build/outputs/apk/release/app-release.apk
 - 规则导入导出。
 - 日志和统计。
 
-## 6. 回滚流程
+## 7. 回滚流程
 
 如果发布后发现阻塞问题：
 
@@ -98,7 +115,7 @@ app/build/outputs/apk/release/app-release.apk
 4. 在修复分支添加回归测试。
 5. 重新执行 `RELEASE_TEST_MATRIX.md`。
 
-## 7. 发布阻塞条件
+## 8. 发布阻塞条件
 
 出现以下任一情况不得发布：
 
