@@ -402,10 +402,8 @@ private fun filterLogs(
         .filter { log ->
             when (resultFilter) {
                 null -> true
-                ResultFilter.Success -> log.success == true || log.stage == ClickLogStage.ClickEffectConfirmed
-                ResultFilter.Failed -> log.success == false ||
-                    log.stage == ClickLogStage.ClickFailed ||
-                    log.stage == ClickLogStage.ClickEffectUnknown
+                ResultFilter.Success -> LogRepository.isSuccessfulHit(log)
+                ResultFilter.Failed -> LogRepository.isFailureHit(log)
             }
         }
 }

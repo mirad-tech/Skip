@@ -282,8 +282,8 @@ object DiagnosticReportRepository {
         return jsonObject(
             "totalClickLogs" to clickLogs.size,
             "totalRuleLogs" to ruleLogs.size,
-            "successCount" to clickLogs.count { it.success == true || it.stage == ClickLogStage.ClickEffectConfirmed },
-            "failureCount" to clickLogs.count { it.success == false || it.stage == ClickLogStage.ClickFailed },
+            "successCount" to clickLogs.count(LogRepository::isSuccessfulHit),
+            "failureCount" to clickLogs.count(LogRepository::isFailureHit),
             "stageCounts" to countsJson(stageCounts),
             "reasonCounts" to countsJson(reasonCounts),
             "blockedReasonCounts" to countsJson(blockedReasonCounts),
@@ -359,11 +359,7 @@ object DiagnosticReportRepository {
     }
 
     private fun ClickLog.isSafetyBlocked(): Boolean {
-        return blockedBySafety ||
-            clickSkippedBySafetyMode ||
-            stage == ClickLogStage.SkippedBySafety ||
-            stage == ClickLogStage.ClickSkippedBySafetyMode ||
-            blockedReason.contains("safety", ignoreCase = true)
+        return LogRepository.isSafetyBlockedHit(this)
     }
 
     private fun ClickLog.isCoordinateFallbackLimited(): Boolean {

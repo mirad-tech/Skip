@@ -3,8 +3,6 @@ package com.example.skip.data
 import android.content.Context
 import com.example.skip.model.AppHitStats
 import com.example.skip.model.ClickLog
-import com.example.skip.model.ClickLogStage
-import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.HitStats
 import com.example.skip.model.RuleHitStats
 import com.example.skip.model.StatsWindow
@@ -34,10 +32,10 @@ object StatsRepository {
                     packageName = packageName,
                     appName = appLogs.firstOrNull { it.appName.isNotBlank() }?.appName.orEmpty(),
                     totalCount = appLogs.size,
-                    successCount = appLogs.count { it.isSuccessfulHit() },
-                    failureCount = appLogs.count { it.isFailureHit() },
-                    safetyBlockedCount = appLogs.count { it.isSafetyBlockedHit() },
-                    coordinateFallbackCount = appLogs.count { it.isCoordinateFallbackHit() },
+                    successCount = appLogs.count(LogRepository::isSuccessfulHit),
+                    failureCount = appLogs.count(LogRepository::isFailureHit),
+                    safetyBlockedCount = appLogs.count(LogRepository::isSafetyBlockedHit),
+                    coordinateFallbackCount = appLogs.count(LogRepository::isCoordinateFallbackHit),
                     lastHitTimeMillis = appLogs.maxOfOrNull { it.timeMillis } ?: 0L
                 )
             }
@@ -53,10 +51,10 @@ object StatsRepository {
                     ruleName = first.ruleName.ifBlank { "-" },
                     packageName = first.packageName,
                     totalCount = ruleLogs.size,
-                    successCount = ruleLogs.count { it.isSuccessfulHit() },
-                    failureCount = ruleLogs.count { it.isFailureHit() },
-                    safetyBlockedCount = ruleLogs.count { it.isSafetyBlockedHit() },
-                    coordinateFallbackCount = ruleLogs.count { it.isCoordinateFallbackHit() },
+                    successCount = ruleLogs.count(LogRepository::isSuccessfulHit),
+                    failureCount = ruleLogs.count(LogRepository::isFailureHit),
+                    safetyBlockedCount = ruleLogs.count(LogRepository::isSafetyBlockedHit),
+                    coordinateFallbackCount = ruleLogs.count(LogRepository::isCoordinateFallbackHit),
                     lastHitTimeMillis = ruleLogs.maxOfOrNull { it.timeMillis } ?: 0L
                 )
             }
@@ -70,28 +68,8 @@ object StatsRepository {
             appStats = appStats,
             ruleStats = ruleStats,
             stageStats = stageStats,
-            safetyBlockedCount = filtered.count { it.isSafetyBlockedHit() },
-            coordinateFallbackCount = filtered.count { it.isCoordinateFallbackHit() }
+            safetyBlockedCount = filtered.count(LogRepository::isSafetyBlockedHit),
+            coordinateFallbackCount = filtered.count(LogRepository::isCoordinateFallbackHit)
         )
-    }
-
-    private fun ClickLog.isSuccessfulHit(): Boolean {
-        return success == true || stage == ClickLogStage.ClickEffectConfirmed
-    }
-
-    private fun ClickLog.isFailureHit(): Boolean {
-        return success == false ||
-            stage == ClickLogStage.ClickFailed ||
-            stage == ClickLogStage.ClickEffectUnknown
-    }
-
-    private fun ClickLog.isSafetyBlockedHit(): Boolean {
-        return blockedBySafety ||
-            stage == ClickLogStage.SkippedBySafety ||
-            blockedReason == "blocked_by_safety_policy"
-    }
-
-    private fun ClickLog.isCoordinateFallbackHit(): Boolean {
-        return clickTargetSource == ClickTargetSourceLog.CoordinateFallback || isFixedCoordinateClick
     }
 }

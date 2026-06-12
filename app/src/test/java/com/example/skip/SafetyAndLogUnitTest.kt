@@ -1266,6 +1266,60 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun diagnosticSummaryCountsUnknownClickEffectAsFailureLikeStats() {
+        val logs = listOf(
+            ClickLog(
+                timeMillis = 1_000L,
+                packageName = "com.example.news",
+                appName = "News",
+                ruleId = "rule_a",
+                ruleName = "跳过广告",
+                stage = ClickLogStage.ClickEffectUnknown,
+                success = null
+            )
+        )
+
+        val stats = StatsRepository.aggregate(logs, StatsWindow.All, now = 10_000L)
+        val json = DiagnosticReportRepository.buildReportJson(
+            versionName = "1.0.0",
+            exportTimeMillis = 10_000L,
+            deviceInfo = RomUtils.DeviceInfo(
+                manufacturer = "",
+                brand = "",
+                model = "",
+                androidVersion = "",
+                sdkInt = 0,
+                romType = RomUtils.RomType.Unknown
+            ),
+            runtimeState = SettingsRepository.DiagnosticSnapshot(
+                masterEnabled = true,
+                safetyModeEnabled = false,
+                debugLogEnabled = false,
+                releaseDisclosureAccepted = true,
+                accessibilityServiceEnabled = true,
+                serviceConnectedAt = 0L,
+                serviceActiveAt = 0L,
+                serviceInterruptedAt = 0L,
+                lastClickAt = 0L,
+                lastFailureReason = "",
+                appPolicies = emptyList()
+            ),
+            rules = emptyList(),
+            rulePackages = emptyList(),
+            clickLogs = logs,
+            ruleLogs = emptyList(),
+            keywords = emptyList(),
+            viewIdKeywords = emptyList()
+        )
+        val summary = com.example.skip.util.SimpleJson.parseObject(json)
+            .optJSONObject("diagnosticSummary")!!
+
+        assertEquals(1, stats.appStats.first { it.packageName == "com.example.news" }.failureCount)
+        assertEquals(1, summary.optInt("failureCount"))
+        assertEquals(1, summary.optJSONObject("categoryCounts")!!.optInt("effectUnknown"))
+    }
+
+    @Test
     fun statsAggregateSafetyBlockedAndCoordinateFallbackCounts() {
         val logs = listOf(
             ClickLog(

@@ -178,6 +178,29 @@ object LogRepository {
         return log.toJson()
     }
 
+    internal fun isSuccessfulHit(log: ClickLog): Boolean {
+        return log.success == true || log.stage == ClickLogStage.ClickEffectConfirmed
+    }
+
+    internal fun isFailureHit(log: ClickLog): Boolean {
+        return log.success == false ||
+            log.stage == ClickLogStage.ClickFailed ||
+            log.stage == ClickLogStage.ClickEffectUnknown
+    }
+
+    internal fun isSafetyBlockedHit(log: ClickLog): Boolean {
+        return log.blockedBySafety ||
+            log.clickSkippedBySafetyMode ||
+            log.stage == ClickLogStage.SkippedBySafety ||
+            log.stage == ClickLogStage.ClickSkippedBySafetyMode ||
+            log.blockedReason == "blocked_by_safety_policy" ||
+            log.blockedReason.contains("safety", ignoreCase = true)
+    }
+
+    internal fun isCoordinateFallbackHit(log: ClickLog): Boolean {
+        return log.clickTargetSource == ClickTargetSourceLog.CoordinateFallback || log.isFixedCoordinateClick
+    }
+
     internal fun clickLogJsonFields(log: ClickLog): Map<String, Any> {
         return linkedMapOf(
             "timeMillis" to log.timeMillis,
