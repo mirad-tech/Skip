@@ -9,6 +9,7 @@ import com.example.skip.data.IconManager
 import com.example.skip.data.InstalledAppStatus
 import com.example.skip.data.JsonExportWriter
 import com.example.skip.data.RuleImportManager
+import com.example.skip.data.RuleLifecycleRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.data.StatsRepository
@@ -28,6 +29,7 @@ import com.example.skip.model.CoordinateFallback
 import com.example.skip.model.DuplicateStrategy
 import com.example.skip.model.InstalledApp
 import com.example.skip.model.RuleArea
+import com.example.skip.model.RuleImportResult
 import com.example.skip.model.RulePackage
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
@@ -1352,6 +1354,64 @@ class SafetyAndLogUnitTest {
         assertEquals(1, stats.coordinateFallbackCount)
         assertEquals(1, app.safetyBlockedCount)
         assertEquals(1, app.coordinateFallbackCount)
+    }
+
+    @Test
+    fun ruleLifecycleBuildsAuditLogsForLocalSaveAndJsonImport() {
+        val localRule = SkipRule(
+            id = "rule_a",
+            source = RuleSource.UserSimple,
+            name = "跳过广告",
+            packageName = "com.example.news",
+            appName = "News"
+        )
+        val importResult = RuleImportResult(
+            success = true,
+            parsedAppCount = 2,
+            parsedRuleCount = 3,
+            rulePackage = RulePackage(
+                id = "pkg_news",
+                name = "新闻规则包",
+                version = 1,
+                author = "tester",
+                updateTime = "",
+                description = "",
+                source = RuleSource.JsonFile
+            ),
+            rules = listOf(localRule)
+        )
+
+        val localLog = RuleLifecycleRepository.localRuleSavedLog(localRule, now = 1_000L)
+        val importLog = RuleLifecycleRepository.jsonImportSavedLog(
+            result = importResult,
+            savedCount = 3,
+            now = 2_000L
+        )!!
+        val failedLog = RuleLifecycleRepository.jsonImportFailedLog(
+            errorMessage = "格式错误",
+            now = 3_000L
+        )
+
+        assertEquals(1_000L, localLog.timeMillis)
+        assertEquals(RuleSource.UserSimple, localLog.source)
+        assertEquals("跳过广告", localLog.ruleName)
+        assertEquals("News", localLog.targetApp)
+        assertTrue(localLog.success)
+        assertEquals("已保存", localLog.reason)
+
+        assertEquals(2_000L, importLog.timeMillis)
+        assertEquals(RuleSource.JsonFile, importLog.source)
+        assertEquals("新闻规则包", importLog.ruleName)
+        assertEquals("2 个 App", importLog.targetApp)
+        assertTrue(importLog.success)
+        assertEquals("导入 3 条规则", importLog.reason)
+
+        assertEquals(3_000L, failedLog.timeMillis)
+        assertEquals(RuleSource.JsonFile, failedLog.source)
+        assertEquals("JSON 文件导入", failedLog.ruleName)
+        assertEquals("-", failedLog.targetApp)
+        assertFalse(failedLog.success)
+        assertEquals("格式错误", failedLog.reason)
     }
 
     @Test

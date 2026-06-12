@@ -34,14 +34,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
-import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleImportManager
+import com.example.skip.data.RuleLifecycleRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.model.CoordinateFallback
 import com.example.skip.model.InstalledApp
 import com.example.skip.model.RuleArea
-import com.example.skip.model.RuleLog
-import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import com.example.skip.ui.common.SimpleScreenScaffold
 import com.example.skip.util.InstalledAppUtils
@@ -357,19 +355,7 @@ fun SimpleRuleScreen(
             warnings = RuleImportManager.validateForSave(rule),
             onDismiss = { previewRule = null },
             onConfirm = {
-                RuleRepository.createLocalPackageIfNeeded(context)
-                RuleRepository.upsertRule(context, rule)
-                LogRepository.addRuleLog(
-                    context,
-                    RuleLog(
-                        timeMillis = System.currentTimeMillis(),
-                        source = RuleSource.UserSimple,
-                        ruleName = rule.name,
-                        targetApp = rule.appName,
-                        success = true,
-                        reason = "已保存"
-                    )
-                )
+                RuleLifecycleRepository.saveLocalRule(context, rule)
                 previewRule = null
                 onBack()
             }

@@ -27,13 +27,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleImportManager
+import com.example.skip.data.RuleLifecycleRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.model.DuplicateStrategy
 import com.example.skip.model.RuleImportResult
-import com.example.skip.model.RuleLog
-import com.example.skip.model.RuleSource
 import com.example.skip.ui.common.SimpleScreenScaffold
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -57,24 +55,13 @@ fun JsonImportScreen(onBack: () -> Unit) {
             error = "读取文件失败：${it.message.orEmpty()}"
             return@rememberLauncherForActivityResult
         }
-        val result = RuleImportManager.parseRulePackage(text, context.packageName)
+        val result = RuleLifecycleRepository.parseJsonImport(text = text, context = context)
         if (result.success) {
             importResult = result
             showPreview = true
             error = null
         } else {
             error = result.errorMessage
-            LogRepository.addRuleLog(
-                context,
-                RuleLog(
-                    timeMillis = System.currentTimeMillis(),
-                    source = RuleSource.JsonFile,
-                    ruleName = "JSON 文件导入",
-                    targetApp = "-",
-                    success = false,
-                    reason = result.errorMessage
-                )
-            )
         }
     }
     val exportLauncher = rememberLauncherForActivityResult(
@@ -150,20 +137,7 @@ fun JsonImportScreen(onBack: () -> Unit) {
                 strategy = strategy,
                 onDismiss = { showPreview = false },
                 onConfirm = {
-                    val saved = RuleRepository.saveImportResult(context, result, strategy)
-                    result.rulePackage?.let { pkg ->
-                        LogRepository.addRuleLog(
-                            context,
-                            RuleLog(
-                                timeMillis = System.currentTimeMillis(),
-                                source = RuleSource.JsonFile,
-                                ruleName = pkg.name,
-                                targetApp = "${result.parsedAppCount} 个 App",
-                                success = true,
-                                reason = "导入 $saved 条规则"
-                            )
-                        )
-                    }
+                    RuleLifecycleRepository.saveJsonImport(context, result, strategy)
                     showPreview = false
                     onBack()
                 }
