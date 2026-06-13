@@ -18,14 +18,14 @@ git diff --check
 .\gradlew.bat :app:assembleRelease
 ```
 
-本轮自动化结果（2026-05-14）：
+本轮自动化结果（2026-06-13，1.0.3）：
 
 | 命令 | 结果 | 备注 |
 | --- | --- | --- |
 | `.\gradlew.bat :app:testDebugUnitTest` | 通过 | exit 0 |
 | `.\gradlew.bat :app:assembleDebug` | 通过 | exit 0 |
-| `git diff --check` | 通过 | 仅有 CRLF 工作区提示，无空白错误 |
 | `.\gradlew.bat :app:assembleRelease` | 通过 | exit 0，R8 / shrinkResources 执行完成 |
+| `git diff --check` | 通过 | exit 0，仅有 CRLF 工作区提示，无空白错误 |
 
 ## Manifest 权限检查
 

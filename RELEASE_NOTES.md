@@ -1,5 +1,36 @@
 # Skip 发布说明
 
+## 1.0.3
+
+发布日期：2026-06-13
+
+### 更新内容
+
+- 统一点击日志结果语义，让成功、失败和安全阻止记录更一致。
+- 将规则生命周期变更从 UI 层移出，集中到规则仓储处理。
+- 抽离无障碍服务中的点击流程状态，降低服务主体复杂度。
+- 保留隐私、权限、说明等共享页面的返回来源。
+- 修复首次披露页后的无障碍用途说明返回来源，避免从系统 Hub 进入时丢失返回目标。
+
+### 版本信息
+
+- `versionCode`：11
+- `versionName`：`1.0.3`
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.3-release.apk`
+- SHA256：`3E2F0BB83F91E22164964084F49724170C2DD0E93E64769C1126B72895421AE9`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:assembleRelease
+git diff --check
+```
+
 ## 1.0.2
 
 发布日期：2026-05-22
