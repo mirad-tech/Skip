@@ -15,6 +15,7 @@ import com.example.skip.data.SettingsRepository
 import com.example.skip.data.StatsRepository
 import com.example.skip.engine.CoordinateFallbackMatcher
 import com.example.skip.engine.ClickTargetInfo
+import com.example.skip.engine.CoordinateFallbackMatch
 import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.NodeScanner
 import com.example.skip.engine.RulePlanProvider
@@ -34,8 +35,12 @@ import com.example.skip.model.RulePackage
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import com.example.skip.model.StatsWindow
+import com.example.skip.service.ClickFlowStateMachine
 import com.example.skip.service.ClickEffectVerifier
+import com.example.skip.service.ClickLogEventFactory
+import com.example.skip.service.ClickMatchSnapshot
 import com.example.skip.service.DelayedClickSafetyCheck
+import com.example.skip.service.EventContext
 import com.example.skip.service.AppDisplayNamePolicy
 import com.example.skip.service.OpeningAdRescanPolicy
 import com.example.skip.service.SkipAccessibilityService
@@ -687,6 +692,132 @@ class SafetyAndLogUnitTest {
         assertFalse(result.success)
         assertEquals(ClickLogStage.ClickEffectUnknown, result.stage)
         assertEquals("protected_package_after_click", result.reason)
+    }
+
+    @Test
+    fun clickFlowStateMachineCreatesAndRelocatesPendingStateOutsideServiceAdapter() {
+        val eventContext = testEventContext()
+        val firstTarget = testClickTarget(10, 10, 60, 40, text = "跳过")
+        val relocatedTarget = testClickTarget(12, 12, 62, 42, text = "关闭")
+        val firstMatch = testMatchSnapshot(
+            ruleId = "rule_a",
+            ruleName = "默认开屏跳过",
+            ruleSource = RuleSource.BuiltIn,
+            target = firstTarget,
+            score = 130,
+            matchedKeyword = "跳过"
+        )
+        val relocatedMatch = testMatchSnapshot(
+            ruleId = "rule_b",
+            ruleName = "重扫后规则",
+            ruleSource = RuleSource.JsonFile,
+            target = relocatedTarget,
+            score = 95,
+            matchedKeyword = "关闭"
+        )
+        val activeRules = listOf(
+            SkipRule(
+                id = "rule_a",
+                source = RuleSource.BuiltIn,
+                name = "默认开屏跳过",
+                packageName = "com.example.news",
+                appName = "News"
+            )
+        )
+
+        val pending = ClickFlowStateMachine.startFromMatch(
+            packageName = "com.example.news",
+            appName = "News",
+            match = firstMatch,
+            activeRules = activeRules,
+            signature = "sig:rule_a",
+            eventContext = eventContext,
+            delayBeforeClickMs = 100L,
+            startedAt = 5_000L
+        )
+        val relocated = ClickFlowStateMachine.relocateToMatch(pending, relocatedMatch)
+        val coordinatePending = ClickFlowStateMachine.startCoordinateFallback(
+            packageName = "com.example.news",
+            appName = "News",
+            fallback = CoordinateFallbackMatch(
+                rule = activeRules.first().copy(source = RuleSource.UserSimple, name = "坐标规则"),
+                target = firstTarget,
+                x = 900,
+                y = 120,
+                reason = "coordinate_fallback_allowed"
+            ),
+            activeRules = activeRules,
+            signature = "sig:coordinate",
+            eventContext = eventContext,
+            delayBeforeClickMs = 100L,
+            startedAt = 6_000L
+        )
+
+        assertEquals("rule_a", pending.ruleId)
+        assertEquals("default_splash_only", pending.ruleScope)
+        assertEquals("sig:rule_a", pending.signature)
+        assertEquals(100L, pending.delayBeforeClickMs)
+        assertEquals(activeRules, pending.activeRules)
+
+        assertEquals("rule_b", relocated.ruleId)
+        assertEquals("重扫后规则", relocated.ruleName)
+        assertEquals(RuleSource.JsonFile, relocated.ruleSource)
+        assertEquals("custom_splash_only", relocated.ruleScope)
+        assertEquals("关闭", relocated.matchedKeyword)
+        assertEquals("sig:rule_a", relocated.signature)
+        assertEquals(activeRules, relocated.activeRules)
+        assertEquals(eventContext, relocated.eventContext)
+
+        assertEquals("坐标规则 / 坐标兜底", coordinatePending.ruleName)
+        assertEquals("coordinate_fallback", coordinatePending.matchedKeyword)
+        assertEquals(ClickTargetSourceLog.CoordinateFallback, coordinatePending.clickTargetSource)
+        assertEquals(900, coordinatePending.coordinateX)
+        assertEquals(120, coordinatePending.coordinateY)
+        assertEquals(firstTarget, coordinatePending.target)
+        assertEquals(firstTarget, coordinatePending.candidate)
+    }
+
+    @Test
+    fun clickLogEventFactoryBuildsPendingLogOutsideServiceAdapter() {
+        val eventContext = testEventContext()
+        val target = testClickTarget(10, 10, 60, 40, text = "跳过", viewId = "skip_button")
+        val pending = ClickFlowStateMachine.startFromMatch(
+            packageName = "com.example.news",
+            appName = "News",
+            match = testMatchSnapshot(target = target),
+            activeRules = emptyList(),
+            signature = "sig:rule_a",
+            eventContext = eventContext,
+            delayBeforeClickMs = 100L,
+            startedAt = 5_000L
+        )
+
+        val log = ClickLogEventFactory.build(
+            stage = ClickLogStage.ClickAttempted,
+            eventContext = eventContext,
+            pending = pending,
+            now = 6_000L,
+            appName = pending.appName,
+            deviceRom = "Unknown",
+            safetyModeEnabled = false,
+            clickMethod = ClickMethodLog.DispatchGesture,
+            clickTargetSource = ClickTargetSourceLog.CoordinateFallback,
+            delayBeforeClickMs = 100L,
+            isSelfAppLabelCandidate = false
+        )
+
+        assertEquals(6_000L, log.timeMillis)
+        assertEquals("com.example.news", log.packageName)
+        assertEquals("News", log.appName)
+        assertEquals("rule_a", log.ruleId)
+        assertEquals("跳过", log.nodeText)
+        assertEquals("skip_button", log.viewIdResourceName)
+        assertEquals("10,10,60,40", log.boundsInScreen)
+        assertEquals(ClickMethodLog.DispatchGesture, log.clickMethod)
+        assertEquals(ClickTargetSourceLog.CoordinateFallback, log.clickTargetSource)
+        assertEquals(35, log.gestureX)
+        assertEquals(25, log.gestureY)
+        assertEquals("within_window", log.timeWindowDecision)
     }
 
     @Test
@@ -2012,5 +2143,77 @@ class SafetyAndLogUnitTest {
             this.right = right
             this.bottom = bottom
         }
+    }
+
+    private fun testEventContext(): EventContext {
+        return EventContext(
+            eventType = 2048,
+            eventPackageName = "com.example.news",
+            packageName = "com.example.news",
+            activityName = "com.example.news.SplashActivity",
+            windowId = 7,
+            rootWindowNull = false,
+            rootChildCount = 3,
+            canRetrieveWindowContent = true,
+            elapsedSinceAppStartMs = 500L,
+            foregroundPackage = "com.example.news",
+            foregroundStartTimeMillis = 1_000L,
+            elapsedSinceForegroundMs = 500L,
+            defaultRuleWindowMs = RuleRepository.DEFAULT_RULE_WINDOW_MS,
+            isWithinDefaultRuleWindow = true,
+            timeWindowDecision = "within_window"
+        )
+    }
+
+    private fun testMatchSnapshot(
+        ruleId: String = "rule_a",
+        ruleName: String = "跳过广告",
+        ruleSource: RuleSource = RuleSource.UserSimple,
+        target: ClickTargetInfo = testClickTarget(10, 10, 60, 40, text = "跳过"),
+        score: Int = 100,
+        matchedKeyword: String = "跳过"
+    ): ClickMatchSnapshot {
+        return ClickMatchSnapshot(
+            ruleId = ruleId,
+            ruleName = ruleName,
+            ruleSource = ruleSource,
+            appName = "News",
+            score = score,
+            minScore = 70,
+            matchedKeyword = matchedKeyword,
+            area = RuleArea.TopRight.value,
+            target = target,
+            candidate = target,
+            clickedParentDepth = 0,
+            candidateAreaRatio = 0.02f,
+            isLargeCandidateBounds = false,
+            defaultRuleAreaAllowed = true,
+            textKeywordIsStandaloneSkip = false,
+            clickTargetSource = ClickTargetSourceLog.NodeSelf
+        )
+    }
+
+    private fun testClickTarget(
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+        text: String = "",
+        contentDescription: String = "",
+        viewId: String = ""
+    ): ClickTargetInfo {
+        return ClickTargetInfo(
+            bounds = testRect(left, top, right, bottom),
+            text = text,
+            contentDescription = contentDescription,
+            viewId = viewId,
+            className = "android.widget.TextView",
+            nodeClickable = true,
+            parentClickable = false,
+            enabled = true,
+            visibleToUser = true,
+            password = false,
+            input = false
+        )
     }
 }
