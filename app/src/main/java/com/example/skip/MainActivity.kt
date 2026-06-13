@@ -78,17 +78,19 @@ class MainActivity : ComponentActivity() {
                         onAccept = {
                             SettingsRepository.setReleaseDisclosureAccepted(this, true)
                             releaseDisclosureAccepted = true
-                            currentScreen = AppScreen.AccessibilityPurpose
+                            currentScreen = AppScreen.AccessibilityPurpose()
                         },
                         onDecline = { currentScreen = AppScreen.Home },
-                        onOpenPrivacy = { currentScreen = AppScreen.Privacy },
-                        onOpenPermissions = { currentScreen = AppScreen.Permissions }
+                        onOpenPrivacy = { currentScreen = AppScreen.Privacy(returnScreen = AppScreen.Onboarding) },
+                        onOpenPermissions = { currentScreen = AppScreen.Permissions(returnScreen = AppScreen.Onboarding) }
                     )
 
-                    AppScreen.AccessibilityPurpose -> AccessibilityPurposeScreen(
-                        onBack = { currentScreen = AppScreen.Home },
+                    is AppScreen.AccessibilityPurpose -> AccessibilityPurposeScreen(
+                        onBack = { currentScreen = screen.returnScreen },
                         onOpenSettings = { openAccessibilitySettingsAfterPurpose() },
-                        onOpenPermissions = { currentScreen = AppScreen.Permissions }
+                        onOpenPermissions = {
+                            currentScreen = AppScreen.Permissions(returnScreen = screen)
+                        }
                     )
 
                     AppScreen.More -> MoreScreen(
@@ -133,7 +135,7 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         onDefaultRuleSettings = {
-                            currentScreen = AppScreen.DefaultRuleInfo
+                            currentScreen = AppScreen.DefaultRuleInfo(returnScreen = screen)
                         },
                         onEditRule = { ruleId ->
                             currentScreen = AppScreen.CreateRule(
@@ -149,8 +151,8 @@ class MainActivity : ComponentActivity() {
                         onApplyAndExit = { scheme -> applyIconAndExit(scheme) }
                     )
 
-                    AppScreen.DefaultRuleInfo -> DefaultRuleInfoScreen(
-                        onBack = { currentScreen = AppScreen.AppHub }
+                    is AppScreen.DefaultRuleInfo -> DefaultRuleInfoScreen(
+                        onBack = { currentScreen = screen.returnScreen }
                     )
 
                     AppScreen.Keywords -> KeywordScreen(
@@ -222,28 +224,28 @@ class MainActivity : ComponentActivity() {
                         onBack = { currentScreen = AppScreen.SystemHub }
                     )
 
-                    AppScreen.Permissions -> PrivacyScreen(
+                    is AppScreen.Permissions -> PrivacyScreen(
                         mode = PrivacyPageMode.Permissions,
                         versionName = appVersionName,
-                        onBack = { currentScreen = AppScreen.SystemHub }
+                        onBack = { currentScreen = screen.returnScreen }
                     )
 
-                    AppScreen.Privacy -> PrivacyScreen(
+                    is AppScreen.Privacy -> PrivacyScreen(
                         mode = PrivacyPageMode.Privacy,
                         versionName = appVersionName,
-                        onBack = { currentScreen = AppScreen.DataHub }
+                        onBack = { currentScreen = screen.returnScreen }
                     )
 
-                    AppScreen.Safety -> PrivacyScreen(
+                    is AppScreen.Safety -> PrivacyScreen(
                         mode = PrivacyPageMode.Safety,
                         versionName = appVersionName,
-                        onBack = { currentScreen = AppScreen.DataHub }
+                        onBack = { currentScreen = screen.returnScreen }
                     )
 
-                    AppScreen.About -> PrivacyScreen(
+                    is AppScreen.About -> PrivacyScreen(
                         mode = PrivacyPageMode.About,
                         versionName = appVersionName,
-                        onBack = { currentScreen = AppScreen.More }
+                        onBack = { currentScreen = screen.returnScreen }
                     )
                 }
             }
@@ -264,7 +266,7 @@ class MainActivity : ComponentActivity() {
 
     private fun requestEnableSkipService() {
         currentScreen = if (releaseDisclosureAccepted) {
-            AppScreen.AccessibilityPurpose
+            AppScreen.AccessibilityPurpose()
         } else {
             AppScreen.Onboarding
         }
@@ -303,7 +305,7 @@ class MainActivity : ComponentActivity() {
             MoreDestination.InstalledApps -> AppScreen.InstalledApps
             MoreDestination.Blacklist -> AppScreen.Blacklist
             MoreDestination.IconAppearance -> AppScreen.IconAppearance
-            MoreDestination.DefaultRuleInfo -> AppScreen.DefaultRuleInfo
+            MoreDestination.DefaultRuleInfo -> AppScreen.DefaultRuleInfo(returnScreen = AppScreen.AppHub)
             MoreDestination.SystemHub -> AppScreen.SystemHub
             MoreDestination.DataHub -> AppScreen.DataHub
             MoreDestination.Keywords -> AppScreen.Keywords
@@ -311,111 +313,23 @@ class MainActivity : ComponentActivity() {
             MoreDestination.RuleFormat -> AppScreen.RuleFormat
             MoreDestination.SystemCompat -> AppScreen.SystemCompat
             MoreDestination.AccessibilitySettings -> {
-                if (releaseDisclosureAccepted) AppScreen.AccessibilityPurpose else AppScreen.Onboarding
+                if (releaseDisclosureAccepted) {
+                    AppScreen.AccessibilityPurpose(returnScreen = AppScreen.SystemHub)
+                } else {
+                    AppScreen.Onboarding
+                }
             }
             MoreDestination.BatterySettings -> {
                 startActivity(SettingsIntentUtils.batteryOptimizationIntent(this))
                 AppScreen.SystemHub
             }
-            MoreDestination.Permissions -> AppScreen.Permissions
+            MoreDestination.Permissions -> AppScreen.Permissions(returnScreen = AppScreen.SystemHub)
             MoreDestination.RuleLogs -> AppScreen.RuleLogs
             MoreDestination.Logs -> AppScreen.Logs
             MoreDestination.Stats -> AppScreen.Stats
-            MoreDestination.Safety -> AppScreen.Safety
-            MoreDestination.Privacy -> AppScreen.Privacy
-            MoreDestination.About -> AppScreen.About
+            MoreDestination.Safety -> AppScreen.Safety(returnScreen = AppScreen.DataHub)
+            MoreDestination.Privacy -> AppScreen.Privacy(returnScreen = AppScreen.DataHub)
+            MoreDestination.About -> AppScreen.About(returnScreen = AppScreen.More)
         }
     }
-
-    private fun previousScreen(screen: AppScreen): AppScreen {
-        return when (screen) {
-            AppScreen.Home -> AppScreen.Home
-            AppScreen.Onboarding -> AppScreen.Home
-            AppScreen.AccessibilityPurpose -> AppScreen.Home
-            AppScreen.More -> AppScreen.Home
-            AppScreen.InstalledApps,
-            AppScreen.Blacklist,
-            AppScreen.DefaultRuleInfo,
-            AppScreen.Keywords,
-            AppScreen.RuleList,
-            AppScreen.RuleFormat -> AppScreen.AppHub
-            AppScreen.Permissions,
-            AppScreen.SystemCompat -> AppScreen.SystemHub
-            AppScreen.Privacy,
-            AppScreen.Safety,
-            AppScreen.Logs,
-            AppScreen.Stats,
-            AppScreen.RuleLogs -> AppScreen.DataHub
-            AppScreen.IconAppearance,
-            AppScreen.AppHub,
-            AppScreen.SystemHub,
-            AppScreen.DataHub,
-            AppScreen.About -> AppScreen.More
-            is AppScreen.AppDetail -> screen.returnTarget.toScreen()
-            is AppScreen.CreateRule -> appDetailOrHub(screen.packageName, screen.returnTarget)
-            is AppScreen.JsonImport -> appDetailOrHub(screen.returnPackageName, screen.returnTarget)
-        }
-    }
-
-    private fun appDetailOrHub(
-        packageName: String?,
-        returnTarget: AppDetailReturnTarget?
-    ): AppScreen {
-        return packageName?.let {
-            AppScreen.AppDetail(
-                packageName = it,
-                returnTarget = returnTarget ?: AppDetailReturnTarget.InstalledApps
-            )
-        } ?: AppScreen.AppHub
-    }
-}
-
-private enum class AppDetailReturnTarget {
-    InstalledApps,
-    Blacklist
-}
-
-private fun AppDetailReturnTarget.toScreen(): AppScreen {
-    return when (this) {
-        AppDetailReturnTarget.InstalledApps -> AppScreen.InstalledApps
-        AppDetailReturnTarget.Blacklist -> AppScreen.Blacklist
-    }
-}
-
-private sealed interface AppScreen {
-    data object Home : AppScreen
-    data object Onboarding : AppScreen
-    data object AccessibilityPurpose : AppScreen
-    data object More : AppScreen
-    data object InstalledApps : AppScreen
-    data object Blacklist : AppScreen
-    data class AppDetail(
-        val packageName: String,
-        val returnTarget: AppDetailReturnTarget
-    ) : AppScreen
-    data object IconAppearance : AppScreen
-    data object DefaultRuleInfo : AppScreen
-    data object AppHub : AppScreen
-    data object SystemHub : AppScreen
-    data object DataHub : AppScreen
-    data object Keywords : AppScreen
-    data object Logs : AppScreen
-    data object RuleLogs : AppScreen
-    data object Stats : AppScreen
-    data class CreateRule(
-        val ruleId: String?,
-        val packageName: String?,
-        val returnTarget: AppDetailReturnTarget?
-    ) : AppScreen
-    data class JsonImport(
-        val returnPackageName: String?,
-        val returnTarget: AppDetailReturnTarget?
-    ) : AppScreen
-    data object RuleList : AppScreen
-    data object RuleFormat : AppScreen
-    data object SystemCompat : AppScreen
-    data object Permissions : AppScreen
-    data object Privacy : AppScreen
-    data object Safety : AppScreen
-    data object About : AppScreen
 }

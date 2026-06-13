@@ -2090,6 +2090,19 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun navigationBackTargetsPreserveTheScreenThatOpenedSharedDestinations() {
+        val blacklistDetail = AppScreen.AppDetail(
+            packageName = "com.example.news",
+            returnTarget = AppDetailReturnTarget.Blacklist
+        )
+
+        assertEquals(AppScreen.Onboarding, previousScreen(AppScreen.Privacy(AppScreen.Onboarding)))
+        assertEquals(AppScreen.Onboarding, previousScreen(AppScreen.Permissions(AppScreen.Onboarding)))
+        assertEquals(blacklistDetail, previousScreen(AppScreen.DefaultRuleInfo(blacklistDetail)))
+        assertEquals(AppScreen.SystemHub, previousScreen(AppScreen.AccessibilityPurpose(AppScreen.SystemHub)))
+    }
+
+    @Test
     fun safetyModeDefaultsToOff() {
         assertFalse(SettingsRepository.defaultSafetyModeEnabled())
     }
