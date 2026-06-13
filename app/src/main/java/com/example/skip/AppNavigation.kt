@@ -15,7 +15,7 @@ internal fun AppDetailReturnTarget.toScreen(): AppScreen {
 internal fun previousScreen(screen: AppScreen): AppScreen {
     return when (screen) {
         AppScreen.Home -> AppScreen.Home
-        AppScreen.Onboarding -> AppScreen.Home
+        is AppScreen.Onboarding -> screen.declineTarget
         is AppScreen.AccessibilityPurpose -> screen.returnScreen
         AppScreen.More -> AppScreen.Home
         AppScreen.InstalledApps,
@@ -56,7 +56,10 @@ internal fun appDetailOrHub(
 
 internal sealed interface AppScreen {
     data object Home : AppScreen
-    data object Onboarding : AppScreen
+    data class Onboarding(
+        val nextAfterAccept: AppScreen = AccessibilityPurpose(),
+        val declineTarget: AppScreen = Home
+    ) : AppScreen
     data class AccessibilityPurpose(val returnScreen: AppScreen = Home) : AppScreen
     data object More : AppScreen
     data object InstalledApps : AppScreen

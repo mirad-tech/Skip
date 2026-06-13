@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
         IconManager.syncCurrentScheme(applicationContext)
         refreshRuntimeState()
         if (!releaseDisclosureAccepted) {
-            currentScreen = AppScreen.Onboarding
+            currentScreen = AppScreen.Onboarding()
         }
         setContent {
             SkipTheme {
@@ -74,15 +74,15 @@ class MainActivity : ComponentActivity() {
                         onOpenMore = { currentScreen = AppScreen.More }
                     )
 
-                    AppScreen.Onboarding -> OnboardingDisclosureScreen(
+                    is AppScreen.Onboarding -> OnboardingDisclosureScreen(
                         onAccept = {
                             SettingsRepository.setReleaseDisclosureAccepted(this, true)
                             releaseDisclosureAccepted = true
-                            currentScreen = AppScreen.AccessibilityPurpose()
+                            currentScreen = screen.nextAfterAccept
                         },
-                        onDecline = { currentScreen = AppScreen.Home },
-                        onOpenPrivacy = { currentScreen = AppScreen.Privacy(returnScreen = AppScreen.Onboarding) },
-                        onOpenPermissions = { currentScreen = AppScreen.Permissions(returnScreen = AppScreen.Onboarding) }
+                        onDecline = { currentScreen = screen.declineTarget },
+                        onOpenPrivacy = { currentScreen = AppScreen.Privacy(returnScreen = screen) },
+                        onOpenPermissions = { currentScreen = AppScreen.Permissions(returnScreen = screen) }
                     )
 
                     is AppScreen.AccessibilityPurpose -> AccessibilityPurposeScreen(
@@ -268,13 +268,13 @@ class MainActivity : ComponentActivity() {
         currentScreen = if (releaseDisclosureAccepted) {
             AppScreen.AccessibilityPurpose()
         } else {
-            AppScreen.Onboarding
+            AppScreen.Onboarding()
         }
     }
 
     private fun openAccessibilitySettingsAfterPurpose() {
         if (!releaseDisclosureAccepted) {
-            currentScreen = AppScreen.Onboarding
+            currentScreen = AppScreen.Onboarding()
             return
         }
         SettingsRepository.setMasterEnabled(this, true)
@@ -316,7 +316,12 @@ class MainActivity : ComponentActivity() {
                 if (releaseDisclosureAccepted) {
                     AppScreen.AccessibilityPurpose(returnScreen = AppScreen.SystemHub)
                 } else {
-                    AppScreen.Onboarding
+                    AppScreen.Onboarding(
+                        nextAfterAccept = AppScreen.AccessibilityPurpose(
+                            returnScreen = AppScreen.SystemHub
+                        ),
+                        declineTarget = AppScreen.SystemHub
+                    )
                 }
             }
             MoreDestination.BatterySettings -> {

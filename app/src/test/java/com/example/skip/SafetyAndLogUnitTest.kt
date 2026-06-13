@@ -2095,9 +2095,23 @@ class SafetyAndLogUnitTest {
             packageName = "com.example.news",
             returnTarget = AppDetailReturnTarget.Blacklist
         )
+        val onboardingFromSystemHub = AppScreen.Onboarding(
+            nextAfterAccept = AppScreen.AccessibilityPurpose(returnScreen = AppScreen.SystemHub),
+            declineTarget = AppScreen.SystemHub
+        )
+        val accessibilityPurposeFromSystemHub =
+            onboardingFromSystemHub.nextAfterAccept as AppScreen.AccessibilityPurpose
 
-        assertEquals(AppScreen.Onboarding, previousScreen(AppScreen.Privacy(AppScreen.Onboarding)))
-        assertEquals(AppScreen.Onboarding, previousScreen(AppScreen.Permissions(AppScreen.Onboarding)))
+        assertEquals(AppScreen.Home, previousScreen(AppScreen.Onboarding()))
+        assertEquals(
+            AppScreen.SystemHub,
+            accessibilityPurposeFromSystemHub.returnScreen
+        )
+        assertEquals(AppScreen.SystemHub, previousScreen(accessibilityPurposeFromSystemHub))
+        assertEquals(onboardingFromSystemHub, previousScreen(AppScreen.Privacy(onboardingFromSystemHub)))
+        assertEquals(onboardingFromSystemHub, previousScreen(AppScreen.Permissions(onboardingFromSystemHub)))
+        assertEquals(AppScreen.Onboarding(), previousScreen(AppScreen.Privacy(AppScreen.Onboarding())))
+        assertEquals(AppScreen.Onboarding(), previousScreen(AppScreen.Permissions(AppScreen.Onboarding())))
         assertEquals(blacklistDetail, previousScreen(AppScreen.DefaultRuleInfo(blacklistDetail)))
         assertEquals(AppScreen.SystemHub, previousScreen(AppScreen.AccessibilityPurpose(AppScreen.SystemHub)))
     }
