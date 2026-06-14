@@ -31,7 +31,5 @@ local.properties
 
 *.apk
 *.aab
-downloads/diagnostics/
-downloads/*.apk
-!downloads/Skip-v1.0.0-release.apk
+/downloads/
 logs/

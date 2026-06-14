@@ -86,7 +86,7 @@ git diff --check
 
 ### 发布文件
 
-- Release APK：`downloads/Skip-v1.0.0-release.apk`
+- Release APK：`https://github.com/mirad-tech/Skip/releases/download/v1.0.0/Skip-v1.0.0-release.apk`
 - SHA256：`A73F1AFD0ABDB5FBC898D00D50DE2E70B1C42722BC4353DCF1DC8ECFA4F89473`
 
 ### 验证摘要
