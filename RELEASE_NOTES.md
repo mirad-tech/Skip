@@ -1,5 +1,36 @@
 # Skip 发布说明
 
+## 1.0.4
+
+发布日期：2026-06-17
+
+### 更新内容
+
+- 默认关闭 Chrome 内置开屏跳过规则，避免搜索页左上角 `+` 被误点；Chrome 自定义规则仍可显式启用。
+- 收紧默认规则的广告信号识别，避免 `attachments_add` 这类普通 View ID 被当作广告信号。
+- 移除 B 站泛关闭控件特权加分，避免视频页 `关闭弹幕` 被误点。
+- 增加延迟点击前的重定位一致性检查，防止 100ms 稳定等待后换成语义不同的新目标。
+- 补充 Chrome `+`、B 站 `关闭弹幕` 和 B 站开屏 `跳过 5` 的回归验证。
+
+### 版本信息
+
+- `versionCode`：12
+- `versionName`：`1.0.4`
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.4-release.apk`
+- SHA256：`ECB7A5765137EE0D995503B59F49A5D5743F802E6FDBBEB21CDFFE846E07F65C`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:assembleRelease
+git diff --check
+```
+
 ## 1.0.3
 
 发布日期：2026-06-13

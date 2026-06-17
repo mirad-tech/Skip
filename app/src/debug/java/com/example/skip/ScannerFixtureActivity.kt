@@ -12,7 +12,10 @@ import android.widget.ImageView
 class ScannerFixtureActivity : Activity() {
     enum class Scenario {
         SplashSkipButton,
-        MobileTicketHome
+        MobileTicketHome,
+        ChromeLocationBarAttachmentAdd,
+        BilibiliDanmakuClose,
+        BilibiliCountdownSkip
     }
 
     companion object {
@@ -32,6 +35,18 @@ class ScannerFixtureActivity : Activity() {
                     Scenario.MobileTicketHome -> addView(
                         MobileTicketAnnouncementCloseButton(context),
                         FrameLayout.LayoutParams(152, 140)
+                    )
+                    Scenario.ChromeLocationBarAttachmentAdd -> addView(
+                        ChromeLocationBarAttachmentAddButton(context),
+                        FrameLayout.LayoutParams(224, 224)
+                    )
+                    Scenario.BilibiliDanmakuClose -> addView(
+                        BilibiliDanmakuCloseButton(context),
+                        FrameLayout.LayoutParams(178, 120)
+                    )
+                    Scenario.BilibiliCountdownSkip -> addView(
+                        BilibiliCountdownSkipButton(context),
+                        FrameLayout.LayoutParams(356, 178)
                     )
                 }
             }
@@ -87,5 +102,67 @@ private class MobileTicketAnnouncementCloseButton(
         info?.setEnabled(true)
         info?.setClickable(true)
         info?.setBoundsInScreen(Rect(1288, 2783, 1440, 2923))
+    }
+}
+
+private class ChromeLocationBarAttachmentAddButton(
+    context: android.content.Context
+) : ImageView(context) {
+    init {
+        contentDescription = "打开或关闭上下文弹出式窗口"
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.contentDescription = "打开或关闭上下文弹出式窗口"
+        info?.viewIdResourceName = "com.android.chrome:id/location_bar_attachments_add"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(32, 152, 256, 376))
+    }
+}
+
+private class BilibiliDanmakuCloseButton(
+    context: android.content.Context
+) : ImageView(context) {
+    init {
+        contentDescription = "关闭弹幕"
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.contentDescription = "关闭弹幕"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(1213, 672, 1391, 792))
+    }
+}
+
+private class BilibiliCountdownSkipButton(
+    context: android.content.Context
+) : Button(context) {
+    init {
+        text = "跳过 5"
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.text = "跳过 5"
+        info?.viewIdResourceName = "tv.danmaku.bili:id/count_down"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(1020, 2911, 1376, 3089))
     }
 }

@@ -43,6 +43,7 @@ import com.example.skip.service.DelayedClickSafetyCheck
 import com.example.skip.service.EventContext
 import com.example.skip.service.AppDisplayNamePolicy
 import com.example.skip.service.OpeningAdRescanPolicy
+import com.example.skip.service.PendingClickRelocationPolicy
 import com.example.skip.service.SkipAccessibilityService
 import com.example.skip.service.StableClickDelayPolicy
 import com.example.skip.ui.logs.CLICK_LOG_DISPLAY_LIMIT
@@ -347,6 +348,37 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun rulePlanProviderDisablesChromeBuiltInRuleButKeepsCustomRules() {
+        val customRule = SkipRule(
+            id = "chrome_custom",
+            source = RuleSource.UserSimple,
+            name = "Chrome 自定义",
+            packageName = "com.android.chrome",
+            appName = "Chrome",
+            priority = 100
+        )
+        val builtInRule = customRule.copy(
+            id = "built_in_com.android.chrome",
+            source = RuleSource.BuiltIn,
+            name = "默认开屏跳过",
+            priority = 1
+        )
+
+        val plan = RulePlanProvider.plan(
+            packageName = "com.android.chrome",
+            selfPackageName = "com.example.skip",
+            policy = AppPolicy.defaultFor("com.android.chrome"),
+            customRules = listOf(customRule),
+            builtInRule = builtInRule
+        )
+
+        assertEquals(listOf("chrome_custom"), plan.rules.map { it.id })
+        assertEquals(listOf("chrome_custom"), plan.customRules.map { it.id })
+        assertEquals(null, plan.builtInRule)
+        assertEquals("custom_only", plan.scope)
+    }
+
+    @Test
     fun customRuleFactoryAlsoUsesDefaultWindow() {
         val result = RuleImportManager.createSimpleRule(
             packageName = "com.example.news",
@@ -379,7 +411,7 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
-    fun bilibiliTrustedTopRightCloseGetsOnlyNarrowDefaultRuleBonus() {
+    fun bilibiliGenericCloseNoLongerGetsTrustedDefaultRuleBonus() {
         val bilibiliBonus = ScoreEvaluator.trustedGenericCloseBonusForDefaultRule(
             packageName = "tv.danmaku.bili",
             matchedKeyword = "关闭",
@@ -402,9 +434,102 @@ class SafetyAndLogUnitTest {
             onlyGenericClose = true
         )
 
-        assertEquals(15, bilibiliBonus)
+        assertEquals(0, bilibiliBonus)
         assertEquals(0, otherAppBonus)
         assertEquals(0, largeCandidateBonus)
+    }
+
+    @Test
+    fun pendingBuiltInRelocationRejectsSemanticTargetChanges() {
+        val pending = ClickFlowStateMachine.startFromMatch(
+            packageName = "com.android.chrome",
+            appName = "Chrome",
+            match = testMatchSnapshot(
+                ruleId = "built_in_com.android.chrome",
+                ruleName = "默认开屏跳过 / 跳过",
+                ruleSource = RuleSource.BuiltIn,
+                target = testClickTarget(
+                    left = 1216,
+                    top = 1988,
+                    right = 1408,
+                    bottom = 2212,
+                    contentDescription = "修正为：如何跳过codex二次手机号验证"
+                ),
+                score = 70,
+                matchedKeyword = "跳过"
+            ),
+            activeRules = emptyList(),
+            signature = "com.android.chrome:built_in_com.android.chrome:1216,1988,1408,2212",
+            eventContext = testEventContext().copy(packageName = "com.android.chrome"),
+            delayBeforeClickMs = 100L
+        )
+        val chromePlus = testMatchSnapshot(
+            ruleId = "built_in_com.android.chrome",
+            ruleName = "默认开屏跳过 / 关闭",
+            ruleSource = RuleSource.BuiltIn,
+            target = testClickTarget(
+                left = 32,
+                top = 152,
+                right = 256,
+                bottom = 376,
+                contentDescription = "打开或关闭上下文弹出式窗口",
+                viewId = "com.android.chrome:id/location_bar_attachments_add"
+            ),
+            score = 80,
+            matchedKeyword = "关闭"
+        )
+
+        val decision = PendingClickRelocationPolicy.evaluate(pending, chromePlus)
+
+        assertFalse(decision.allowed)
+        assertEquals("candidate_changed_before_click", decision.reason)
+    }
+
+    @Test
+    fun pendingBuiltInRelocationAllowsCountdownRefreshes() {
+        val pending = ClickFlowStateMachine.startFromMatch(
+            packageName = "tv.danmaku.bili",
+            appName = "哔哩哔哩",
+            match = testMatchSnapshot(
+                ruleId = "built_in_tv.danmaku.bili",
+                ruleName = "默认开屏跳过 / 跳过",
+                ruleSource = RuleSource.BuiltIn,
+                target = testClickTarget(
+                    left = 1020,
+                    top = 2911,
+                    right = 1376,
+                    bottom = 3089,
+                    text = "跳过 5",
+                    viewId = "tv.danmaku.bili:id/count_down"
+                ),
+                score = 80,
+                matchedKeyword = "跳过"
+            ),
+            activeRules = emptyList(),
+            signature = "tv.danmaku.bili:built_in_tv.danmaku.bili:1020,2911,1376,3089",
+            eventContext = testEventContext().copy(packageName = "tv.danmaku.bili"),
+            delayBeforeClickMs = 100L
+        )
+        val refreshedCountdown = testMatchSnapshot(
+            ruleId = "built_in_tv.danmaku.bili",
+            ruleName = "默认开屏跳过 / 跳过",
+            ruleSource = RuleSource.BuiltIn,
+            target = testClickTarget(
+                left = 1041,
+                top = 2857,
+                right = 1376,
+                bottom = 3024,
+                text = "跳过 4",
+                viewId = "tv.danmaku.bili:id/count_down"
+            ),
+            score = 80,
+            matchedKeyword = "跳过"
+        )
+
+        val decision = PendingClickRelocationPolicy.evaluate(pending, refreshedCountdown)
+
+        assertTrue(decision.allowed)
+        assertEquals("", decision.reason)
     }
 
     @Test

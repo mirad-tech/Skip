@@ -6,6 +6,10 @@ import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 
 object RulePlanProvider {
+    private val builtInDefaultRuleDisabledPackages = setOf(
+        "com.android.chrome"
+    )
+
     fun plan(
         packageName: String,
         selfPackageName: String,
@@ -30,7 +34,14 @@ object RulePlanProvider {
         } else {
             emptyList()
         }
-        val enabledBuiltInRule = if (effective.defaultRuleEnabled) builtInRule else null
+        val enabledBuiltInRule = if (
+            effective.defaultRuleEnabled &&
+            !isBuiltInDefaultRuleDisabledPackage(effective.packageName)
+        ) {
+            builtInRule
+        } else {
+            null
+        }
         val rules = (enabledCustomRules + listOfNotNull(enabledBuiltInRule))
             .sortedWith(compareByDescending<SkipRule> { it.priority }.thenBy { it.createdAt })
 
@@ -57,6 +68,10 @@ object RulePlanProvider {
             skipStage = null,
             failureReason = ""
         )
+    }
+
+    internal fun isBuiltInDefaultRuleDisabledPackage(packageName: String): Boolean {
+        return packageName.trim().lowercase() in builtInDefaultRuleDisabledPackages
     }
 }
 
