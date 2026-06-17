@@ -34,9 +34,7 @@ object ScoreEvaluator {
         "知道了"
     )
 
-    private val trustedGenericClosePackages = setOf(
-        "tv.danmaku.bili"
-    )
+    private val trustedGenericClosePackages = emptySet<String>()
 
     fun evaluate(
         node: AccessibilityNodeInfo,
@@ -79,6 +77,21 @@ object ScoreEvaluator {
             )
         }
         val defaultRule = rule.source == RuleSource.BuiltIn
+        if (defaultRule &&
+            idRule == null &&
+            matchedKeyword.isGenericSkipKeyword() &&
+            !isAllowedDefaultGenericSkipLabel(textValue, descriptionValue)
+        ) {
+            return ScoreEvaluation(
+                rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = matchedKeyword,
+                area = area,
+                passesMinScore = false,
+                failureReason = "default_rule_context_missing"
+            )
+        }
         val textKeywordIsStandaloneSkip = listOf(textValue, descriptionValue)
             .any(SafetyGuard::isStandaloneSkipText)
         if (defaultRule && textKeywordIsStandaloneSkip) {
@@ -277,20 +290,40 @@ object ScoreEvaluator {
     private fun String.containsAdSignal(): Boolean {
         val lower = lowercase(Locale.ROOT)
         return lower.contains("广告") ||
-            lower.contains("ad") ||
+            lower.hasAdToken() ||
             lower.contains("splash") ||
             lower.contains("skip")
     }
 
     private fun String.containsAdOrSplashSignal(): Boolean {
         val lower = normalizeForRuleMatch()
-        return lower.contains("ad") ||
+        return lower.hasAdToken() ||
             lower.contains("splash") ||
             lower.contains("skip") ||
             lower.contains("gdt") ||
             lower.contains("ksad") ||
             lower.contains("tt_") ||
             lower.contains("csj")
+    }
+
+    private fun String.hasAdToken(): Boolean {
+        return split(Regex("[^a-z0-9]+"))
+            .any { token -> token == "ad" || token == "ads" }
+    }
+
+    private fun String.isGenericSkipKeyword(): Boolean {
+        return trim().equals("跳过", ignoreCase = true) ||
+            trim().equals("skip", ignoreCase = true)
+    }
+
+    private fun isAllowedDefaultGenericSkipLabel(textValue: String, descriptionValue: String): Boolean {
+        return listOf(textValue, descriptionValue).any { value ->
+            val label = value.trim()
+            if (label.isBlank()) return@any false
+            if (label.containsAdSignal()) return@any true
+            Regex("^跳过\\s*\\d{0,2}$").matches(label) ||
+                Regex("^skip\\s*\\d{0,2}$", RegexOption.IGNORE_CASE).matches(label)
+        }
     }
 
     private fun String.normalizeForRuleMatch(): String {

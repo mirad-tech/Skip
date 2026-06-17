@@ -125,4 +125,81 @@ class GeminiRegressionInstrumentedTest {
             assertNull(match)
         }
     }
+
+    @Test
+    fun chromeAttachmentAddIsNotDefaultSplashCandidate() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.ChromeLocationBarAttachmentAdd
+        val rule = builtInDefaultRule(
+            packageName = "com.android.chrome",
+            appName = "Chrome"
+        )
+
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val rootNode = InstrumentationRegistry.getInstrumentation()
+                .uiAutomation
+                .rootInActiveWindow
+
+            val match = NodeScanner.findBestMatch(rootNode, listOf(rule), appElapsedMs = 1_000L)
+
+            assertNull(match)
+        }
+    }
+
+    @Test
+    fun bilibiliDanmakuCloseIsNotDefaultSplashCandidate() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.BilibiliDanmakuClose
+        val rule = builtInDefaultRule(
+            packageName = "tv.danmaku.bili",
+            appName = "哔哩哔哩"
+        )
+
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val rootNode = InstrumentationRegistry.getInstrumentation()
+                .uiAutomation
+                .rootInActiveWindow
+
+            val match = NodeScanner.findBestMatch(rootNode, listOf(rule), appElapsedMs = 1_000L)
+
+            assertNull(match)
+        }
+    }
+
+    @Test
+    fun bilibiliCountdownSkipStillMatchesDefaultSplashCandidate() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.BilibiliCountdownSkip
+        val rule = builtInDefaultRule(
+            packageName = "tv.danmaku.bili",
+            appName = "哔哩哔哩"
+        )
+
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val rootNode = InstrumentationRegistry.getInstrumentation()
+                .uiAutomation
+                .rootInActiveWindow
+
+            val match = NodeScanner.findBestMatch(rootNode, listOf(rule), appElapsedMs = 1_000L)
+
+            assertNotNull(match)
+            assertEquals("跳过", match!!.matchedKeyword)
+        }
+    }
+
+    private fun builtInDefaultRule(packageName: String, appName: String): SkipRule {
+        return SkipRule(
+            id = "built_in_$packageName",
+            source = RuleSource.BuiltIn,
+            name = "默认开屏跳过",
+            packageName = packageName,
+            appName = appName,
+            matchTexts = RuleRepository.defaultKeywords,
+            matchContentDescriptions = RuleRepository.defaultKeywords,
+            matchViewIds = RuleRepository.defaultViewIdKeywords,
+            area = RuleArea.TopRight,
+            validDurationMs = 8_000L,
+            minScore = 70
+        )
+    }
 }

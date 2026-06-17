@@ -1,5 +1,6 @@
 package com.example.skip.service
 
+import android.graphics.Rect
 import com.example.skip.engine.ClickAttempt
 import com.example.skip.engine.ClickTargetInfo
 import com.example.skip.engine.CoordinateFallbackMatch
@@ -7,6 +8,8 @@ import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.MatchResult
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
+import java.util.Locale
+import kotlin.math.abs
 
 internal data class EventContext(
     val eventType: Int,
@@ -227,6 +230,70 @@ internal object ClickFlowStateMachine {
             clickTargetSource = match.clickTargetSource,
             startedAt = startedAt,
             eventContext = eventContext
+        )
+    }
+}
+
+internal object PendingClickRelocationPolicy {
+    private const val BOUNDS_RELOCATION_TOLERANCE_PX = 96
+    private const val BLOCKED_REASON = "candidate_changed_before_click"
+
+    fun evaluate(
+        pending: PendingClick,
+        match: ClickMatchSnapshot
+    ): PendingClickRelocationDecision {
+        if (pending.ruleSource != RuleSource.BuiltIn) return PendingClickRelocationDecision.Allowed
+        if (match.ruleSource != RuleSource.BuiltIn) return blocked()
+        if (pending.ruleId != match.ruleId) return blocked()
+        if (pending.matchedKeyword.keywordFamily() != match.matchedKeyword.keywordFamily()) {
+            return blocked()
+        }
+
+        val sameViewId = pending.target.viewId.isNotBlank() &&
+            pending.target.viewId == match.target.viewId
+        val nearBounds = pending.target.bounds.isNearRelocation(match.target.bounds)
+        if (!sameViewId && !nearBounds) return blocked()
+
+        return PendingClickRelocationDecision.Allowed
+    }
+
+    private fun blocked(): PendingClickRelocationDecision {
+        return PendingClickRelocationDecision(
+            allowed = false,
+            reason = BLOCKED_REASON
+        )
+    }
+
+    private fun String.keywordFamily(): String {
+        val lower = trim().lowercase(Locale.ROOT)
+        return when {
+            lower.contains("跳过") || lower.contains("skip") || lower.contains("进入应用") -> "skip"
+            lower.contains("关闭") ||
+                lower.contains("close") ||
+                lower == "x" ||
+                lower == "×" ||
+                lower == "✕" ||
+                lower.contains("知道了") -> "close"
+            else -> lower
+        }
+    }
+
+    private fun Rect.isNearRelocation(other: Rect): Boolean {
+        return abs(left - other.left) <= BOUNDS_RELOCATION_TOLERANCE_PX &&
+            abs(top - other.top) <= BOUNDS_RELOCATION_TOLERANCE_PX &&
+            abs(right - other.right) <= BOUNDS_RELOCATION_TOLERANCE_PX &&
+            abs(bottom - other.bottom) <= BOUNDS_RELOCATION_TOLERANCE_PX
+    }
+}
+
+internal data class PendingClickRelocationDecision(
+    val allowed: Boolean,
+    val reason: String
+) {
+    companion object {
+        val Allowed = PendingClickRelocationDecision(
+            allowed = true,
+            reason = ""
         )
     }
 }

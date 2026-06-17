@@ -720,7 +720,21 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
-        val updated = ClickFlowStateMachine.relocateToMatch(pending, ClickMatchSnapshot.from(match))
+        val matchSnapshot = ClickMatchSnapshot.from(match)
+        val relocationDecision = PendingClickRelocationPolicy.evaluate(pending, matchSnapshot)
+        if (!relocationDecision.allowed) {
+            finishPendingClick(
+                pending = pending.copy(retryCount = pending.retryCount + 1),
+                stage = ClickLogStage.ClickFailed,
+                success = false,
+                reason = relocationDecision.reason,
+                attempt = null,
+                scan = scan
+            )
+            return
+        }
+
+        val updated = ClickFlowStateMachine.relocateToMatch(pending, matchSnapshot)
         pendingClick = updated
         val highRiskDecision = highRiskDecisionForPending(updated)
         if (!highRiskDecision.allowed) {
