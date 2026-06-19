@@ -1,5 +1,37 @@
 # Skip 发布说明
 
+## 1.0.5
+
+发布日期：2026-06-19
+
+### 更新内容
+
+- 在用户正在编辑文本或搜索框已聚焦时暂停自动点击，避免键盘打开后误触清除、关闭或相邻控件。
+- 关于页新增手动检测更新能力，仅在用户主动触发时访问 GitHub Releases。
+- 点击关于页顶部版本卡片即可检测新版本；发现新版本后会下载、校验 APK，并交给系统安装器安装。
+- 新增 GitHub Release APK 解析、SHA-256 校验、包名和版本校验，损坏或不匹配的 APK 不会进入安装流程。
+- 统一无障碍权限用途页和隐私/权限说明页的卡片排版与按钮风格。
+- 更新隐私和权限文案：联网仅用于手动检测/下载更新，不上传屏幕内容、规则、日志、统计或个人数据。
+
+### 版本信息
+
+- `versionCode`：13
+- `versionName`：`1.0.5`
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.5-release.apk`
+- SHA256：`17F9EAB3C05C67AD5E8E7D22292242847A13728D146C8E627C549944AFEBAAE3`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:assembleRelease
+git diff --check
+```
+
 ## 1.0.4
 
 发布日期：2026-06-17
