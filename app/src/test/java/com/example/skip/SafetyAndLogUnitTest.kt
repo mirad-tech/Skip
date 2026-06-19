@@ -661,6 +661,26 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun delayedClickPackageCheckBlocksActiveTextInputBeforeClick() {
+        val result = DelayedClickSafetyCheck.evaluate(
+            pendingPackageName = "com.example.news",
+            currentPackageName = "com.example.news",
+            selfPackageName = "com.example.skip",
+            foregroundPackageName = "com.example.news",
+            foregroundStartTimeMillis = 1_000L,
+            now = 2_000L,
+            defaultRuleWindowMs = 6_000L,
+            rootWindowNull = false,
+            activeTextInput = true
+        )
+
+        assertFalse(result.allowed)
+        assertEquals(ClickLogStage.SkippedBySafety, result.stage)
+        assertEquals("active_text_input", result.reason)
+        assertEquals("active_text_input_before_delayed_click", result.blockedReason)
+    }
+
+    @Test
     fun delayedClickPackageCheckBlocksSystemUiBeforeClick() {
         val result = DelayedClickSafetyCheck.evaluate(
             pendingPackageName = "com.example.news",

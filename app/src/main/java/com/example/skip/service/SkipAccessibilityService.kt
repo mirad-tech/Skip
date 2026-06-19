@@ -214,6 +214,11 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
+        if (ActiveTextInputGuard.hasFocusedEditableInput(root)) {
+            SettingsRepository.setLastFailureReason(this, "active_text_input")
+            return
+        }
+
         if (pendingClick != null) return
 
         if (rules.isEmpty()) {
@@ -1004,7 +1009,8 @@ class SkipAccessibilityService : AccessibilityService() {
             foregroundStartTimeMillis = delayedEventContext.foregroundStartTimeMillis ?: 0L,
             now = System.currentTimeMillis(),
             defaultRuleWindowMs = delayedEventContext.defaultRuleWindowMs,
-            rootWindowNull = root == null
+            rootWindowNull = root == null,
+            activeTextInput = ActiveTextInputGuard.hasFocusedEditableInput(root)
         )
         if (result.allowed) return false
         finishPendingClick(
@@ -1408,7 +1414,8 @@ internal object DelayedClickSafetyCheck {
         foregroundStartTimeMillis: Long,
         now: Long,
         defaultRuleWindowMs: Long,
-        rootWindowNull: Boolean
+        rootWindowNull: Boolean,
+        activeTextInput: Boolean = false
     ): DelayedClickSafetyResult {
         val pending = pendingPackageName.trim()
         val current = currentPackageName.orEmpty().trim()
@@ -1419,6 +1426,15 @@ internal object DelayedClickSafetyCheck {
                 stage = ClickLogStage.RootWindowNull,
                 reason = "root_window_null_before_click",
                 detail = detail
+            )
+        }
+        if (activeTextInput) {
+            return DelayedClickSafetyResult(
+                allowed = false,
+                stage = ClickLogStage.SkippedBySafety,
+                reason = "active_text_input",
+                blockedReason = "active_text_input_before_delayed_click",
+                detail = "$detail;activeTextInput=true"
             )
         }
         if (current.isBlank()) {
