@@ -8,10 +8,12 @@ import com.example.skip.engine.NodeScanner
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
+import com.example.skip.service.ActiveTextInputGuard
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -184,6 +186,20 @@ class GeminiRegressionInstrumentedTest {
 
             assertNotNull(match)
             assertEquals("跳过", match!!.matchedKeyword)
+        }
+    }
+
+    @Test
+    fun activeTextInputGuardDetectsFocusedSearchField() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.FocusedTopSearchField
+
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val rootNode = InstrumentationRegistry.getInstrumentation()
+                .uiAutomation
+                .rootInActiveWindow
+
+            assertTrue(ActiveTextInputGuard.hasFocusedEditableInput(rootNode))
         }
     }
 

@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 
@@ -15,7 +16,8 @@ class ScannerFixtureActivity : Activity() {
         MobileTicketHome,
         ChromeLocationBarAttachmentAdd,
         BilibiliDanmakuClose,
-        BilibiliCountdownSkip
+        BilibiliCountdownSkip,
+        FocusedTopSearchField
     }
 
     companion object {
@@ -47,6 +49,10 @@ class ScannerFixtureActivity : Activity() {
                     Scenario.BilibiliCountdownSkip -> addView(
                         BilibiliCountdownSkipButton(context),
                         FrameLayout.LayoutParams(356, 178)
+                    )
+                    Scenario.FocusedTopSearchField -> addView(
+                        FocusedTopSearchContainer(context),
+                        FrameLayout.LayoutParams(1080, 180)
                     )
                 }
             }
@@ -164,5 +170,68 @@ private class BilibiliCountdownSkipButton(
         info?.setEnabled(true)
         info?.setClickable(true)
         info?.setBoundsInScreen(Rect(1020, 2911, 1376, 3089))
+    }
+}
+
+private class FocusedTopSearchContainer(
+    context: android.content.Context
+) : FrameLayout(context) {
+    init {
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        addView(
+            FocusedSearchEditText(context),
+            FrameLayout.LayoutParams(820, 96)
+        )
+        addView(
+            SearchClearButton(context),
+            FrameLayout.LayoutParams(96, 96)
+        )
+    }
+}
+
+private class FocusedSearchEditText(
+    context: android.content.Context
+) : EditText(context) {
+    init {
+        setSingleLine(true)
+        setText("deepseek v4.1")
+        isEnabled = true
+        isFocusable = true
+        isFocusableInTouchMode = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        post { requestFocus() }
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setFocused(true)
+        info?.setEditable(true)
+        info?.setBoundsInScreen(Rect(96, 48, 916, 144))
+    }
+}
+
+private class SearchClearButton(
+    context: android.content.Context
+) : ImageView(context) {
+    init {
+        contentDescription = "×"
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.contentDescription = "×"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(916, 48, 1012, 144))
     }
 }
