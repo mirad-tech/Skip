@@ -12,6 +12,7 @@ import com.example.skip.data.IconManager
 import com.example.skip.data.IconScheme
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
+import com.example.skip.ui.about.AboutScreen
 import com.example.skip.ui.apps.AppDetailScreen
 import com.example.skip.ui.apps.BlacklistScreen
 import com.example.skip.ui.apps.InstalledAppsScreen
@@ -46,6 +47,9 @@ class MainActivity : ComponentActivity() {
     private var currentScreen by mutableStateOf<AppScreen>(AppScreen.Home)
     private val appVersionName: String by lazy {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
+    }
+    private val appVersionCode: Long by lazy {
+        packageManager.getPackageInfo(packageName, 0).longVersionCode
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -242,9 +246,9 @@ class MainActivity : ComponentActivity() {
                         onBack = { currentScreen = screen.returnScreen }
                     )
 
-                    is AppScreen.About -> PrivacyScreen(
-                        mode = PrivacyPageMode.About,
+                    is AppScreen.About -> AboutScreen(
                         versionName = appVersionName,
+                        versionCode = appVersionCode,
                         onBack = { currentScreen = screen.returnScreen }
                     )
                 }

@@ -2,18 +2,10 @@ package com.example.skip.ui.privacy
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.engine.SafetyGuard
+import com.example.skip.ui.common.InfoCard
 import com.example.skip.ui.common.SimpleScreenScaffold
 
 @Composable
@@ -39,15 +31,15 @@ fun PrivacyScreen(
                     )
                     InfoCard(
                         title = "不会读取或上传",
-                        body = "不联网，不上传屏幕内容，不记录完整页面内容，不收集账号、密码、验证码、支付信息，也不读取短信、联系人、相册、定位、相机或麦克风。"
+                        body = "不上传屏幕内容，不记录完整页面内容，不收集账号、密码、验证码、支付信息，也不读取短信、联系人、相册、定位、相机或麦克风。"
                     )
                     InfoCard(
                         title = "高风险场景",
                         body = "同意、授权、允许、支付、购买、确认支付、登录、注册、隐私政策、用户协议、安装、删除、卸载、转账、发送、提交等内容命中后只写安全日志，不执行点击。"
                     )
                     InfoCard(
-                        title = "联网变更",
-                        body = "如未来新增联网能力，必须先更新隐私说明、权限说明和用户同意流程，不能静默启用。"
+                        title = "联网边界",
+                        body = "网络仅用于你在关于页手动检测新版本和下载更新 APK，访问 GitHub Releases；不上传屏幕内容、规则、日志、统计或个人数据。"
                     )
                 }
 
@@ -72,8 +64,16 @@ fun PrivacyScreen(
                         body = "可选。仅在你主动导入或导出规则、日志时打开系统文件选择器，不申请外部存储权限。"
                     )
                     InfoCard(
+                        title = "网络权限",
+                        body = "仅用于你在关于页手动检测新版本和下载更新 APK，访问 GitHub Releases；不会上传屏幕内容、规则、日志、统计或个人数据。"
+                    )
+                    InfoCard(
+                        title = "安装 APK 请求",
+                        body = "仅在你下载更新 APK 后交给系统安装器使用；不会静默安装，也不会自动安装其他应用。"
+                    )
+                    InfoCard(
                         title = "未申请的权限",
-                        body = "当前不申请网络、通知、定位、通讯录、相机、麦克风、短信、外部存储等权限，也不接入广告 SDK、统计 SDK 或联网 SDK。"
+                        body = "当前不申请通知、定位、通讯录、相机、麦克风、短信、外部存储等权限，也不接入广告 SDK 或统计 SDK。"
                     )
                 }
 
@@ -88,37 +88,6 @@ fun PrivacyScreen(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun InfoCard(
-    title: String,
-    body: String
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
