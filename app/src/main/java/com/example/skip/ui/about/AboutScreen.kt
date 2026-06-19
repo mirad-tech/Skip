@@ -4,12 +4,12 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -41,24 +41,17 @@ fun AboutScreen(
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
 
-    fun checkForUpdates() {
-        state = UpdateCheckState.Checking
-        scope.launch {
-            runCatching { UpdateRepository.checkLatestRelease() }
-                .onSuccess { release ->
-                    state = if (VersionComparator.isNewer(release.tagName, versionName)) {
-                        UpdateCheckState.Available(release)
-                    } else {
-                        UpdateCheckState.Latest(release)
-                    }
-                }
-                .onFailure {
-                    state = UpdateCheckState.Error(it.userMessage("检测失败"))
-                }
+    fun installUpdate(release: UpdateRelease, file: File) {
+        when (val result = ApkUpdateInstaller.installDownloadedApk(context, file)) {
+            InstallStartResult.Started -> state = UpdateCheckState.Downloaded(release, file)
+            InstallStartResult.PermissionNeeded -> {
+                state = UpdateCheckState.InstallPermissionNeeded(release, file)
+            }
+            is InstallStartResult.Error -> state = UpdateCheckState.Error(result.message, release)
         }
     }
 
-    fun downloadUpdate(release: UpdateRelease) {
+    fun downloadAndInstall(release: UpdateRelease) {
         state = UpdateCheckState.Downloading(release, progressPercent = null)
         scope.launch {
             val destination = UpdateRepository.updateApkFile(context, release.apkAsset.name)
@@ -77,20 +70,49 @@ fun AboutScreen(
                 }
             }.onSuccess { file ->
                 state = UpdateCheckState.Downloaded(release, file)
+                installUpdate(release, file)
             }.onFailure {
                 state = UpdateCheckState.Error(it.userMessage("下载失败"), release)
             }
         }
     }
 
-    fun installUpdate(release: UpdateRelease, file: File) {
-        when (val result = ApkUpdateInstaller.installDownloadedApk(context, file)) {
-            InstallStartResult.Started -> state = UpdateCheckState.Downloaded(release, file)
-            InstallStartResult.PermissionNeeded -> {
-                state = UpdateCheckState.InstallPermissionNeeded(release, file)
-            }
-            is InstallStartResult.Error -> state = UpdateCheckState.Error(result.message, release)
+    fun checkForUpdates() {
+        state = UpdateCheckState.Checking
+        scope.launch {
+            runCatching { UpdateRepository.checkLatestRelease() }
+                .onSuccess { release ->
+                    if (VersionComparator.isNewer(release.tagName, versionName)) {
+                        downloadAndInstall(release)
+                    } else {
+                        state = UpdateCheckState.Latest(release)
+                    }
+                }
+                .onFailure {
+                    state = UpdateCheckState.Error(it.userMessage("检测失败"))
+                }
         }
+    }
+
+    fun handleVersionCardClick() {
+        when (val currentState = state) {
+            UpdateCheckState.Idle,
+            is UpdateCheckState.Latest,
+            is UpdateCheckState.Error -> checkForUpdates()
+            is UpdateCheckState.Available -> downloadAndInstall(currentState.release)
+            is UpdateCheckState.Downloaded -> installUpdate(currentState.release, currentState.file)
+            is UpdateCheckState.InstallPermissionNeeded -> installUpdate(currentState.release, currentState.file)
+            UpdateCheckState.Checking,
+            is UpdateCheckState.Downloading -> Unit
+        }
+    }
+
+    fun openInstallPermissionSettings() {
+        ApkUpdateInstaller.openInstallPermissionSettings(context)
+    }
+
+    fun openRelease(release: UpdateRelease) {
+        openReleasePage(context, release.htmlUrl)
     }
 
     SimpleScreenScaffold(
@@ -98,42 +120,34 @@ fun AboutScreen(
         onBack = onBack
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            InfoCard(
-                title = "Skip $versionName",
-                body = "一个本地化的 Android 辅助点击工具。"
+            VersionUpdateCard(
+                currentVersionName = versionName,
+                state = state,
+                onClick = ::handleVersionCardClick,
+                onOpenInstallPermissionSettings = ::openInstallPermissionSettings,
+                onOpenReleasePage = ::openRelease
             )
             InfoCard(
                 title = "项目定位",
                 body = "减少重复点击，不破解广告，不绕过其他 App 的安全机制。"
-            )
-            UpdateStatusCard(
-                currentVersionName = versionName,
-                state = state,
-                onCheck = ::checkForUpdates,
-                onDownload = ::downloadUpdate,
-                onInstall = ::installUpdate,
-                onOpenInstallPermissionSettings = {
-                    ApkUpdateInstaller.openInstallPermissionSettings(context)
-                },
-                onOpenReleasePage = { release ->
-                    openReleasePage(context, release.htmlUrl)
-                }
             )
         }
     }
 }
 
 @Composable
-private fun UpdateStatusCard(
+private fun VersionUpdateCard(
     currentVersionName: String,
     state: UpdateCheckState,
-    onCheck: () -> Unit,
-    onDownload: (UpdateRelease) -> Unit,
-    onInstall: (UpdateRelease, File) -> Unit,
+    onClick: () -> Unit,
     onOpenInstallPermissionSettings: () -> Unit,
     onOpenReleasePage: (UpdateRelease) -> Unit
 ) {
+    val action = UpdateCardBehavior.nextActionFor(state)
     Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = action != UpdateCardAction.None, onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -146,19 +160,16 @@ private fun UpdateStatusCard(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "版本更新",
+                text = "Skip $currentVersionName",
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "当前版本：$currentVersionName",
+                text = "一个本地化的 Android 辅助点击工具。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            UpdateStateContent(
+            VersionCardStateContent(
                 state = state,
-                onCheck = onCheck,
-                onDownload = onDownload,
-                onInstall = onInstall,
                 onOpenInstallPermissionSettings = onOpenInstallPermissionSettings,
                 onOpenReleasePage = onOpenReleasePage
             )
@@ -167,27 +178,18 @@ private fun UpdateStatusCard(
 }
 
 @Composable
-private fun UpdateStateContent(
+private fun VersionCardStateContent(
     state: UpdateCheckState,
-    onCheck: () -> Unit,
-    onDownload: (UpdateRelease) -> Unit,
-    onInstall: (UpdateRelease, File) -> Unit,
     onOpenInstallPermissionSettings: () -> Unit,
     onOpenReleasePage: (UpdateRelease) -> Unit
 ) {
     when (state) {
         UpdateCheckState.Idle -> {
             Text(
-                text = "仅在你点击检测或下载时访问 GitHub Releases。",
+                text = "检测新版本",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Button(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = onCheck
-            ) {
-                Text("检测新版本")
-            }
         }
 
         UpdateCheckState.Checking -> {
@@ -205,12 +207,6 @@ private fun UpdateStateContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Button(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = onCheck
-            ) {
-                Text("重新检测")
-            }
             ReleasePageButton(state.release, onOpenReleasePage)
         }
 
@@ -220,12 +216,6 @@ private fun UpdateStateContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Button(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = { onDownload(state.release) }
-            ) {
-                Text("下载更新")
-            }
             ReleasePageButton(state.release, onOpenReleasePage)
         }
 
@@ -256,12 +246,6 @@ private fun UpdateStateContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Button(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = { onInstall(state.release, state.file) }
-            ) {
-                Text("安装更新")
-            }
             ReleasePageButton(state.release, onOpenReleasePage)
         }
 
@@ -271,17 +255,11 @@ private fun UpdateStateContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Button(
+            TextButton(
                 modifier = Modifier.fillMaxWidth(),
                 onClick = onOpenInstallPermissionSettings
             ) {
                 Text("去系统设置允许")
-            }
-            TextButton(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = { onInstall(state.release, state.file) }
-            ) {
-                Text("继续安装")
             }
         }
 
@@ -291,12 +269,6 @@ private fun UpdateStateContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error
             )
-            Button(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = onCheck
-            ) {
-                Text("重新检测")
-            }
             state.release?.let { ReleasePageButton(it, onOpenReleasePage) }
         }
     }

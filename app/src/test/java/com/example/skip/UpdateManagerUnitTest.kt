@@ -1,7 +1,12 @@
 package com.example.skip
 
 import com.example.skip.ui.about.UpdateDownloadVerifier
+import com.example.skip.ui.about.UpdateCardAction
+import com.example.skip.ui.about.UpdateCardBehavior
+import com.example.skip.ui.about.UpdateAsset
+import com.example.skip.ui.about.UpdateCheckState
 import com.example.skip.ui.about.UpdateRepository
+import com.example.skip.ui.about.UpdateRelease
 import com.example.skip.ui.about.UpdateReleaseParser
 import com.example.skip.ui.about.VersionComparator
 import java.io.File
@@ -164,6 +169,21 @@ class UpdateManagerUnitTest {
     }
 
     @Test
+    fun updateCardBehaviorMapsStatesToTapActions() {
+        val release = sampleRelease()
+        val file = File("Skip-v1.0.5-release.apk")
+
+        assertEquals(UpdateCardAction.Check, UpdateCardBehavior.nextActionFor(UpdateCheckState.Idle))
+        assertEquals(UpdateCardAction.None, UpdateCardBehavior.nextActionFor(UpdateCheckState.Checking))
+        assertEquals(UpdateCardAction.Check, UpdateCardBehavior.nextActionFor(UpdateCheckState.Latest(release)))
+        assertEquals(UpdateCardAction.DownloadAndInstall, UpdateCardBehavior.nextActionFor(UpdateCheckState.Available(release)))
+        assertEquals(UpdateCardAction.None, UpdateCardBehavior.nextActionFor(UpdateCheckState.Downloading(release, null)))
+        assertEquals(UpdateCardAction.Install, UpdateCardBehavior.nextActionFor(UpdateCheckState.Downloaded(release, file)))
+        assertEquals(UpdateCardAction.Install, UpdateCardBehavior.nextActionFor(UpdateCheckState.InstallPermissionNeeded(release, file)))
+        assertEquals(UpdateCardAction.Check, UpdateCardBehavior.nextActionFor(UpdateCheckState.Error("网络错误", release)))
+    }
+
+    @Test
     fun manifestDeclaresUpdatePermissionsAndNarrowFileProvider() {
         val manifest = readProjectFile("app/src/main/AndroidManifest.xml")
         val filePaths = readProjectFile("app/src/main/res/xml/file_paths.xml")
@@ -185,5 +205,20 @@ class UpdateManagerUnitTest {
 
     private fun readProjectFile(path: String): String {
         return listOf(File(path), File("../$path")).first { it.exists() }.readText()
+    }
+
+    private fun sampleRelease(): UpdateRelease {
+        return UpdateRelease(
+            tagName = "v1.0.5",
+            versionName = "1.0.5",
+            htmlUrl = "https://github.com/mirad-tech/Skip/releases/tag/v1.0.5",
+            publishedAt = "2026-06-19T06:00:00Z",
+            apkAsset = UpdateAsset(
+                name = "Skip-v1.0.5-release.apk",
+                size = 12,
+                browserDownloadUrl = "https://example.com/release.apk",
+                digestSha256 = "a".repeat(64)
+            )
+        )
     }
 }

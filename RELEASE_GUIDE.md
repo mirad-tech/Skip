@@ -67,7 +67,7 @@ Select-String -Path app\src\debug\AndroidManifest.xml -Pattern "uses-permission"
 
 预期：
 
-- 不出现 `INTERNET`。
+- 仅出现手动更新需要的 `INTERNET` 和 `REQUEST_INSTALL_PACKAGES`。
 - 不出现定位、通讯录、相机、麦克风、短信、外部存储权限。
 - 主 Manifest 仅通过 service 声明 `android.permission.BIND_ACCESSIBILITY_SERVICE`。
 
@@ -78,7 +78,8 @@ Select-String -Path app\src\debug\AndroidManifest.xml -Pattern "uses-permission"
 - 产品定位为本地自动点击辅助工具 / 开屏页面助手，不宣传为广告破解、广告屏蔽或绕过工具。
 - 不复制、不逆向、不照搬同类产品代码，不提交历史对照或逆向计划文件。
 - 默认本地处理，不上传屏幕内容、规则、日志、统计或个人数据。
-- 未接入广告 SDK、统计 SDK、联网 SDK 或远程规则订阅。
+- 联网仅用于用户在关于页手动检测新版本和下载更新 APK，访问 GitHub Releases。
+- 未接入广告 SDK、统计 SDK 或远程规则订阅。
 - 导入、导出和诊断包生成必须由用户主动触发。
 - 首次启动展示明显披露页，用户未主动同意前不引导开启无障碍。
 - 用户拒绝后仍可查看隐私说明、权限说明和设置。
