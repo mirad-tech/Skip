@@ -156,7 +156,8 @@ class SafetyAndLogUnitTest {
         assertTrue(text.contains("开屏页面助手"))
         assertTrue(text.contains("无障碍权限"))
         assertTrue(text.contains("不上传屏幕内容"))
-        assertTrue(text.contains("不联网"))
+        assertTrue(text.contains("手动检测新版本和下载更新 APK"))
+        assertFalse(text.contains("默认本地处理，不联网"))
         listOf(
             "同意",
             "授权",
@@ -180,6 +181,10 @@ class SafetyAndLogUnitTest {
         assertFalse(text.contains("广告破解"))
         assertFalse(text.contains("广告屏蔽"))
         assertFalse(text.contains("绕过工具"))
+        assertEquals(
+            listOf("读取窗口内容", "执行手势", "报告 View ID", "本地日志与隐私", "高风险按钮"),
+            ReleaseDisclosureCopy.accessibilityPurposeCards.map { it.title }
+        )
     }
 
     @Test
