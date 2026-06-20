@@ -18,6 +18,7 @@ object HighRiskClickPolicy {
         "注册",
         "隐私政策",
         "用户协议",
+        "更新",
         "安装",
         "删除",
         "卸载",

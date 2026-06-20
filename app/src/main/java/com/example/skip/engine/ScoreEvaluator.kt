@@ -12,6 +12,9 @@ object ScoreEvaluator {
     private const val MAX_SKIP_TEXT_LENGTH = 32
     private const val TRUSTED_GENERIC_CLOSE_BONUS = 15
     private const val MAX_TRUSTED_GENERIC_CLOSE_AREA_RATIO = 0.02f
+    private val splitAdRegex = Regex("[^a-z0-9]+")
+    private val allowedGenericSkipRegex1 = Regex("^跳过\\s*\\d{0,2}$")
+    private val allowedGenericSkipRegex2 = Regex("^skip\\s*\\d{0,2}$", RegexOption.IGNORE_CASE)
 
     private val blockedTextFragments = listOf(
         "跳过登录",
@@ -52,6 +55,23 @@ object ScoreEvaluator {
         val textValue = node.text?.toString().orEmpty()
         val descriptionValue = node.contentDescription?.toString().orEmpty()
         val viewId = node.viewIdResourceName.orEmpty()
+        val defaultRule = rule.source == RuleSource.BuiltIn
+        if (defaultRule && TextInputClearButtonPolicy.shouldBlockDefaultRuleCandidate(
+                viewId = viewId,
+                text = textValue,
+                contentDescription = descriptionValue
+            )
+        ) {
+            return ScoreEvaluation(
+                rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = "text_input_clear_button",
+                area = node.areaInScreen(),
+                passesMinScore = false,
+                failureReason = "text_input_clear_button"
+            )
+        }
         val textRule = matchedTextRule(listOf(textValue), rule.matchTexts, rule.textMatchMode)
         val descriptionRule = matchedTextRule(
             listOf(descriptionValue),
@@ -76,7 +96,6 @@ object ScoreEvaluator {
                 failureReason = HighRiskClickPolicy.BLOCKED_REASON
             )
         }
-        val defaultRule = rule.source == RuleSource.BuiltIn
         if (defaultRule &&
             idRule == null &&
             matchedKeyword.isGenericSkipKeyword() &&
@@ -202,21 +221,29 @@ object ScoreEvaluator {
     private fun matchedIdRule(viewId: String, keywords: List<String>, mode: MatchMode): String? {
         val normalizedViewId = viewId.normalizeForRuleMatch()
         if (normalizedViewId.isEmpty()) return null
+        if (mode == MatchMode.Regex) {
+            return keywords.firstOrNull { keyword ->
+                viewId.matchesRuleKeyword(keyword, MatchMode.Regex) ||
+                    normalizedViewId.matchesLegacyNormalizedRegex(keyword)
+            }
+        }
         return keywords.firstOrNull { keyword ->
             normalizedViewId.matchesRuleKeyword(keyword.normalizeForRuleMatch(), mode)
         }
     }
 
     private fun String.matchesRuleKeyword(keyword: String, mode: MatchMode): Boolean {
-        val normalizedKeyword = keyword.trim().lowercase(Locale.ROOT)
-        if (normalizedKeyword.isEmpty()) return false
+        val trimmedKeyword = keyword.trim()
+        if (trimmedKeyword.isEmpty()) return false
         return when (mode) {
-            MatchMode.Contains -> contains(normalizedKeyword)
-            MatchMode.Exact -> this == normalizedKeyword
-            MatchMode.Regex -> runCatching {
-                Regex(normalizedKeyword, RegexOption.IGNORE_CASE).containsMatchIn(this)
-            }.getOrDefault(false)
+            MatchMode.Contains -> contains(trimmedKeyword.lowercase(Locale.ROOT))
+            MatchMode.Exact -> this == trimmedKeyword.lowercase(Locale.ROOT)
+            MatchMode.Regex -> SafeRegexMatcher.containsMatch(trimmedKeyword, this)
         }
+    }
+
+    private fun String.matchesLegacyNormalizedRegex(keyword: String): Boolean {
+        return SafeRegexMatcher.containsMatch(keyword.normalizeForRuleMatch(), this)
     }
 
     private fun AccessibilityNodeInfo.areaInScreen(): RuleArea {
@@ -307,7 +334,7 @@ object ScoreEvaluator {
     }
 
     private fun String.hasAdToken(): Boolean {
-        return split(Regex("[^a-z0-9]+"))
+        return split(splitAdRegex)
             .any { token -> token == "ad" || token == "ads" }
     }
 
@@ -321,8 +348,7 @@ object ScoreEvaluator {
             val label = value.trim()
             if (label.isBlank()) return@any false
             if (label.containsAdSignal()) return@any true
-            Regex("^跳过\\s*\\d{0,2}$").matches(label) ||
-                Regex("^skip\\s*\\d{0,2}$", RegexOption.IGNORE_CASE).matches(label)
+            allowedGenericSkipRegex1.matches(label) || allowedGenericSkipRegex2.matches(label)
         }
     }
 

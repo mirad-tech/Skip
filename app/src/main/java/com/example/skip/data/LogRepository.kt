@@ -12,9 +12,17 @@ import com.example.skip.model.RuleLog
 import com.example.skip.model.RuleSource
 import com.example.skip.util.PrivacySanitizer
 import com.example.skip.util.RomUtils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+
+internal data class ClickLogPersistencePayload(
+    val logsJson: String,
+    val throttleCountsJson: String
+)
 
 object LogRepository {
     private const val KEY_CLICK_LOGS = "click_logs"
@@ -38,6 +46,8 @@ object LogRepository {
     private val rateLimiter = ClickLogRateLimiter()
     private val throttleCounts = linkedMapOf<String, Int>()
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val writeScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val persistenceQueue = ClickLogPersistenceQueue(writeScope)
     private var clickLogsLoaded = false
     private var flushScheduled = false
     private var appContext: Context? = null
@@ -81,6 +91,10 @@ object LogRepository {
 
     private fun readClickLogsFromPrefs(context: Context): List<ClickLog> {
         val raw = SettingsRepository.prefs(context).getString(KEY_CLICK_LOGS, null).orEmpty()
+        return deserializeClickLogPersistence(raw)
+    }
+
+    internal fun deserializeClickLogPersistence(raw: String): List<ClickLog> {
         if (raw.isBlank()) return emptyList()
         return if (raw.trimStart().startsWith("[")) {
             runCatching {
@@ -102,10 +116,7 @@ object LogRepository {
             clickLogBuffer.clear()
             throttleCounts.clear()
         }
-        SettingsRepository.prefs(context).edit {
-            remove(KEY_CLICK_LOGS)
-            remove(KEY_CLICK_LOG_THROTTLE_COUNTS)
-        }
+        clearPersistedClickLogs(context.applicationContext)
     }
 
     fun exportClickLogsAsJson(
@@ -141,14 +152,25 @@ object LogRepository {
             counts = throttleCounts.toMap()
         }
 
+        val payload = serializeClickLogPersistence(logs, counts)
         SettingsRepository.prefs(context).edit {
-            putString(KEY_CLICK_LOGS, JSONArray().apply {
-                logs.forEach { put(it.toJson()) }
-            }.toString())
-            putString(KEY_CLICK_LOG_THROTTLE_COUNTS, JSONObject().apply {
-                counts.forEach { (key, count) -> put(key, count) }
-            }.toString())
+            putString(KEY_CLICK_LOGS, payload.logsJson)
+            putString(KEY_CLICK_LOG_THROTTLE_COUNTS, payload.throttleCountsJson)
         }
+    }
+
+    internal fun serializeClickLogPersistence(
+        logs: List<ClickLog>,
+        throttleCounts: Map<String, Int>
+    ): ClickLogPersistencePayload {
+        return ClickLogPersistencePayload(
+            logsJson = JSONArray().apply {
+                logs.forEach { put(it.toJson()) }
+            }.toString(),
+            throttleCountsJson = JSONObject().apply {
+                throttleCounts.forEach { (key, count) -> put(key, count) }
+            }.toString()
+        )
     }
 
     fun addRuleLog(context: Context, log: RuleLog) {
@@ -470,8 +492,20 @@ object LogRepository {
         }
         if (!shouldSchedule) return
         mainHandler.postDelayed({
-            flushPendingClickLogs(appContext ?: targetContext)
+            val flushContext = appContext ?: targetContext
+            persistenceQueue.enqueue {
+                flushPendingClickLogs(flushContext)
+            }
         }, FLUSH_DELAY_MS)
+    }
+
+    private fun clearPersistedClickLogs(context: Context) {
+        persistenceQueue.enqueue {
+            SettingsRepository.prefs(context).edit {
+                remove(KEY_CLICK_LOGS)
+                remove(KEY_CLICK_LOG_THROTTLE_COUNTS)
+            }
+        }
     }
 
     private fun JSONObject.optNullableInt(key: String): Int? {

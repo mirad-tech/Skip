@@ -17,6 +17,7 @@ class ScannerFixtureActivity : Activity() {
         ChromeLocationBarAttachmentAdd,
         BilibiliDanmakuClose,
         BilibiliCountdownSkip,
+        BilibiliSearchClearButton,
         FocusedTopSearchField
     }
 
@@ -49,6 +50,10 @@ class ScannerFixtureActivity : Activity() {
                     Scenario.BilibiliCountdownSkip -> addView(
                         BilibiliCountdownSkipButton(context),
                         FrameLayout.LayoutParams(356, 178)
+                    )
+                    Scenario.BilibiliSearchClearButton -> addView(
+                        BilibiliSearchContainer(context),
+                        FrameLayout.LayoutParams(1080, 180)
                     )
                     Scenario.FocusedTopSearchField -> addView(
                         FocusedTopSearchContainer(context),
@@ -170,6 +175,66 @@ private class BilibiliCountdownSkipButton(
         info?.setEnabled(true)
         info?.setClickable(true)
         info?.setBoundsInScreen(Rect(1020, 2911, 1376, 3089))
+    }
+}
+
+private class BilibiliSearchContainer(
+    context: android.content.Context
+) : FrameLayout(context) {
+    init {
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        addView(
+            BilibiliSearchEditText(context),
+            FrameLayout.LayoutParams(820, 120)
+        )
+        addView(
+            BilibiliSearchClearButton(context),
+            FrameLayout.LayoutParams(144, 120)
+        )
+    }
+}
+
+private class BilibiliSearchEditText(
+    context: android.content.Context
+) : EditText(context) {
+    init {
+        setSingleLine(true)
+        setText("麻薯爱燕三")
+        isEnabled = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.text = "麻薯爱燕三"
+        info?.contentDescription = "搜索查询"
+        info?.viewIdResourceName = "tv.danmaku.bili:id/search_src_text"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setFocused(false)
+        info?.setEditable(true)
+        info?.setBoundsInScreen(Rect(257, 192, 1040, 312))
+    }
+}
+
+private class BilibiliSearchClearButton(
+    context: android.content.Context
+) : ImageView(context) {
+    init {
+        contentDescription = "清除查询"
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.contentDescription = "清除查询"
+        info?.viewIdResourceName = "tv.danmaku.bili:id/search_close_btn"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(1040, 192, 1184, 312))
     }
 }
 

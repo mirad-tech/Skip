@@ -11,6 +11,7 @@ import com.example.skip.model.RulePackage
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import com.example.skip.engine.HighRiskClickPolicy
+import com.example.skip.engine.SafeRegexMatcher
 import com.example.skip.util.SimpleJson
 import com.example.skip.util.SimpleJsonArray
 import com.example.skip.util.SimpleJsonObject
@@ -312,11 +313,30 @@ object RuleImportManager {
         val cooldownMs = ruleJson.optLong("cooldownMs", 1200L)
         val validDurationMs = ruleJson.optLong("validDurationMs", RuleRepository.DEFAULT_RULE_WINDOW_MS)
         val minScore = ruleJson.optInt("minScore", 70)
-        val matchTexts = ruleJson.optJSONArray("matchTexts").toStringList()
+        val textMatchMode = MatchMode.fromValue(
+            ruleJson.optString("textMatchMode", MatchMode.Contains.value)
+        )
+        val contentDescriptionMatchMode = MatchMode.fromValue(
+            ruleJson.optString("contentDescriptionMatchMode", MatchMode.Contains.value)
+        )
+        val viewIdMatchMode = MatchMode.fromValue(
+            ruleJson.optString("viewIdMatchMode", MatchMode.Contains.value)
+        )
+        val matchTexts = ruleJson.optJSONArray("matchTexts")
+            .toStringList(splitEntries = textMatchMode != MatchMode.Regex)
         val matchContentDescriptions = ruleJson
             .optJSONArray("matchContentDescriptions")
-            .toStringList()
-        val matchViewIds = ruleJson.optJSONArray("matchViewIds").toStringList()
+            .toStringList(splitEntries = contentDescriptionMatchMode != MatchMode.Regex)
+        val matchViewIds = ruleJson.optJSONArray("matchViewIds")
+            .toStringList(splitEntries = viewIdMatchMode != MatchMode.Regex)
+        validateRegexPatterns(id, "matchTexts", matchTexts, textMatchMode)?.let { return it }
+        validateRegexPatterns(
+            id,
+            "matchContentDescriptions",
+            matchContentDescriptions,
+            contentDescriptionMatchMode
+        )?.let { return it }
+        validateRegexPatterns(id, "matchViewIds", matchViewIds, viewIdMatchMode)?.let { return it }
         val coordinateJson = ruleJson.optJSONObject("coordinateFallback")
         if (coordinateJson?.optBoolean("enabled", false) == true &&
             (!coordinateJson.has("xRatio") || !coordinateJson.has("yRatio"))
@@ -381,15 +401,9 @@ object RuleImportManager {
                     matchTexts = matchTexts,
                     matchContentDescriptions = matchContentDescriptions,
                     matchViewIds = matchViewIds,
-                    textMatchMode = MatchMode.fromValue(
-                        ruleJson.optString("textMatchMode", MatchMode.Contains.value)
-                    ),
-                    contentDescriptionMatchMode = MatchMode.fromValue(
-                        ruleJson.optString("contentDescriptionMatchMode", MatchMode.Contains.value)
-                    ),
-                    viewIdMatchMode = MatchMode.fromValue(
-                        ruleJson.optString("viewIdMatchMode", MatchMode.Contains.value)
-                    ),
+                    textMatchMode = textMatchMode,
+                    contentDescriptionMatchMode = contentDescriptionMatchMode,
+                    viewIdMatchMode = viewIdMatchMode,
                     area = area,
                     action = action,
                     priority = ruleJson.optInt("priority", 10),
@@ -403,13 +417,14 @@ object RuleImportManager {
         )
     }
 
-    private fun SimpleJsonArray?.toStringList(): List<String> {
+    private fun SimpleJsonArray?.toStringList(splitEntries: Boolean = true): List<String> {
         if (this == null) return emptyList()
-        return buildList {
+        val entries = buildList {
             for (index in 0 until length()) {
                 optString(index).trim().takeIf { it.isNotEmpty() }?.let(::add)
             }
-        }.cleanItems()
+        }
+        return if (splitEntries) entries.cleanItems() else entries.distinct()
     }
 
     private fun List<String>.cleanItems(): List<String> {
@@ -428,6 +443,18 @@ object RuleImportManager {
             anchorContentDescriptions = optJSONArray("anchorContentDescriptions").toStringList(),
             anchorViewIds = optJSONArray("anchorViewIds").toStringList()
         )
+    }
+
+    private fun validateRegexPatterns(
+        ruleId: String,
+        fieldName: String,
+        patterns: List<String>,
+        matchMode: MatchMode
+    ): RuleImportResult? {
+        if (matchMode != MatchMode.Regex) return null
+        val invalidPattern = patterns.firstOrNull { pattern -> !SafeRegexMatcher.isValid(pattern) }
+            ?: return null
+        return RuleImportResult(false, "$ruleId 的 $fieldName 包含非法正则：$invalidPattern")
     }
 
     fun previewImport(result: RuleImportResult, strategy: DuplicateStrategy): List<String> {

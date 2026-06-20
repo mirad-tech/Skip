@@ -3,6 +3,7 @@ package com.example.skip
 import android.graphics.Rect
 import com.example.skip.data.LogRepository
 import com.example.skip.data.ClickLogBuffer
+import com.example.skip.data.ClickLogPersistenceQueue
 import com.example.skip.data.ClickLogRateLimiter
 import com.example.skip.data.DiagnosticReportRepository
 import com.example.skip.data.IconManager
@@ -21,6 +22,8 @@ import com.example.skip.engine.NodeScanner
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.engine.ScoreEvaluator
+import com.example.skip.engine.SafeRegexMatcher
+import com.example.skip.engine.TextInputClearButtonPolicy
 import com.example.skip.model.AppPolicy
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickLogStage
@@ -29,6 +32,7 @@ import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.CoordinateFallback
 import com.example.skip.model.DuplicateStrategy
 import com.example.skip.model.InstalledApp
+import com.example.skip.model.MatchMode
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleImportResult
 import com.example.skip.model.RulePackage
@@ -56,6 +60,12 @@ import com.example.skip.util.PrivacySanitizer
 import com.example.skip.util.RomUtils
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -84,6 +94,7 @@ class SafetyAndLogUnitTest {
             "注册",
             "隐私政策",
             "用户协议",
+            "更新",
             "安装",
             "删除",
             "卸载",
@@ -109,6 +120,80 @@ class SafetyAndLogUnitTest {
 
         assertTrue(decision.allowed)
         assertEquals("", decision.reason)
+    }
+
+    @Test
+    fun safeRegexMatcherRejectsMalformedRegexWithoutThrowing() {
+        assertTrue(SafeRegexMatcher.containsMatch("skip\\s*\\d+", "skip 5"))
+        assertFalse(SafeRegexMatcher.containsMatch("(skip", "skip 5"))
+    }
+
+    @Test
+    fun scoreEvaluatorPreservesRegexEscapeTokensAtRuntime() {
+        val method = ScoreEvaluator::class.java
+            .getDeclaredMethod(
+                "matchesRuleKeyword",
+                String::class.java,
+                String::class.java,
+                MatchMode::class.java
+            )
+            .apply { isAccessible = true }
+
+        val matched = method.invoke(
+            ScoreEvaluator,
+            "skip ad",
+            "\\QSkip Ad\\E",
+            MatchMode.Regex
+        ) as Boolean
+
+        assertTrue(matched)
+    }
+
+    @Test
+    fun scoreEvaluatorMatchesRawViewIdRegexAndKeepsNormalizedFallback() {
+        val method = ScoreEvaluator::class.java
+            .getDeclaredMethod(
+                "matchedIdRule",
+                String::class.java,
+                List::class.java,
+                MatchMode::class.java
+            )
+            .apply { isAccessible = true }
+        val viewId = "com.example:id/skip_ad"
+        val rawPattern = "\\Qcom.example:id/skip_ad\\E"
+        val legacyPattern = "com_example_id/skip_ad"
+
+        val rawMatch = method.invoke(ScoreEvaluator, viewId, listOf(rawPattern), MatchMode.Regex)
+        val legacyMatch = method.invoke(ScoreEvaluator, viewId, listOf(legacyPattern), MatchMode.Regex)
+
+        assertEquals(rawPattern, rawMatch)
+        assertEquals(legacyPattern, legacyMatch)
+    }
+
+    @Test
+    fun clickLogPersistenceQueueRunsClearAfterAnActiveWrite() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val queue = ClickLogPersistenceQueue(scope)
+        val writeStarted = CompletableDeferred<Unit>()
+        val allowWriteToFinish = CompletableDeferred<Unit>()
+        var storedValue = "old"
+
+        try {
+            queue.enqueue {
+                writeStarted.complete(Unit)
+                allowWriteToFinish.await()
+                storedValue = "old_snapshot"
+            }
+            writeStarted.await()
+            val clearJob = queue.enqueue { storedValue = "" }
+
+            allowWriteToFinish.complete(Unit)
+            clearJob.join()
+
+            assertEquals("", storedValue)
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test
@@ -442,6 +527,28 @@ class SafetyAndLogUnitTest {
         assertEquals(0, bilibiliBonus)
         assertEquals(0, otherAppBonus)
         assertEquals(0, largeCandidateBonus)
+    }
+
+    @Test
+    fun textInputClearButtonPolicyBlocksSearchClearButton() {
+        assertTrue(
+            TextInputClearButtonPolicy.shouldBlockDefaultRuleCandidate(
+                viewId = "tv.danmaku.bili:id/search_close_btn",
+                text = "",
+                contentDescription = "清除查询"
+            )
+        )
+    }
+
+    @Test
+    fun textInputClearButtonPolicyAllowsOrdinaryAdCloseButton() {
+        assertFalse(
+            TextInputClearButtonPolicy.shouldBlockDefaultRuleCandidate(
+                viewId = "com.example.ad:id/close_btn",
+                text = "",
+                contentDescription = "关闭广告"
+            )
+        )
     }
 
     @Test
@@ -1331,6 +1438,153 @@ class SafetyAndLogUnitTest {
         assertTrue(highRiskViewId.errorMessage.contains(HighRiskClickPolicy.BLOCKED_REASON))
         assertFalse(highRiskAnchorViewId.success)
         assertTrue(highRiskAnchorViewId.errorMessage.contains(HighRiskClickPolicy.BLOCKED_REASON))
+    }
+
+    @Test
+    fun importedRulesRejectMalformedRegexBeforeRuntime() {
+        val json = """
+            {
+              "name": "坏规则包",
+              "apps": [
+                {
+                  "packageName": "com.example.news",
+                  "rules": [
+                    {
+                      "id": "bad_regex",
+                      "matchTexts": ["(跳过"],
+                      "textMatchMode": "regex",
+                      "area": "top_right"
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = RuleImportManager.parseRulePackage(json)
+
+        assertFalse(result.success)
+        assertTrue(result.errorMessage.contains("正则"))
+    }
+
+    @Test
+    fun importedRulesRejectMalformedRegexInEveryMatchField() {
+        val fields = listOf(
+            "matchContentDescriptions" to "contentDescriptionMatchMode",
+            "matchViewIds" to "viewIdMatchMode"
+        )
+
+        fields.forEach { (matchField, modeField) ->
+            val json = """
+                {
+                  "name": "坏规则包",
+                  "apps": [
+                    {
+                      "packageName": "com.example.news",
+                      "rules": [
+                        {
+                          "id": "bad_$matchField",
+                          "$matchField": ["(跳过"],
+                          "$modeField": "regex",
+                          "area": "top_right"
+                        }
+                      ]
+                    }
+                  ]
+                }
+            """.trimIndent()
+
+            val result = RuleImportManager.parseRulePackage(json)
+
+            assertFalse("$matchField should reject malformed regex", result.success)
+            assertTrue(result.errorMessage.contains("正则"))
+        }
+    }
+
+    @Test
+    fun importedRegexRulesKeepEachJsonPatternIntact() {
+        val json = """
+            {
+              "name": "正则规则包",
+              "apps": [
+                {
+                  "packageName": "com.example.news",
+                  "rules": [
+                    {
+                      "id": "regex_with_space",
+                      "matchTexts": ["skip ad\\s*\\d+"],
+                      "matchContentDescriptions": ["close promo"],
+                      "matchViewIds": ["com.example:id/skip ad"],
+                      "textMatchMode": "regex",
+                      "contentDescriptionMatchMode": "regex",
+                      "viewIdMatchMode": "regex",
+                      "area": "top_right"
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = RuleImportManager.parseRulePackage(json)
+
+        assertTrue(result.success)
+        assertEquals(listOf("skip ad\\s*\\d+"), result.rules.single().matchTexts)
+        assertEquals(listOf("close promo"), result.rules.single().matchContentDescriptions)
+        assertEquals(listOf("com.example:id/skip ad"), result.rules.single().matchViewIds)
+    }
+
+    @Test
+    fun importedQuotedRegexRemainsValidForRuntimeMatching() {
+        val json = """
+            {
+              "name": "引用正则规则包",
+              "apps": [
+                {
+                  "packageName": "com.example.news",
+                  "rules": [
+                    {
+                      "id": "quoted_regex",
+                      "matchTexts": ["\\QSkip Ad\\E"],
+                      "textMatchMode": "regex",
+                      "area": "top_right"
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = RuleImportManager.parseRulePackage(json)
+
+        assertTrue(result.success)
+        assertEquals(listOf("\\QSkip Ad\\E"), result.rules.single().matchTexts)
+    }
+
+    @Test
+    fun importedContainsRulesKeepLegacyKeywordSplitting() {
+        val json = """
+            {
+              "name": "普通规则包",
+              "apps": [
+                {
+                  "packageName": "com.example.news",
+                  "rules": [
+                    {
+                      "id": "contains_split",
+                      "matchTexts": ["skip ad"],
+                      "area": "top_right"
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = RuleImportManager.parseRulePackage(json)
+
+        assertTrue(result.success)
+        assertEquals(listOf("skip", "ad"), result.rules.single().matchTexts)
     }
 
     @Test
