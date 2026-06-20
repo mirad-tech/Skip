@@ -1,4 +1,9 @@
 *.iml
+# Local AI assistant instructions and workspaces.
+/AGENT.md
+/AGENTS.md
+/.agents/
+/.codex/
 .codex-security-scans/
 .gradle/
 .gradle-home/
