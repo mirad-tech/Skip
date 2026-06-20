@@ -1,10 +1,17 @@
 package com.example.skip
 
+import android.os.SystemClock
+import android.util.Log
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.engine.NodeScanner
+import com.example.skip.model.ClickLog
+import com.example.skip.model.ClickMethodLog
+import com.example.skip.model.ClickLogStage
+import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
@@ -22,6 +29,74 @@ class GeminiRegressionInstrumentedTest {
     @After
     fun resetScannerFixture() {
         ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.SplashSkipButton
+    }
+
+    @Test
+    fun clickLogPersistencePayloadSerializesBufferedLogsAndThrottleCounts() {
+        val payload = LogRepository.serializeClickLogPersistence(
+            logs = listOf(
+                ClickLog(
+                    timeMillis = 1L,
+                    packageName = "com.example.news",
+                    stage = ClickLogStage.ClickActionSuccess
+                )
+            ),
+            throttleCounts = mapOf("com.example.news:noise" to 2)
+        )
+
+        assertTrue(payload.logsJson.contains("com.example.news"))
+        assertTrue(payload.throttleCountsJson.contains("com.example.news:noise"))
+    }
+
+    @Test
+    fun clickLogPersistencePayloadRoundTripsForFirstLoadParsing() {
+        val logs = listOf(
+            ClickLog(
+                timeMillis = 1L,
+                packageName = "com.example.news",
+                appName = "News",
+                stage = ClickLogStage.ClickActionSuccess,
+                success = true,
+                matchedKeyword = "skip ad",
+                nodeText = "跳过广告"
+            )
+        )
+        val payload = LogRepository.serializeClickLogPersistence(logs, emptyMap())
+
+        val restored = LogRepository.deserializeClickLogPersistence(payload.logsJson)
+
+        assertEquals(logs, restored)
+    }
+
+    @Test
+    fun clickLogPersistenceBenchmarkReportsPayloadSizeAndP95Latency() {
+        val logs = (0 until BENCHMARK_LOG_COUNT).map(::benchmarkClickLog)
+        val serializationSamples = mutableListOf<Long>()
+        val parseSamples = mutableListOf<Long>()
+        var payloadBytes = 0
+
+        repeat(BENCHMARK_SAMPLES) {
+            val serializeStart = SystemClock.elapsedRealtimeNanos()
+            val payload = LogRepository.serializeClickLogPersistence(logs, emptyMap())
+            serializationSamples += SystemClock.elapsedRealtimeNanos() - serializeStart
+            payloadBytes = payload.logsJson.toByteArray(Charsets.UTF_8).size
+
+            val parseStart = SystemClock.elapsedRealtimeNanos()
+            val restored = LogRepository.deserializeClickLogPersistence(payload.logsJson)
+            parseSamples += SystemClock.elapsedRealtimeNanos() - parseStart
+
+            assertEquals(logs, restored)
+        }
+
+        val serializationP95Ms = p95Millis(serializationSamples)
+        val parseP95Ms = p95Millis(parseSamples)
+        Log.i(
+            LOG_TAG,
+            "clickLogs=$BENCHMARK_LOG_COUNT payloadBytes=$payloadBytes " +
+                "serializeP95Ms=$serializationP95Ms parseP95Ms=$parseP95Ms"
+        )
+
+        assertTrue(payloadBytes > 0)
     }
 
     @Test
@@ -190,6 +265,26 @@ class GeminiRegressionInstrumentedTest {
     }
 
     @Test
+    fun bilibiliSearchClearButtonIsNotDefaultSplashCandidate() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.BilibiliSearchClearButton
+        val rule = builtInDefaultRule(
+            packageName = "tv.danmaku.bili",
+            appName = "哔哩哔哩"
+        )
+
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val rootNode = InstrumentationRegistry.getInstrumentation()
+                .uiAutomation
+                .rootInActiveWindow
+
+            val match = NodeScanner.findBestMatch(rootNode, listOf(rule), appElapsedMs = 1_000L)
+
+            assertNull(match)
+        }
+    }
+
+    @Test
     fun activeTextInputGuardDetectsFocusedSearchField() {
         ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.FocusedTopSearchField
 
@@ -217,5 +312,93 @@ class GeminiRegressionInstrumentedTest {
             validDurationMs = 8_000L,
             minScore = 70
         )
+    }
+
+    private fun benchmarkClickLog(index: Int): ClickLog {
+        return ClickLog(
+            timeMillis = 1_700_000_000_000L + index,
+            packageName = "com.example.app$index",
+            appName = "Example $index",
+            activityName = "com.example.app$index.SplashActivity",
+            ruleType = "json",
+            ruleName = "关闭开屏广告$index",
+            ruleId = "rule_$index",
+            stage = ClickLogStage.ClickEffectConfirmed,
+            success = true,
+            reason = "click_completed",
+            failureReason = "",
+            detail = "candidate=$index",
+            eventType = 32,
+            eventPackageName = "com.example.app$index",
+            rootWindowNull = false,
+            windowId = index,
+            rootChildCount = 8,
+            canRetrieveWindowContent = true,
+            candidateCount = 3,
+            bestCandidateScore = 92,
+            bestCandidateBounds = "960,80,1060,160",
+            minScore = 70,
+            matchedKeyword = "跳过",
+            nodeText = "跳过广告$index",
+            contentDescription = "关闭广告",
+            viewIdResourceName = "com.example.app$index:id/splash_skip",
+            boundsInScreen = "960,80,1060,160",
+            nodeClickable = true,
+            parentClickable = false,
+            score = 92,
+            area = "top_right",
+            clickMethod = ClickMethodLog.ActionClick,
+            actionReturnValue = true,
+            clickResult = true,
+            effectConfirmed = true,
+            delayBeforeClickMs = 120L,
+            retryCount = 0,
+            deviceRom = "Android",
+            elapsedSinceAppStartMs = 1_200L,
+            foregroundPackage = "com.example.app$index",
+            foregroundStartTimeMillis = 1_700_000_000_000L,
+            elapsedSinceForegroundMs = 1_200L,
+            defaultRuleWindowMs = 8_000L,
+            isWithinDefaultRuleWindow = true,
+            ruleScope = "default",
+            timeWindowDecision = "within_window",
+            isSystemPackage = false,
+            isLauncherPackage = false,
+            isSelfPackage = false,
+            isSelfAppLabelCandidate = false,
+            blockedBySafety = false,
+            blockedReason = "",
+            defaultRuleAreaAllowed = true,
+            textKeywordIsStandaloneSkip = false,
+            effectConfirmReason = "window_changed",
+            safetyModeEnabled = true,
+            clickSkippedBySafetyMode = false,
+            candidateBounds = "960,80,1060,160",
+            candidateCenterX = 1_010,
+            candidateCenterY = 120,
+            clickedNodeBounds = "960,80,1060,160",
+            clickedNodeClassName = "android.widget.TextView",
+            clickedNodeText = "跳过广告$index",
+            clickedNodeViewId = "com.example.app$index:id/splash_skip",
+            clickedParentDepth = 1,
+            candidateAreaRatio = 0.01f,
+            gestureX = 1_010,
+            gestureY = 120,
+            isLargeCandidateBounds = false,
+            isFixedCoordinateClick = false,
+            clickTargetSource = ClickTargetSourceLog.NodeSelf
+        )
+    }
+
+    private fun p95Millis(samples: List<Long>): Double {
+        val sorted = samples.sorted()
+        val index = ((sorted.size * 95 + 99) / 100 - 1).coerceIn(0, sorted.lastIndex)
+        return sorted[index] / 1_000_000.0
+    }
+
+    private companion object {
+        const val LOG_TAG = "SkipLogBenchmark"
+        const val BENCHMARK_LOG_COUNT = 1_000
+        const val BENCHMARK_SAMPLES = 10
     }
 }

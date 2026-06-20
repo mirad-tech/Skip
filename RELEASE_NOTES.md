@@ -1,5 +1,37 @@
 # Skip 发布说明
 
+## 1.0.6
+
+发布日期：2026-06-20
+
+### 更新内容
+
+- 点击日志的 JSON 序列化与偏好写入改为后台串行执行，清空日志与延迟写入不会再发生旧快照回写。
+- 正则匹配增加有界缓存；导入阶段保留原始正则源码并预校验语法，`\\Q...\\E` 等合法转义在运行时保持相同语义。
+- View ID 正则优先匹配原始资源 ID，并兼容历史规范化规则。
+- 补充高风险“更新”拦截与搜索输入框清除按钮规避，降低自动化误触风险。
+- 新增日志持久化、正则兼容、输入框规避和扫描回归测试；仪器测试增加 1000 条点击日志 JSON 往返基准。
+
+### 版本信息
+
+- `versionCode`：14
+- `versionName`：`1.0.6`
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.6-release.apk`
+- SHA256：`7A5C535E0C8C43EB60F97B3564E74A2631F6D6A5105578E505326AC089CB9F54`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:compileDebugAndroidTestKotlin
+.\gradlew.bat :app:assembleRelease
+git diff --check
+```
+
 ## 1.0.5
 
 发布日期：2026-06-19

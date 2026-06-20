@@ -272,6 +272,7 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             val stage = when {
                 scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON -> ClickLogStage.SkippedBySafety
+                scan.failureReason == "text_input_clear_button" -> ClickLogStage.SkippedBySafety
                 scan.candidateCount == 0 -> ClickLogStage.NoCandidateFound
                 scan.failureReason == "score_below_min_score" ||
                     scan.failureReason == "candidate_below_threshold" -> ClickLogStage.SkippedByLowScore
