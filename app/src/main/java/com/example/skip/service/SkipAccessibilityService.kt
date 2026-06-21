@@ -22,6 +22,7 @@ import com.example.skip.engine.ClickAttempt
 import com.example.skip.engine.ClickExecutor
 import com.example.skip.engine.CoordinateFallbackMatch
 import com.example.skip.engine.CoordinateFallbackMatcher
+import com.example.skip.engine.CoordinateFallbackMatchResult
 import com.example.skip.engine.HighRiskClickDecision
 import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.NodeScanner
@@ -47,6 +48,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastWindowStateChangedAt = 0L
     private var currentActivityName: String = ""
     private val lastToastAt = mutableMapOf<String, Long>()
+    private val lastCoordinateFallbackBlockedAt = mutableMapOf<String, Long>()
     private var popupView: View? = null
 
     private val foregroundPackage: String?
@@ -214,8 +216,26 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
+        val activityScopedRules = NodeScanner.filterRulesForActivity(rules, eventContext.activityName)
         if (ActiveTextInputGuard.hasFocusedEditableInput(root)) {
-            SettingsRepository.setLastFailureReason(this, "active_text_input")
+            val coordinateResult = CoordinateFallbackMatcher.findResult(
+                root = root,
+                rules = activityScopedRules,
+                packageName = currentPackage,
+                selfPackageName = packageName,
+                elapsedSinceForegroundMs = eventContext.elapsedSinceForegroundMs ?: 0L,
+                screenWidth = resources.displayMetrics.widthPixels,
+                screenHeight = resources.displayMetrics.heightPixels,
+                activeTextInput = true
+            )
+            if (coordinateResult is CoordinateFallbackMatchResult.Blocked) {
+                logCoordinateFallbackBlocked(
+                    eventContext = eventContext,
+                    result = coordinateResult
+                )
+            } else {
+                SettingsRepository.setLastFailureReason(this, "active_text_input")
+            }
             return
         }
 
@@ -242,33 +262,52 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
-        val activityScopedRules = NodeScanner.filterRulesForActivity(activeRules, eventContext.activityName)
+        val activeActivityScopedRules = NodeScanner.filterRulesForActivity(activeRules, eventContext.activityName)
         val scan = NodeScanner.scan(root, activeRules, appElapsedMs, eventContext.activityName)
         logScan(scan, eventContext)
         val match = scan.bestMatch
         if (match == null) {
-            val fallback = CoordinateFallbackMatcher.find(
+            when (
+                val coordinateResult = CoordinateFallbackMatcher.findResult(
                 root = root,
-                rules = activityScopedRules,
+                rules = activeActivityScopedRules,
                 packageName = currentPackage,
                 selfPackageName = packageName,
                 elapsedSinceForegroundMs = appElapsedMs,
                 screenWidth = resources.displayMetrics.widthPixels,
                 screenHeight = resources.displayMetrics.heightPixels
-            )
-            if (fallback != null) {
-                val signature = "$currentPackage:${fallback.rule.id}:coordinate:${fallback.x}:${fallback.y}"
-                val lastAnyRuleClick = lastRuleClickAt.values.maxOrNull() ?: 0L
-                if (signature == lastClickSignature && now - lastAnyRuleClick < REPEAT_CLICK_GUARD_MS) return
-                startStableCoordinateFallback(
-                    packageName = currentPackage,
-                    fallback = fallback,
-                    activeRules = activityScopedRules,
-                    signature = signature,
-                    eventContext = eventContext,
-                    scan = scan
                 )
-                return
+            ) {
+                is CoordinateFallbackMatchResult.Matched -> {
+                    val fallback = coordinateResult.match
+                    val signature = "$currentPackage:${fallback.rule.id}:coordinate:${fallback.x}:${fallback.y}"
+                    val lastAnyRuleClick = lastRuleClickAt.values.maxOrNull() ?: 0L
+                    if (signature == lastClickSignature && now - lastAnyRuleClick < REPEAT_CLICK_GUARD_MS) return
+                    startStableCoordinateFallback(
+                        packageName = currentPackage,
+                        fallback = fallback,
+                        activeRules = activeActivityScopedRules,
+                        signature = signature,
+                        eventContext = eventContext,
+                        scan = scan
+                    )
+                    return
+                }
+                is CoordinateFallbackMatchResult.Blocked -> {
+                    logCoordinateFallbackBlocked(
+                        eventContext = eventContext,
+                        result = coordinateResult,
+                        scan = scan
+                    )
+                    scheduleOpeningAdRescans(
+                        packageName = currentPackage,
+                        activeRules = activeRules,
+                        baseEventContext = eventContext,
+                        stage = ClickLogStage.SkippedBySafety
+                    )
+                    return
+                }
+                CoordinateFallbackMatchResult.NotApplicable -> Unit
             }
             val stage = when {
                 scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON -> ClickLogStage.SkippedBySafety
@@ -705,6 +744,35 @@ class SkipAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed({ runCoordinateFallback(pending) }, STABLE_CLICK_DELAY_MS)
     }
 
+    private fun logCoordinateFallbackBlocked(
+        eventContext: EventContext,
+        result: CoordinateFallbackMatchResult.Blocked,
+        scan: ScanReport? = null
+    ) {
+        SettingsRepository.setLastFailureReason(this, result.reason)
+        val key = "${eventContext.packageName}:${result.rule.id}:${result.reason}"
+        val now = System.currentTimeMillis()
+        val previous = lastCoordinateFallbackBlockedAt[key] ?: 0L
+        if (now - previous < COORDINATE_BLOCKED_LOG_INTERVAL_MS) return
+        lastCoordinateFallbackBlockedAt[key] = now
+
+        logEvent(
+            stage = ClickLogStage.SkippedBySafety,
+            eventContext = eventContext,
+            ruleType = result.rule.source.toClickLogType(),
+            ruleName = result.rule.name,
+            ruleId = result.rule.id,
+            reason = result.reason,
+            failureReason = result.reason,
+            candidateCount = scan?.candidateCount,
+            bestCandidateScore = scan?.bestCandidateScore,
+            bestCandidateBounds = scan?.bestCandidateBounds.orEmpty(),
+            minScore = result.rule.minScore,
+            blockedReason = result.reason,
+            clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+        )
+    }
+
     private fun relocateAndClick(pending: PendingClick) {
         if (pendingClick !== pending) return
         val root = rootInActiveWindow
@@ -786,26 +854,87 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun runCoordinateFallback(pending: PendingClick) {
         if (pendingClick !== pending) return
-        if (cancelIfUnsafeDelayedClickWindow(pending, rootInActiveWindow)) return
+        val root = rootInActiveWindow
         val x = pending.coordinateX ?: pending.candidate.bounds.centerX()
         val y = pending.coordinateY ?: pending.candidate.bounds.centerY()
-        lastRuleClickAt[pending.ruleId] = System.currentTimeMillis()
-        lastClickSignature = pending.signature
+        val rule = pending.activeRules.firstOrNull { candidate ->
+            candidate.id == pending.ruleId && candidate.coordinateFallback?.enabled == true
+        }
+        if (rule == null) {
+            finishPendingClick(
+                pending = pending,
+                stage = ClickLogStage.SkippedBySafety,
+                success = false,
+                reason = "coordinate_rule_missing",
+                attempt = null,
+                blockedReason = "coordinate_rule_missing",
+                clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+            )
+            return
+        }
+        val currentPackageName = root?.packageName?.toString().orEmpty().ifBlank {
+            foregroundPackage.orEmpty()
+        }
+        val elapsedSinceForegroundMs = (
+            System.currentTimeMillis() - foregroundState.foregroundStartTimeMillis
+            ).coerceAtLeast(0L)
+        val revalidation = CoordinateFallbackMatcher.revalidateAtPoint(
+            root = root,
+            rule = rule,
+            expectedPackageName = pending.packageName,
+            currentPackageName = currentPackageName,
+            selfPackageName = packageName,
+            elapsedSinceForegroundMs = elapsedSinceForegroundMs,
+            x = x,
+            y = y,
+            originalTarget = pending.candidate,
+            activeTextInput = ActiveTextInputGuard.hasFocusedEditableInput(root)
+        )
+        if (!revalidation.allowed || revalidation.reason != "coordinate_target_revalidated") {
+            finishPendingClick(
+                pending = pending,
+                stage = ClickLogStage.SkippedBySafety,
+                success = false,
+                reason = revalidation.reason,
+                attempt = null,
+                blockedReason = revalidation.reason,
+                detail = "coordinate_revalidation=${revalidation.reason}",
+                clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+            )
+            return
+        }
+        if (cancelIfUnsafeDelayedClickWindow(pending, root)) return
+        val target = revalidation.target ?: run {
+            finishPendingClick(
+                pending = pending,
+                stage = ClickLogStage.SkippedBySafety,
+                success = false,
+                reason = "coordinate_target_missing",
+                attempt = null,
+                blockedReason = "coordinate_target_missing",
+                clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+            )
+            return
+        }
+        val updatedPending = pending.copy(target = target, candidate = target)
+        pendingClick = updatedPending
+        lastRuleClickAt[updatedPending.ruleId] = System.currentTimeMillis()
+        lastClickSignature = updatedPending.signature
 
         logEvent(
             stage = ClickLogStage.ClickAttempted,
-            eventContext = pending.eventContext,
-            pending = pending,
+            eventContext = updatedPending.eventContext,
+            pending = updatedPending,
             clickMethod = ClickMethodLog.DispatchGesture,
-            delayBeforeClickMs = pending.delayBeforeClickMs,
+            delayBeforeClickMs = updatedPending.delayBeforeClickMs,
             clickTargetSource = ClickTargetSourceLog.CoordinateFallback
         )
 
-        ClickExecutor.gestureClickPoint(this, pending.candidate, x, y) { attempt ->
-            if (pendingClick?.signature != pending.signature) return@gestureClickPoint
+        ClickExecutor.gestureClickPoint(this, target, x, y) { attempt ->
+            if (pendingClick?.signature != updatedPending.signature) return@gestureClickPoint
             if (!attempt.accepted) {
                 finishPendingClick(
-                    pending = pending.copy(firstAttempt = attempt),
+                    pending = updatedPending.copy(firstAttempt = attempt),
                     stage = ClickLogStage.ClickFailed,
                     success = false,
                     reason = attempt.reason,
@@ -814,7 +943,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 )
                 return@gestureClickPoint
             }
-            val updated = pending.copy(firstAttempt = attempt)
+            val updated = updatedPending.copy(firstAttempt = attempt)
             pendingClick = updated
             logEvent(
                 stage = ClickLogStage.ClickActionSuccess,
@@ -1306,6 +1435,7 @@ class SkipAccessibilityService : AccessibilityService() {
         internal const val STABLE_CLICK_DELAY_MS = 100L
         private const val CLICK_VERIFY_DELAY_MS = 360L
         private const val GESTURE_VERIFY_DELAY_MS = 460L
+        private const val COORDINATE_BLOCKED_LOG_INTERVAL_MS = 2_000L
         private const val TOAST_COOLDOWN_MS = 60_000L
         private const val POPUP_DURATION_MS = 1600L
     }

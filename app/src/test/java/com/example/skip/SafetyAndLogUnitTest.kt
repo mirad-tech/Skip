@@ -15,9 +15,11 @@ import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.data.StatsRepository
 import com.example.skip.engine.CoordinateFallbackMatcher
+import com.example.skip.engine.ClickExecutor
 import com.example.skip.engine.ClickTargetInfo
 import com.example.skip.engine.CoordinateFallbackMatch
 import com.example.skip.engine.HighRiskClickPolicy
+import com.example.skip.engine.CoordinateFallbackTargetSnapshot
 import com.example.skip.engine.NodeScanner
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
@@ -1139,6 +1141,44 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun locallyCreatedCoordinateFallbackUsesRuntimeWindow() {
+        val result = RuleImportManager.createLocalRule(
+            packageName = "com.example.news",
+            appName = "News",
+            name = "坐标兜底",
+            texts = listOf("跳过广告"),
+            contentDescriptions = emptyList(),
+            viewIds = emptyList(),
+            area = RuleArea.TopRight,
+            enabled = true,
+            priority = 10,
+            cooldownMs = 1_200L,
+            validDurationMs = 6_000L,
+            minScore = 70,
+            coordinateFallback = CoordinateFallback(
+                enabled = true,
+                xRatio = 0.9f,
+                yRatio = 0.12f,
+                anchorTexts = listOf("跳过广告")
+            ),
+            selfPackageName = "com.example.skip"
+        )
+
+        assertTrue(result.errorMessage, result.success)
+        val decision = CoordinateFallbackMatcher.evaluate(
+            rule = result.rules.single(),
+            packageName = "com.example.news",
+            selfPackageName = "com.example.skip",
+            elapsedSinceForegroundMs = 500L,
+            screenWidth = 1_000,
+            screenHeight = 2_000,
+            hasAnchor = true
+        )
+
+        assertTrue(decision.reason, decision.allowed)
+    }
+
+    @Test
     fun coordinateFallbackValidatesRatiosAndBlocksBuiltInRules() {
         val fallback = CoordinateFallback(
             enabled = true,
@@ -1330,13 +1370,490 @@ class SafetyAndLogUnitTest {
             ).reason
         )
         assertEquals(
-            HighRiskClickPolicy.BLOCKED_REASON,
+            "coordinate_fallback_target_unsafe",
             CoordinateFallbackMatcher.evaluateTargetAtPoint(
                 target = sensitiveTarget,
                 targetPackageName = "com.example.news",
                 expectedPackageName = "com.example.news"
             ).reason
         )
+    }
+
+    @Test
+    fun coordinateFallbackRejectsShortAnchorDuringLocalRuleCreation() {
+        val result = RuleImportManager.createLocalRule(
+            packageName = "com.example.news",
+            appName = "News",
+            name = "坐标兜底",
+            texts = listOf("跳过广告"),
+            contentDescriptions = emptyList(),
+            viewIds = emptyList(),
+            area = RuleArea.TopRight,
+            enabled = true,
+            priority = 10,
+            cooldownMs = 1_200L,
+            validDurationMs = RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS,
+            minScore = 70,
+            coordinateFallback = CoordinateFallback(
+                enabled = true,
+                xRatio = 0.9f,
+                yRatio = 0.12f,
+                anchorTexts = listOf("跳")
+            ),
+            selfPackageName = "com.example.skip"
+        )
+
+        assertFalse(result.success)
+        assertTrue(result.errorMessage.contains("锚点"))
+    }
+
+    @Test
+    fun coordinateFallbackRejectsBlankNonClickableTarget() {
+        val target = ClickTargetInfo(
+            bounds = testRect(880, 200, 940, 260),
+            text = "",
+            contentDescription = "",
+            viewId = "",
+            className = "",
+            nodeClickable = false,
+            parentClickable = false,
+            enabled = true,
+            visibleToUser = true,
+            password = false,
+            input = false
+        )
+
+        val decision = CoordinateFallbackMatcher.evaluateTargetAtPoint(
+            target = target,
+            targetPackageName = "com.example.news",
+            expectedPackageName = "com.example.news"
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("coordinate_fallback_target_blank", decision.reason)
+    }
+
+    @Test
+    fun coordinateFallbackDoesNotUseShortAnchorAsContainsMatch() {
+        val shortAnchor = CoordinateFallback(
+            enabled = true,
+            xRatio = 0.9f,
+            yRatio = 0.12f,
+            anchorTexts = listOf("跳")
+        )
+        val exactAnchor = shortAnchor.copy(anchorTexts = listOf("跳过广告"))
+
+        assertFalse(
+            CoordinateFallbackMatcher.matchesTrustedAnchor(
+                text = "跳过广告",
+                contentDescription = "",
+                viewId = "",
+                fallback = shortAnchor
+            )
+        )
+        assertTrue(
+            CoordinateFallbackMatcher.matchesTrustedAnchor(
+                text = "跳过广告",
+                contentDescription = "",
+                viewId = "",
+                fallback = exactAnchor
+            )
+        )
+    }
+
+    @Test
+    fun coordinateFallbackRevalidationRejectsMissingAnchorAndExpiredWindow() {
+        val missingAnchor = coordinateFallbackRevalidation(hasAnchor = false)
+        val expired = coordinateFallbackRevalidation(
+            elapsedSinceForegroundMs = RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS + 1L
+        )
+
+        assertFalse(missingAnchor.allowed)
+        assertEquals("coordinate_anchor_missing", missingAnchor.reason)
+        assertFalse(expired.allowed)
+        assertEquals("coordinate_window_expired", expired.reason)
+    }
+
+    @Test
+    fun coordinateFallbackRevalidationRejectsChangedTargetOrPackage() {
+        val original = coordinateFallbackTarget(text = "跳过广告", viewId = "com.example.news:id/skip")
+        val changedTarget = coordinateFallbackRevalidation(
+            originalTarget = original,
+            currentTarget = CoordinateFallbackTargetSnapshot(
+                target = coordinateFallbackTarget(text = "继续", viewId = "com.example.news:id/continue"),
+                packageName = "com.example.news",
+                hasClickableNodeOrAncestor = true
+            )
+        )
+        val changedPackage = coordinateFallbackRevalidation(currentPackageName = "com.example.other")
+
+        assertFalse(changedTarget.allowed)
+        assertEquals("coordinate_target_changed", changedTarget.reason)
+        assertFalse(changedPackage.allowed)
+        assertEquals("coordinate_package_changed", changedPackage.reason)
+    }
+
+    @Test
+    fun coordinateFallbackRevalidationRejectsMissingRootTargetAndBoundsDrift() {
+        val missingRoot = coordinateFallbackRevalidation(rootAvailable = false)
+        val missingTarget = coordinateFallbackRevalidation(currentTarget = null)
+        val driftedTarget = coordinateFallbackRevalidation(
+            currentTarget = CoordinateFallbackTargetSnapshot(
+                target = testClickTarget(
+                    left = 950,
+                    top = 300,
+                    right = 1_010,
+                    bottom = 360,
+                    text = "跳过广告",
+                    viewId = "com.example.news:id/skip"
+                ),
+                packageName = "com.example.news",
+                hasClickableNodeOrAncestor = true
+            )
+        )
+
+        assertFalse(missingRoot.allowed)
+        assertEquals("coordinate_root_missing", missingRoot.reason)
+        assertFalse(missingTarget.allowed)
+        assertEquals("coordinate_target_missing", missingTarget.reason)
+        assertFalse(driftedTarget.allowed)
+        assertEquals("coordinate_target_changed", driftedTarget.reason)
+    }
+
+    @Test
+    fun coordinateFallbackRevalidationRejectsUnsafeTargetAndAncestor() {
+        val unsafeTarget = coordinateFallbackRevalidation(
+            currentTarget = CoordinateFallbackTargetSnapshot(
+                target = coordinateFallbackTarget(text = "立即支付", viewId = "com.example.news:id/skip"),
+                packageName = "com.example.news",
+                hasClickableNodeOrAncestor = true
+            )
+        )
+        val unsafeAncestor = coordinateFallbackRevalidation(
+            currentTarget = CoordinateFallbackTargetSnapshot(
+                target = coordinateFallbackTarget(text = "跳过广告", viewId = "com.example.news:id/skip"),
+                packageName = "com.example.news",
+                ancestorSafetyTexts = listOf("登录"),
+                hasClickableNodeOrAncestor = true
+            )
+        )
+
+        assertFalse(unsafeTarget.allowed)
+        assertEquals("coordinate_target_unsafe", unsafeTarget.reason)
+        assertFalse(unsafeAncestor.allowed)
+        assertEquals("coordinate_target_unsafe", unsafeAncestor.reason)
+    }
+
+    @Test
+    fun coordinateFallbackRevalidationRejectsActiveInputAndSensitivePage() {
+        val activeInput = coordinateFallbackRevalidation(activeTextInput = true)
+        val sensitivePage = coordinateFallbackRevalidation(pageSafetyTexts = listOf("注册账号"))
+
+        assertFalse(activeInput.allowed)
+        assertEquals("coordinate_active_text_input", activeInput.reason)
+        assertFalse(sensitivePage.allowed)
+        assertEquals("coordinate_page_unsafe", sensitivePage.reason)
+    }
+
+    @Test
+    fun coordinateFallbackRevalidationAllowsStableLowRiskTarget() {
+        val result = coordinateFallbackRevalidation()
+
+        assertTrue(result.reason, result.allowed)
+        assertEquals("coordinate_target_revalidated", result.reason)
+    }
+
+    @Test
+    fun importedAndStoredCoordinateFallbackWindowsUseSharedMaximum() {
+        val json = """
+            {
+              "name": "坐标规则包",
+              "apps": [
+                {
+                  "packageName": "com.example.news",
+                  "rules": [
+                    {
+                      "id": "coordinate_window",
+                      "matchTexts": ["跳过广告"],
+                      "validDurationMs": 8000,
+                      "coordinateFallback": {
+                        "enabled": true,
+                        "xRatio": 0.9,
+                        "yRatio": 0.12,
+                        "anchorTexts": ["跳过广告"]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val imported = RuleImportManager.parseRulePackage(json)
+        val stored = RuleRepository.normalizeRuleWindowForStorage(
+            coordinateFallbackRule().copy(validDurationMs = 8_000L)
+        )
+        val preview = RuleImportManager.previewImport(imported, DuplicateStrategy.Skip)
+
+        assertTrue(imported.errorMessage, imported.success)
+        assertEquals(
+            RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS,
+            imported.rules.single().validDurationMs
+        )
+        assertEquals(RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS, stored.validDurationMs)
+        assertTrue(
+            preview.any { line ->
+                line.contains("validDurationMs=${RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS}")
+            }
+        )
+    }
+
+    @Test
+    fun coordinateGestureExecutorFailsClosedForBlankOrHighRiskTarget() {
+        val blankTarget = ClickTargetInfo(
+            bounds = testRect(880, 200, 940, 260),
+            text = "",
+            contentDescription = "",
+            viewId = "",
+            className = "",
+            nodeClickable = false,
+            parentClickable = false,
+            enabled = true,
+            visibleToUser = true,
+            password = false,
+            input = false
+        )
+        val highRiskTarget = coordinateFallbackTarget(
+            text = "立即支付",
+            viewId = "com.example.news:id/pay"
+        )
+        val safeTarget = coordinateFallbackTarget(
+            text = "跳过广告",
+            viewId = "com.example.news:id/skip"
+        )
+
+        assertFalse(ClickExecutor.isCoordinateFallbackGestureTargetSafe(blankTarget))
+        assertFalse(ClickExecutor.isCoordinateFallbackGestureTargetSafe(highRiskTarget))
+        assertTrue(ClickExecutor.isCoordinateFallbackGestureTargetSafe(safeTarget))
+    }
+
+    @Test
+    fun coordinateFallbackRejectsUnlabeledGenericClickableView() {
+        val genericView = ClickTargetInfo(
+            bounds = testRect(880, 200, 940, 260),
+            text = "",
+            contentDescription = "",
+            viewId = "",
+            className = "android.view.View",
+            nodeClickable = true,
+            parentClickable = false,
+            enabled = true,
+            visibleToUser = true,
+            password = false,
+            input = false
+        )
+
+        val matcherDecision = CoordinateFallbackMatcher.evaluateTargetAtPoint(
+            target = genericView,
+            targetPackageName = "com.example.news",
+            expectedPackageName = "com.example.news"
+        )
+
+        assertFalse(matcherDecision.allowed)
+        assertEquals("coordinate_fallback_target_blank", matcherDecision.reason)
+        assertFalse(ClickExecutor.isCoordinateFallbackGestureTargetSafe(genericView))
+    }
+
+    @Test
+    fun coordinateFallbackRejectsCustomClassOnlyTargets() {
+        val customClassOnly = ClickTargetInfo(
+            bounds = testRect(880, 200, 940, 260),
+            text = "",
+            contentDescription = "",
+            viewId = "",
+            className = "com.example.news.CustomImageButton",
+            nodeClickable = true,
+            parentClickable = false,
+            enabled = true,
+            visibleToUser = true,
+            password = false,
+            input = false
+        )
+        val customClassOnlyWithClickableAncestor = customClassOnly.copy(
+            nodeClickable = false,
+            parentClickable = false
+        )
+
+        assertFalse(
+            CoordinateFallbackMatcher.evaluateTargetAtPoint(
+                target = customClassOnly,
+                targetPackageName = "com.example.news",
+                expectedPackageName = "com.example.news"
+            ).allowed
+        )
+        assertFalse(ClickExecutor.isCoordinateFallbackGestureTargetSafe(customClassOnly))
+        assertFalse(
+            CoordinateFallbackMatcher.evaluateTargetAtPoint(
+                target = customClassOnlyWithClickableAncestor,
+                targetPackageName = "com.example.news",
+                expectedPackageName = "com.example.news",
+                hasClickableNodeOrAncestor = true
+            ).allowed
+        )
+
+        val viewIdOnly = customClassOnly.copy(viewId = "com.example.news:id/skip")
+        val descriptionOnly = customClassOnly.copy(contentDescription = "关闭广告")
+        val textOnly = customClassOnly.copy(text = "跳过广告")
+        listOf(viewIdOnly, descriptionOnly, textOnly).forEach { target ->
+            assertTrue(
+                CoordinateFallbackMatcher.evaluateTargetAtPoint(
+                    target = target,
+                    targetPackageName = "com.example.news",
+                    expectedPackageName = "com.example.news"
+                ).allowed
+            )
+            assertTrue(ClickExecutor.isCoordinateFallbackGestureTargetSafe(target))
+        }
+    }
+
+    @Test
+    fun coordinateFallbackInitialEvaluationReportsExplicitResults() {
+        val evaluator = CoordinateFallbackMatcher::class.java.methods.singleOrNull {
+            it.name == "evaluateInitialCandidate"
+        }
+        assertTrue("首次坐标评估必须返回显式结果", evaluator != null)
+        if (evaluator == null) return
+
+        fun evaluate(
+            rule: SkipRule = coordinateFallbackRule(),
+            currentPackage: String = "com.example.news",
+            elapsedSinceForegroundMs: Long = 500L,
+            hasAnchor: Boolean = true,
+            target: CoordinateFallbackTargetSnapshot? = CoordinateFallbackTargetSnapshot(
+                target = coordinateFallbackTarget(
+                    text = "跳过广告",
+                    viewId = "com.example.news:id/skip"
+                ),
+                packageName = "com.example.news",
+                hasClickableNodeOrAncestor = true
+            ),
+            activeTextInput: Boolean = false,
+            pageSafetyTexts: List<String> = emptyList()
+        ): Any {
+            return evaluator.invoke(
+                CoordinateFallbackMatcher,
+                rule,
+                currentPackage,
+                "com.example.skip",
+                elapsedSinceForegroundMs,
+                1_000,
+                2_000,
+                hasAnchor,
+                activeTextInput,
+                pageSafetyTexts,
+                target
+            ) as Any
+        }
+
+        fun assertBlocked(expectedReason: String, result: Any) {
+            assertEquals("Blocked", result.javaClass.simpleName)
+            assertEquals(expectedReason, result.javaClass.getMethod("getReason").invoke(result))
+        }
+
+        assertBlocked("coordinate_anchor_missing", evaluate(hasAnchor = false))
+        assertBlocked(
+            "coordinate_window_expired",
+            evaluate(elapsedSinceForegroundMs = RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS + 1L)
+        )
+        assertBlocked(
+            "coordinate_anchor_too_short",
+            evaluate(
+                rule = coordinateFallbackRule().copy(
+                    coordinateFallback = CoordinateFallback(
+                        enabled = true,
+                        xRatio = 0.9f,
+                        yRatio = 0.12f,
+                        anchorTexts = listOf("跳")
+                    )
+                )
+            )
+        )
+        assertBlocked(
+            "coordinate_anchor_view_id_too_short",
+            evaluate(
+                rule = coordinateFallbackRule().copy(
+                    coordinateFallback = CoordinateFallback(
+                        enabled = true,
+                        xRatio = 0.9f,
+                        yRatio = 0.12f,
+                        anchorViewIds = listOf("skip")
+                    )
+                )
+            )
+        )
+        assertBlocked(
+            "coordinate_target_blank",
+            evaluate(
+                target = CoordinateFallbackTargetSnapshot(
+                    target = ClickTargetInfo(
+                        bounds = testRect(880, 200, 940, 260),
+                        text = "",
+                        contentDescription = "",
+                        viewId = "",
+                        className = "android.view.View",
+                        nodeClickable = true,
+                        parentClickable = false,
+                        enabled = true,
+                        visibleToUser = true,
+                        password = false,
+                        input = false
+                    ),
+                    packageName = "com.example.news",
+                    hasClickableNodeOrAncestor = true
+                )
+            )
+        )
+        assertBlocked(
+            "coordinate_target_unsafe",
+            evaluate(
+                target = CoordinateFallbackTargetSnapshot(
+                    target = coordinateFallbackTarget(
+                        text = "立即支付",
+                        viewId = "com.example.news:id/pay"
+                    ),
+                    packageName = "com.example.news",
+                    hasClickableNodeOrAncestor = true
+                )
+            )
+        )
+        assertBlocked("coordinate_active_text_input", evaluate(activeTextInput = true))
+        assertBlocked("coordinate_page_unsafe", evaluate(pageSafetyTexts = listOf("登录")))
+        assertEquals("Matched", evaluate().javaClass.simpleName)
+    }
+
+    @Test
+    fun coordinateFallbackServiceHandlesExplicitInitialBlockedResult() {
+        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
+        val blockedLogger = source.substringAfter("private fun logCoordinateFallbackBlocked")
+            .substringBefore("private fun relocateAndClick")
+
+        assertTrue(source.contains("CoordinateFallbackMatcher.findResult"))
+        assertTrue(source.contains("CoordinateFallbackMatchResult.Blocked"))
+        assertTrue(source.contains("CoordinateFallbackMatchResult.NotApplicable"))
+        assertTrue(source.contains("logCoordinateFallbackBlocked"))
+        assertTrue(blockedLogger.contains("reason = result.reason"))
+        assertTrue(blockedLogger.contains("failureReason = result.reason"))
+        assertTrue(blockedLogger.contains("blockedReason = result.reason"))
+    }
+
+    @Test
+    fun coordinateFallbackServiceRevalidatesBeforeDispatchingGesture() {
+        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
+        val runCoordinateFallback = source.substringAfter("private fun runCoordinateFallback")
+            .substringBefore("private fun verifyActionClick")
+
+        assertTrue(runCoordinateFallback.contains("CoordinateFallbackMatcher.revalidateAtPoint"))
+        assertTrue(runCoordinateFallback.contains("coordinate_target_revalidated"))
     }
 
     @Test
@@ -2647,4 +3164,72 @@ class SafetyAndLogUnitTest {
             input = false
         )
     }
+
+    private fun coordinateFallbackRule(): SkipRule {
+        return SkipRule(
+            id = "coordinate",
+            source = RuleSource.UserSimple,
+            name = "坐标兜底",
+            packageName = "com.example.news",
+            appName = "News",
+            matchTexts = listOf("跳过广告"),
+            cooldownMs = 1_200L,
+            validDurationMs = RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS,
+            coordinateFallback = CoordinateFallback(
+                enabled = true,
+                xRatio = 0.9f,
+                yRatio = 0.12f,
+                anchorTexts = listOf("跳过广告")
+            )
+        )
+    }
+
+    private fun coordinateFallbackTarget(
+        text: String,
+        viewId: String
+    ): ClickTargetInfo {
+        return ClickTargetInfo(
+            bounds = testRect(880, 200, 940, 260),
+            text = text,
+            contentDescription = "",
+            viewId = viewId,
+            className = "android.widget.Button",
+            nodeClickable = true,
+            parentClickable = false,
+            enabled = true,
+            visibleToUser = true,
+            password = false,
+            input = false
+        )
+    }
+
+    private fun coordinateFallbackRevalidation(
+        currentPackageName: String = "com.example.news",
+        elapsedSinceForegroundMs: Long = 500L,
+        rootAvailable: Boolean = true,
+        hasAnchor: Boolean = true,
+        activeTextInput: Boolean = false,
+        pageSafetyTexts: List<String> = emptyList(),
+        originalTarget: ClickTargetInfo = coordinateFallbackTarget(
+            text = "跳过广告",
+            viewId = "com.example.news:id/skip"
+        ),
+        currentTarget: CoordinateFallbackTargetSnapshot? = CoordinateFallbackTargetSnapshot(
+            target = originalTarget,
+            packageName = "com.example.news",
+            hasClickableNodeOrAncestor = true
+        )
+    ) = CoordinateFallbackMatcher.evaluateBeforeGesture(
+        rule = coordinateFallbackRule(),
+        expectedPackageName = "com.example.news",
+        currentPackageName = currentPackageName,
+        selfPackageName = "com.example.skip",
+        elapsedSinceForegroundMs = elapsedSinceForegroundMs,
+        rootAvailable = rootAvailable,
+        hasAnchor = hasAnchor,
+        activeTextInput = activeTextInput,
+        pageSafetyTexts = pageSafetyTexts,
+        originalTarget = originalTarget,
+        currentTarget = currentTarget
+    )
 }
