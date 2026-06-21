@@ -1,14 +1,19 @@
 package com.example.skip.util
 
 internal object SimpleJson {
-    fun parseObject(text: String): SimpleJsonObject {
-        val parser = Parser(text)
+    fun parseObject(text: String, maxNestingDepth: Int = Int.MAX_VALUE): SimpleJsonObject {
+        require(maxNestingDepth > 0) { "maxNestingDepth must be positive" }
+        val parser = Parser(text, maxNestingDepth)
         val value = parser.parse()
         return value as? SimpleJsonObject ?: error("JSON root must be an object")
     }
 
-    private class Parser(private val text: String) {
+    private class Parser(
+        private val text: String,
+        private val maxNestingDepth: Int
+    ) {
         private var index = 0
+        private var nestingDepth = 0
 
         fun parse(): SimpleJsonValue {
             skipWhitespace()
@@ -41,6 +46,15 @@ internal object SimpleJson {
         }
 
         private fun parseObjectValue(): SimpleJsonObject {
+            enterContainer()
+            try {
+                return parseObjectValueWithinDepth()
+            } finally {
+                nestingDepth--
+            }
+        }
+
+        private fun parseObjectValueWithinDepth(): SimpleJsonObject {
             expect('{')
             val values = linkedMapOf<String, SimpleJsonValue>()
             skipWhitespace()
@@ -67,6 +81,15 @@ internal object SimpleJson {
         }
 
         private fun parseArrayValue(): SimpleJsonArray {
+            enterContainer()
+            try {
+                return parseArrayValueWithinDepth()
+            } finally {
+                nestingDepth--
+            }
+        }
+
+        private fun parseArrayValueWithinDepth(): SimpleJsonArray {
             expect('[')
             val values = mutableListOf<SimpleJsonValue>()
             skipWhitespace()
@@ -86,6 +109,11 @@ internal object SimpleJson {
                     else -> error("Expected ',' or ']' at $index")
                 }
             }
+        }
+
+        private fun enterContainer() {
+            if (nestingDepth >= maxNestingDepth) error("JSON 嵌套过深")
+            nestingDepth++
         }
 
         private fun parseString(): String {

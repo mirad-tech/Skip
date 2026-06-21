@@ -13,14 +13,18 @@ object ScoreEvaluator {
     private const val TRUSTED_GENERIC_CLOSE_BONUS = 15
     private const val MAX_TRUSTED_GENERIC_CLOSE_AREA_RATIO = 0.02f
     private val splitAdRegex = Regex("[^a-z0-9]+")
-    private val allowedGenericSkipRegex1 = Regex("^跳过\\s*\\d{0,2}$")
-    private val allowedGenericSkipRegex2 = Regex("^skip\\s*\\d{0,2}$", RegexOption.IGNORE_CASE)
+    private val allowedGenericSkipRegex1 = Regex("^跳过\\s*\\d{1,2}\\s*[sS]?$")
+    private val allowedGenericSkipRegex2 = Regex("^skip\\s*\\d{1,2}\\s*[sS]?$", RegexOption.IGNORE_CASE)
 
     private val blockedTextFragments = listOf(
         "跳过登录",
         "跳过验证",
         "跳过绑定",
         "跳过设置",
+        "跳过登录",
+        "跳过更新",
+        "跳过授权",
+        "跳过此步骤",
         "不跳过",
         "skip login",
         "skip verification",
@@ -56,7 +60,7 @@ object ScoreEvaluator {
         val descriptionValue = node.contentDescription?.toString().orEmpty()
         val viewId = node.viewIdResourceName.orEmpty()
         val defaultRule = rule.source == RuleSource.BuiltIn
-        if (defaultRule && TextInputClearButtonPolicy.shouldBlockDefaultRuleCandidate(
+        if (TextInputClearButtonPolicy.shouldBlockRuleCandidate(
                 viewId = viewId,
                 text = textValue,
                 contentDescription = descriptionValue
@@ -96,24 +100,9 @@ object ScoreEvaluator {
                 failureReason = HighRiskClickPolicy.BLOCKED_REASON
             )
         }
-        if (defaultRule &&
-            idRule == null &&
-            matchedKeyword.isGenericSkipKeyword() &&
-            !isAllowedDefaultGenericSkipLabel(textValue, descriptionValue)
-        ) {
-            return ScoreEvaluation(
-                rule,
-                score = 0,
-                minScore = rule.minScore,
-                matchedKeyword = matchedKeyword,
-                area = area,
-                passesMinScore = false,
-                failureReason = "default_rule_context_missing"
-            )
-        }
         val textKeywordIsStandaloneSkip = listOf(textValue, descriptionValue)
             .any(SafetyGuard::isStandaloneSkipText)
-        if (defaultRule && textKeywordIsStandaloneSkip) {
+        if (textKeywordIsStandaloneSkip) {
             return ScoreEvaluation(
                 rule,
                 score = 0,
@@ -124,6 +113,20 @@ object ScoreEvaluator {
                 failureReason = "standalone_skip_forbidden",
                 defaultRuleAreaAllowed = isDefaultRuleAreaAllowedForCandidate(area),
                 textKeywordIsStandaloneSkip = true
+            )
+        }
+        if (idRule == null &&
+            matchedKeyword.isGenericSkipKeyword() &&
+            !isAllowedDefaultGenericSkipLabel(textValue, descriptionValue)
+        ) {
+            return ScoreEvaluation(
+                rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = matchedKeyword,
+                area = area,
+                passesMinScore = false,
+                failureReason = "generic_skip_context_missing"
             )
         }
 
@@ -347,9 +350,20 @@ object ScoreEvaluator {
         return listOf(textValue, descriptionValue).any { value ->
             val label = value.trim()
             if (label.isBlank()) return@any false
-            if (label.containsAdSignal()) return@any true
+            if (label.containsExplicitAdOrSplashSignal()) return@any true
             allowedGenericSkipRegex1.matches(label) || allowedGenericSkipRegex2.matches(label)
         }
+    }
+
+    private fun String.containsExplicitAdOrSplashSignal(): Boolean {
+        val lower = normalizeForRuleMatch()
+        return lower.hasAdToken() ||
+            lower.contains("广告") ||
+            lower.contains("splash") ||
+            lower.contains("gdt") ||
+            lower.contains("ksad") ||
+            lower.contains("tt_") ||
+            lower.contains("csj")
     }
 
     private fun String.normalizeForRuleMatch(): String {

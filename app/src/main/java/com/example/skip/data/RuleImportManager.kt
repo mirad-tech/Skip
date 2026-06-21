@@ -16,17 +16,43 @@ import com.example.skip.engine.SafeRegexMatcher
 import com.example.skip.util.SimpleJson
 import com.example.skip.util.SimpleJsonArray
 import com.example.skip.util.SimpleJsonObject
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.UUID
 
 object RuleImportManager {
     private const val MIN_COOLDOWN_MS = 800L
 
+    fun readJsonText(input: InputStream): String {
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            if (output.size() + read > RuleImportRiskPolicy.MAX_JSON_FILE_BYTES) {
+                throw IllegalArgumentException(
+                    "JSON 文件超过 ${RuleImportRiskPolicy.MAX_JSON_FILE_BYTES / 1024}KB 限制"
+                )
+            }
+            output.write(buffer, 0, read)
+        }
+        return output.toString(Charsets.UTF_8.name())
+    }
+
     fun parseRulePackage(jsonText: String, selfPackageName: String = ""): RuleImportResult {
         if (jsonText.isBlank()) {
             return RuleImportResult(false, "JSON 不能为空")
         }
+        if (jsonText.toByteArray(Charsets.UTF_8).size > RuleImportRiskPolicy.MAX_JSON_FILE_BYTES) {
+            return RuleImportResult(
+                false,
+                "JSON 文件超过 ${RuleImportRiskPolicy.MAX_JSON_FILE_BYTES / 1024}KB 限制"
+            )
+        }
 
-        val root = runCatching { SimpleJson.parseObject(jsonText) }.getOrElse {
+        val root = runCatching {
+            SimpleJson.parseObject(jsonText, RuleImportRiskPolicy.MAX_JSON_NESTING_DEPTH)
+        }.getOrElse {
             return RuleImportResult(false, "JSON 格式错误：${it.message.orEmpty()}")
         }
 
@@ -35,8 +61,12 @@ object RuleImportManager {
         if (apps.length() == 0) {
             return RuleImportResult(false, "apps 不能为空")
         }
+        if (apps.length() > RuleImportRiskPolicy.MAX_APP_COUNT) {
+            return RuleImportResult(false, "apps 数量超过限制")
+        }
 
         val warnings = mutableListOf<String>()
+        val extraConfirmationMessages = mutableListOf<String>()
         val rules = mutableListOf<SkipRule>()
         val appPolicies = mutableListOf<AppPolicy>()
         val schemaVersion = root.optInt("schemaVersion", 1)
@@ -45,6 +75,9 @@ object RuleImportManager {
         }
         val policyArray = root.optJSONArray("appPolicies")
         if (policyArray != null) {
+            if (policyArray.length() > RuleImportRiskPolicy.MAX_APP_COUNT) {
+                return RuleImportResult(false, "appPolicies 数量超过限制")
+            }
             for (index in 0 until policyArray.length()) {
                 val policyJson = policyArray.optJSONObject(index)
                     ?: return RuleImportResult(false, "第 ${index + 1} 个 appPolicy 不是对象")
@@ -85,14 +118,23 @@ object RuleImportManager {
             if (selfPackageName.isNotBlank() && packageName == selfPackageName) {
                 return RuleImportResult(false, "不能为 Skip 自身导入自动跳过规则")
             }
+            if (app.has("enabled")) {
+                warnings += "$packageName 的 apps[].enabled 当前不生效；请使用 appPolicies 控制应用策略。"
+            }
 
             val appRules = app.optJSONArray("rules")
                 ?: return RuleImportResult(false, "$packageName 的 rules 不能为空")
             if (appRules.length() == 0) {
                 return RuleImportResult(false, "$packageName 的 rules 不能为空")
             }
+            if (appRules.length() > RuleImportRiskPolicy.MAX_RULES_PER_APP) {
+                return RuleImportResult(false, "$packageName 的 rules 数量超过限制")
+            }
 
             for (ruleIndex in 0 until appRules.length()) {
+                if (rules.size >= RuleImportRiskPolicy.MAX_RULE_COUNT) {
+                    return RuleImportResult(false, "规则总数超过限制")
+                }
                 val ruleJson = appRules.optJSONObject(ruleIndex)
                     ?: return RuleImportResult(false, "$packageName 第 ${ruleIndex + 1} 条规则不是对象")
                 val parsed = parseRule(
@@ -100,16 +142,25 @@ object RuleImportManager {
                     appName = app.optString("appName", packageName),
                     packageId = packageId,
                     ruleJson = ruleJson,
-                    warningMessages = warnings
+                    warningMessages = warnings,
+                    extraConfirmationMessages = extraConfirmationMessages,
+                    selfPackageName = selfPackageName
                 )
                 if (!parsed.success) return parsed
                 rules += parsed.rules
             }
         }
 
+        if (rules.size >= RuleImportRiskPolicy.MAX_RULE_COUNT / 2) {
+            val message = "规则数量较多，可能影响扫描性能"
+            warnings += message
+            extraConfirmationMessages += message
+        }
+
         return RuleImportResult(
             success = true,
             warningMessages = warnings.distinct(),
+            extraConfirmationMessages = extraConfirmationMessages.distinct(),
             parsedAppCount = apps.length(),
             parsedRuleCount = rules.size,
             rulePackage = rulePackage,
@@ -172,26 +223,14 @@ object RuleImportManager {
         if (minScore !in 0..100) return RuleImportResult(false, "最低分必须在 0 到 100 之间")
         if (cooldownMs < MIN_COOLDOWN_MS) return RuleImportResult(false, "点击间隔不能低于 800ms")
         if (coordinateFallback?.isValid() == false) {
-            return RuleImportResult(false, "坐标兜底比例必须在 0 到 1 之间")
+            return RuleImportResult(false, "硬性阻断：坐标兜底比例必须在 0 到 1 之间")
         }
         if (coordinateFallback?.enabled == true && !coordinateFallback.hasAnchorRequirement()) {
-            return RuleImportResult(false, "坐标兜底必须配置锚点规则")
+            return RuleImportResult(false, "硬性阻断：坐标兜底必须配置锚点规则")
         }
         coordinateFallback?.takeIf { it.enabled }
             ?.let(CoordinateFallbackMatcher::anchorValidationReason)
-            ?.let { return RuleImportResult(false, "坐标兜底锚点不可信：$it") }
-        val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
-            listOf(name) + cleanTexts + cleanDescriptions + cleanViewIds +
-                (coordinateFallback?.anchorTexts.orEmpty()) +
-                (coordinateFallback?.anchorContentDescriptions.orEmpty()) +
-                (coordinateFallback?.anchorViewIds.orEmpty())
-        )
-        if (!highRiskDecision.allowed) {
-            return RuleImportResult(
-                false,
-                "规则包含高风险点击内容：${HighRiskClickPolicy.BLOCKED_REASON}（${highRiskDecision.matchedTerm}）"
-            )
-        }
+            ?.let { return RuleImportResult(false, "硬性阻断：坐标兜底锚点不可信：$it") }
         if (cleanTexts.isEmpty() &&
             cleanDescriptions.isEmpty() &&
             cleanViewIds.isEmpty() &&
@@ -215,7 +254,7 @@ object RuleImportManager {
             if (coordinateFallback?.enabled == true) {
                 add("坐标兜底只会在普通节点匹配失败后执行，并仍受包名、时间窗和安全保护限制。")
             }
-        }
+        }.toMutableList()
         val rule = SkipRule(
             id = "user_rule_${UUID.randomUUID()}",
             source = RuleSource.UserSimple,
@@ -234,6 +273,17 @@ object RuleImportManager {
             coordinateFallback = coordinateFallback,
             packageId = "local"
         )
+        val risks = RuleImportRiskPolicy.assess(
+            rule = rule,
+            selfPackageName = selfPackageName,
+            importedFromJson = false
+        )
+        risks.firstOrNull { it.level == RuleImportRiskLevel.HardBlock }?.let { risk ->
+            return RuleImportResult(false, "硬性阻断：${risk.message}")
+        }
+        risks.filter { it.level == RuleImportRiskLevel.ExtraConfirm }.forEach { risk ->
+            warnings += "需要额外确认：${risk.message}"
+        }
         return RuleImportResult(
             success = true,
             warningMessages = warnings,
@@ -276,12 +326,10 @@ object RuleImportManager {
                 {
                   "packageName": "com.example.app",
                   "appName": "示例 App",
-                  "enabled": true,
                   "rules": [
                     {
                       "id": "example_skip_001",
                       "name": "开屏页面跳过控件",
-                      "enabled": true,
                       "activityName": "*",
                       "matchTexts": ["跳过", "关闭", "Skip"],
                       "matchContentDescriptions": ["跳过", "Skip"],
@@ -314,7 +362,9 @@ object RuleImportManager {
         appName: String,
         packageId: String,
         ruleJson: SimpleJsonObject,
-        warningMessages: MutableList<String>
+        warningMessages: MutableList<String>,
+        extraConfirmationMessages: MutableList<String>,
+        selfPackageName: String
     ): RuleImportResult {
         val id = ruleJson.optString("id").trim()
         if (id.isBlank()) return RuleImportResult(false, "$appPackageName 的 rule id 不能为空")
@@ -355,20 +405,20 @@ object RuleImportManager {
         if (coordinateJson?.optBoolean("enabled", false) == true &&
             (!coordinateJson.has("xRatio") || !coordinateJson.has("yRatio"))
         ) {
-            return RuleImportResult(false, "$id 的 coordinateFallback 需要 xRatio 和 yRatio")
+            return RuleImportResult(false, "硬性阻断：$id 的 coordinateFallback 需要 xRatio 和 yRatio")
         }
         val coordinateFallback = coordinateJson
             ?.toCoordinateFallback()
             ?.also { fallback ->
                 if (!fallback.isValid()) {
-                    return RuleImportResult(false, "$id 的 coordinateFallback 坐标比例必须在 0 到 1 之间")
+                    return RuleImportResult(false, "硬性阻断：$id 的 coordinateFallback 坐标比例必须在 0 到 1 之间")
                 }
                 if (fallback.enabled && !fallback.hasAnchorRequirement()) {
-                    return RuleImportResult(false, "$id 的 coordinateFallback 必须配置锚点")
+                    return RuleImportResult(false, "硬性阻断：$id 的 coordinateFallback 必须配置锚点")
                 }
                 if (fallback.enabled) {
                     CoordinateFallbackMatcher.anchorValidationReason(fallback)?.let { reason ->
-                        return RuleImportResult(false, "$id 的 coordinateFallback 锚点不可信：$reason")
+                        return RuleImportResult(false, "硬性阻断：$id 的 coordinateFallback 锚点不可信：$reason")
                     }
                 }
             }
@@ -397,49 +447,50 @@ object RuleImportManager {
         ) {
             return RuleImportResult(false, "$id 至少需要一种匹配字段")
         }
-        val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
-            listOf(ruleJson.optString("name", id)) +
-                matchTexts +
-                matchContentDescriptions +
-                matchViewIds +
-                coordinateFallback?.anchorTexts.orEmpty() +
-                coordinateFallback?.anchorContentDescriptions.orEmpty() +
-                coordinateFallback?.anchorViewIds.orEmpty()
+        val requestedEnabled = ruleJson.optBoolean("enabled", true)
+        val rule = SkipRule(
+            id = id,
+            source = RuleSource.JsonFile,
+            name = ruleJson.optString("name", id),
+            packageName = appPackageName,
+            appName = appName,
+            enabled = false,
+            activityName = ruleJson.optString("activityName", "*"),
+            matchTexts = matchTexts,
+            matchContentDescriptions = matchContentDescriptions,
+            matchViewIds = matchViewIds,
+            textMatchMode = textMatchMode,
+            contentDescriptionMatchMode = contentDescriptionMatchMode,
+            viewIdMatchMode = viewIdMatchMode,
+            area = area,
+            action = action,
+            priority = ruleJson.optInt("priority", 10),
+            cooldownMs = cooldownMs,
+            validDurationMs = effectiveWindowMs,
+            minScore = minScore,
+            coordinateFallback = coordinateFallback,
+            packageId = packageId
         )
-        if (!highRiskDecision.allowed) {
-            return RuleImportResult(
-                false,
-                "$id 被安全策略拦截：${HighRiskClickPolicy.BLOCKED_REASON}（${highRiskDecision.matchedTerm}）"
-            )
+        val risks = RuleImportRiskPolicy.assess(
+            rule = rule,
+            selfPackageName = selfPackageName,
+            importedFromJson = true
+        )
+        risks.firstOrNull { it.level == RuleImportRiskLevel.HardBlock }?.let { risk ->
+            return RuleImportResult(false, "硬性阻断：$id ${risk.message}")
+        }
+        risks.filter { it.level == RuleImportRiskLevel.ExtraConfirm }.forEach { risk ->
+            val message = "$id 需要额外确认：${risk.message}"
+            warningMessages += message
+            extraConfirmationMessages += message
+        }
+        if (requestedEnabled) {
+            warningMessages += "$id 来自 JSON，默认以停用状态导入；建议先观察再本地启用。"
         }
 
         return RuleImportResult(
             success = true,
-            rules = listOf(
-                SkipRule(
-                    id = id,
-                    source = RuleSource.JsonFile,
-                    name = ruleJson.optString("name", id),
-                    packageName = appPackageName,
-                    appName = appName,
-                    enabled = ruleJson.optBoolean("enabled", true),
-                    activityName = ruleJson.optString("activityName", "*"),
-                    matchTexts = matchTexts,
-                    matchContentDescriptions = matchContentDescriptions,
-                    matchViewIds = matchViewIds,
-                    textMatchMode = textMatchMode,
-                    contentDescriptionMatchMode = contentDescriptionMatchMode,
-                    viewIdMatchMode = viewIdMatchMode,
-                    area = area,
-                    action = action,
-                    priority = ruleJson.optInt("priority", 10),
-                    cooldownMs = cooldownMs,
-                    validDurationMs = effectiveWindowMs,
-                    minScore = minScore,
-                    coordinateFallback = coordinateFallback,
-                    packageId = packageId
-                )
-            )
+            rules = listOf(rule)
         )
     }
 
@@ -493,6 +544,22 @@ object RuleImportManager {
             add("描述：${pkg?.description.orEmpty()}")
             add("App 数量：${result.parsedAppCount}")
             add("规则数量：${result.parsedRuleCount}")
+            add("硬性阻断规则：0")
+            add("需要额外确认：${result.extraConfirmationMessages.size} 项")
+            add("坐标兜底规则：${result.rules.count { it.coordinateFallback?.enabled == true }}")
+            add(
+                "regex 规则：${result.rules.count { rule ->
+                    rule.textMatchMode == MatchMode.Regex ||
+                        rule.contentDescriptionMatchMode == MatchMode.Regex ||
+                        rule.viewIdMatchMode == MatchMode.Regex
+                }}"
+            )
+            add("area=any 规则：${result.rules.count { it.area == RuleArea.Any }}")
+            add("最终会导入规则：${result.rules.size}")
+            add(
+                "最终状态：enabled=${result.rules.count { it.enabled }} " +
+                    "disabled=${result.rules.count { !it.enabled }}"
+            )
             add("重复处理：${strategy.label}")
             result.appPolicies.forEach { policy ->
                 add(
@@ -532,7 +599,10 @@ object RuleImportManager {
                     add("额外确认：${flags.joinToString("、")}")
                 }
             }
-            result.warningMessages.forEach { add("提示：$it") }
+            result.extraConfirmationMessages.forEach { add("需要额外确认：$it") }
+            result.warningMessages
+                .filterNot { it in result.extraConfirmationMessages }
+                .forEach { add("提示：$it") }
         }
     }
 

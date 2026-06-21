@@ -4,6 +4,7 @@ data class RuleImportResult(
     val success: Boolean,
     val errorMessage: String = "",
     val warningMessages: List<String> = emptyList(),
+    val extraConfirmationMessages: List<String> = emptyList(),
     val parsedAppCount: Int = 0,
     val parsedRuleCount: Int = 0,
     val rulePackage: RulePackage? = null,

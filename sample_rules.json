@@ -20,7 +20,6 @@
         {
           "id": "sample_opening_page_skip",
           "name": "开屏页面跳过控件",
-          "enabled": true,
           "activityName": "*",
           "matchTexts": ["跳过", "关闭", "以后再说"],
           "matchContentDescriptions": ["跳过", "关闭"],

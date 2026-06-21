@@ -201,7 +201,8 @@ object SafetyGuard {
     }
 
     fun isStandaloneSkipText(text: String): Boolean {
-        return text.trim().equals("skip", ignoreCase = true)
+        val trimmed = text.trim()
+        return trimmed.equals("skip", ignoreCase = true) || trimmed == "跳过"
     }
 
     fun isSelfAppLabelCandidate(
