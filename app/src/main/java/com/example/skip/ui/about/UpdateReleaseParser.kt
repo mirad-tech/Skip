@@ -18,9 +18,11 @@ internal object UpdateReleaseParser {
             "Skip-$tagName-release.apk".lowercase(),
             "Skip-$versionName-release.apk".lowercase()
         )
-        val apkAsset = assets.firstOrNull { it.name.lowercase() in preferredNames }
-            ?: assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
-            ?: error("更新信息中没有可下载的 APK")
+        val trustedAssets = assets.filter { it.name.lowercase() in preferredNames }
+        if (trustedAssets.size != 1) {
+            error("更新信息中没有唯一可信的发布 APK 资产")
+        }
+        val apkAsset = trustedAssets.single().toUpdateAsset()
 
         return UpdateRelease(
             tagName = tagName,
@@ -31,29 +33,45 @@ internal object UpdateReleaseParser {
         )
     }
 
-    private fun toAsset(assetJson: SimpleJsonObject): UpdateAsset? {
+    private fun toAsset(assetJson: SimpleJsonObject): ReleaseAssetCandidate? {
         val name = assetJson.optString("name").trim()
         val url = assetJson.optString("browser_download_url").trim()
         if (name.isBlank() || url.isBlank()) return null
-        return UpdateAsset(
+        return ReleaseAssetCandidate(
             name = name,
             size = assetJson.optLong("size", 0L),
             browserDownloadUrl = url,
-            digestSha256 = normalizeSha256(assetJson.optString("digest").trim())
+            digest = assetJson.optString("digest").trim()
         )
     }
 
-    private fun normalizeSha256(value: String): String? {
-        if (value.isBlank()) return null
-        val trimmed = value.trim()
-        val digest = if (trimmed.startsWith("sha256:", ignoreCase = true)) {
-            trimmed.substringAfter(":")
-        } else {
-            trimmed
-        }.trim().lowercase()
-        require(digest.length == 64 && digest.all { char -> char in '0'..'9' || char in 'a'..'f' }) {
-            "更新 APK SHA-256 校验信息无效"
-        }
-        return digest
+    private fun ReleaseAssetCandidate.toUpdateAsset(): UpdateAsset {
+        return UpdateAsset(
+            name = name,
+            size = size,
+            browserDownloadUrl = browserDownloadUrl,
+            digestSha256 = normalizeRequiredSha256Digest(digest)
+        )
     }
+
+    private fun normalizeRequiredSha256Digest(value: String): String {
+        require(value.isNotBlank()) { "更新 APK digest 缺失" }
+        require(value.startsWith("sha256:")) {
+            "更新 APK digest 格式错误，必须为 sha256:<64hex>（SHA-256）"
+        }
+        val digest = value.substring("sha256:".length)
+        require(digest.length == 64 && digest.all { char ->
+            char in '0'..'9' || char in 'a'..'f' || char in 'A'..'F'
+        }) {
+            "更新 APK digest 格式错误，必须为 sha256:<64hex>（SHA-256）"
+        }
+        return digest.lowercase()
+    }
+
+    private data class ReleaseAssetCandidate(
+        val name: String,
+        val size: Long,
+        val browserDownloadUrl: String,
+        val digest: String
+    )
 }
