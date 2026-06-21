@@ -10,6 +10,7 @@ import com.example.skip.model.RuleImportResult
 import com.example.skip.model.RulePackage
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
+import com.example.skip.engine.CoordinateFallbackMatcher
 import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.SafeRegexMatcher
 import com.example.skip.util.SimpleJson
@@ -176,6 +177,9 @@ object RuleImportManager {
         if (coordinateFallback?.enabled == true && !coordinateFallback.hasAnchorRequirement()) {
             return RuleImportResult(false, "坐标兜底必须配置锚点规则")
         }
+        coordinateFallback?.takeIf { it.enabled }
+            ?.let(CoordinateFallbackMatcher::anchorValidationReason)
+            ?.let { return RuleImportResult(false, "坐标兜底锚点不可信：$it") }
         val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
             listOf(name) + cleanTexts + cleanDescriptions + cleanViewIds +
                 (coordinateFallback?.anchorTexts.orEmpty()) +
@@ -195,10 +199,17 @@ object RuleImportManager {
         ) {
             return RuleImportResult(false, "至少需要填写文字、描述、View ID 或启用坐标兜底")
         }
+        val effectiveWindowMs = if (coordinateFallback?.enabled == true) {
+            RuleRepository.canonicalCoordinateFallbackWindowMs(validDurationMs)
+        } else {
+            RuleRepository.DEFAULT_RULE_WINDOW_MS
+        }
 
         val warnings = buildList {
             if (area == RuleArea.Any) add("位置选为“不确定”会提高误触风险，已自动提高匹配分数要求。")
-            if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
+            if (coordinateFallback?.enabled == true && validDurationMs != effectiveWindowMs) {
+                add("坐标兜底时间窗已收紧为最多 ${coordinateFallbackWindowSeconds()} 秒。")
+            } else if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
                 add("为减少误触，自定义规则已统一收紧为应用前台后的 ${defaultWindowSeconds()} 秒内生效。")
             }
             if (coordinateFallback?.enabled == true) {
@@ -218,7 +229,7 @@ object RuleImportManager {
             area = area,
             priority = priority,
             cooldownMs = cooldownMs,
-            validDurationMs = RuleRepository.DEFAULT_RULE_WINDOW_MS,
+            validDurationMs = effectiveWindowMs,
             minScore = minScore,
             coordinateFallback = coordinateFallback,
             packageId = "local"
@@ -243,6 +254,9 @@ object RuleImportManager {
             rule.coordinateFallback?.let { fallback ->
                 if (fallback.enabled) {
                     add("坐标兜底只建议用于包名明确、锚点明确且普通节点匹配失败的场景。")
+                    if (rule.validDurationMs > RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS) {
+                        add("坐标兜底时间窗不能超过 ${coordinateFallbackWindowSeconds()} 秒，保存时会收紧。")
+                    }
                 }
                 if (!fallback.isValid()) add("坐标兜底比例必须在 0 到 1 之间。")
             }
@@ -352,13 +366,25 @@ object RuleImportManager {
                 if (fallback.enabled && !fallback.hasAnchorRequirement()) {
                     return RuleImportResult(false, "$id 的 coordinateFallback 必须配置锚点")
                 }
+                if (fallback.enabled) {
+                    CoordinateFallbackMatcher.anchorValidationReason(fallback)?.let { reason ->
+                        return RuleImportResult(false, "$id 的 coordinateFallback 锚点不可信：$reason")
+                    }
+                }
             }
 
         if (coordinateFallback?.enabled == true && cooldownMs < MIN_COOLDOWN_MS) {
             return RuleImportResult(false, "$id 启用 coordinateFallback 时 cooldownMs 不能低于 800")
         }
         if (cooldownMs < MIN_COOLDOWN_MS) warningMessages += "$id 的 cooldownMs 低于 800，已导入但不推荐。"
-        if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
+        val effectiveWindowMs = if (coordinateFallback?.enabled == true) {
+            RuleRepository.canonicalCoordinateFallbackWindowMs(validDurationMs)
+        } else {
+            RuleRepository.DEFAULT_RULE_WINDOW_MS
+        }
+        if (coordinateFallback?.enabled == true && validDurationMs != effectiveWindowMs) {
+            warningMessages += "$id 的 coordinateFallback 时间窗已收紧到 ${effectiveWindowMs}ms。"
+        } else if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
             warningMessages += "$id 的 validDurationMs 已收紧到 ${RuleRepository.DEFAULT_RULE_WINDOW_MS}ms，使用过程中不再默认扫描。"
         }
         if (minScore !in 0..100) return RuleImportResult(false, "$id 的 minScore 必须在 0 到 100 之间")
@@ -408,7 +434,7 @@ object RuleImportManager {
                     action = action,
                     priority = ruleJson.optInt("priority", 10),
                     cooldownMs = cooldownMs,
-                    validDurationMs = RuleRepository.DEFAULT_RULE_WINDOW_MS,
+                    validDurationMs = effectiveWindowMs,
                     minScore = minScore,
                     coordinateFallback = coordinateFallback,
                     packageId = packageId
@@ -491,7 +517,8 @@ object RuleImportManager {
                 )
                 add(
                     "动作：action=${rule.action.value} area=${rule.area.value} " +
-                        "minScore=${rule.minScore} cooldownMs=${rule.cooldownMs}"
+                        "minScore=${rule.minScore} cooldownMs=${rule.cooldownMs} " +
+                        "validDurationMs=${rule.validDurationMs}"
                 )
                 val fallback = rule.coordinateFallback
                 add(
@@ -511,6 +538,10 @@ object RuleImportManager {
 
     private fun defaultWindowSeconds(): Long {
         return RuleRepository.DEFAULT_RULE_WINDOW_MS / 1000
+    }
+
+    private fun coordinateFallbackWindowSeconds(): Long {
+        return RuleRepository.MAX_COORDINATE_FALLBACK_WINDOW_MS / 1000
     }
 
     private fun List<String>.previewValue(): String {

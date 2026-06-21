@@ -140,6 +140,17 @@ object ClickExecutor {
         y: Int,
         onResult: (ClickAttempt) -> Unit
     ) {
+        if (!isCoordinateFallbackGestureTargetSafe(target)) {
+            onResult(
+                ClickAttempt(
+                    method = ClickMethodLog.DispatchGesture,
+                    accepted = false,
+                    target = target,
+                    reason = "coordinate_fallback_target_unsafe"
+                )
+            )
+            return
+        }
         val screenWidth = android.content.res.Resources.getSystem().displayMetrics.widthPixels
             .coerceAtLeast(1)
         val screenHeight = android.content.res.Resources.getSystem().displayMetrics.heightPixels
@@ -197,6 +208,34 @@ object ClickExecutor {
                 )
             )
         }
+    }
+
+    fun isCoordinateFallbackGestureTargetSafe(target: ClickTargetInfo): Boolean {
+        if (target.bounds.left >= target.bounds.right || target.bounds.top >= target.bounds.bottom ||
+            target.input || target.password ||
+            !target.enabled || !target.visibleToUser
+        ) {
+            return false
+        }
+        if (!target.nodeClickable && !target.parentClickable) return false
+        if (!hasCoordinateFallbackIdentity(target)) {
+            return false
+        }
+        return HighRiskClickPolicy.evaluateTexts(
+            listOf(target.text, target.contentDescription, target.viewId, target.className)
+        ).allowed
+    }
+
+    fun hasCoordinateFallbackIdentity(target: ClickTargetInfo): Boolean {
+        return target.text.isNotBlank() ||
+            target.contentDescription.isNotBlank() ||
+            target.viewId.isRecognizableCoordinateFallbackViewId()
+    }
+
+    private fun String.isRecognizableCoordinateFallbackViewId(): Boolean {
+        val value = trim()
+        return value.substringBefore(":id/").isNotBlank() &&
+            value.substringAfter(":id/", missingDelimiterValue = "").isNotBlank()
     }
 
     fun describeTarget(node: AccessibilityNodeInfo): ClickTargetInfo {

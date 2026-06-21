@@ -17,6 +17,7 @@ import java.util.UUID
 
 object RuleRepository {
     const val DEFAULT_RULE_WINDOW_MS = 8_000L
+    const val MAX_COORDINATE_FALLBACK_WINDOW_MS = 6_000L
     const val DEFAULT_RULE_MIN_SCORE = 70
     const val DEFAULT_RULE_COOLDOWN_MS = 1_500L
     const val MIN_DEFAULT_RULE_COOLDOWN_MS = 800L
@@ -171,7 +172,6 @@ object RuleRepository {
     fun getRules(context: Context): List<SkipRule> {
         val raw = SettingsRepository.prefs(context).getString(KEY_RULES_JSON, null).orEmpty()
         if (raw.isBlank()) return emptyList()
-        val validDurationMs = DEFAULT_RULE_WINDOW_MS
         return runCatching {
             val array = JSONArray(raw)
             buildList {
@@ -180,17 +180,18 @@ object RuleRepository {
                 }
             }
         }.getOrDefault(emptyList())
-            .map { normalizeRuleWindow(it, validDurationMs) }
+            .map(::normalizeRuleWindowForStorage)
     }
 
     fun saveRules(context: Context, rules: List<SkipRule>) {
+        val normalizedRules = rules.map(::normalizeRuleWindowForStorage)
         SettingsRepository.prefs(context)
             .edit {
                 putString(KEY_RULES_JSON, JSONArray().apply {
-                    rules.forEach { put(it.toJson()) }
+                    normalizedRules.forEach { put(it.toJson()) }
                 }.toString())
             }
-        cleanupRulePackages(context, rules)
+        cleanupRulePackages(context, normalizedRules)
     }
 
     fun getEnabledRulesForPackage(context: Context, packageName: String): List<SkipRule> {
@@ -411,8 +412,20 @@ object RuleRepository {
         )
     }
 
-    private fun normalizeRuleWindow(rule: SkipRule, validDurationMs: Long = DEFAULT_RULE_WINDOW_MS): SkipRule {
+    internal fun normalizeRuleWindowForStorage(rule: SkipRule): SkipRule {
+        val validDurationMs = if (rule.coordinateFallback?.enabled == true) {
+            canonicalCoordinateFallbackWindowMs(rule.validDurationMs)
+        } else {
+            DEFAULT_RULE_WINDOW_MS
+        }
         return rule.copy(validDurationMs = validDurationMs)
+    }
+
+    fun canonicalCoordinateFallbackWindowMs(requestedWindowMs: Long): Long {
+        return requestedWindowMs
+            .takeIf { it > 0L }
+            ?.coerceAtMost(MAX_COORDINATE_FALLBACK_WINDOW_MS)
+            ?: MAX_COORDINATE_FALLBACK_WINDOW_MS
     }
 
     private fun upsertRulePackage(context: Context, rulePackage: RulePackage) {
@@ -503,6 +516,7 @@ object RuleRepository {
         val action = RuleAction.fromValue(optString("action", RuleAction.Click.value)) ?: return null
         val area = RuleArea.fromValue(optString("area", RuleArea.TopRight.value)) ?: return null
         val source = RuleSource.fromValue(optString("source", RuleSource.UserSimple.value))
+        val coordinateFallback = optJSONObject("coordinateFallback")?.toCoordinateFallback()
         return SkipRule(
             id = optString("id").ifBlank { "rule_${UUID.randomUUID()}" },
             source = source,
@@ -523,9 +537,9 @@ object RuleRepository {
             action = action,
             priority = optInt("priority", 10),
             cooldownMs = optLong("cooldownMs", 1200L),
-            validDurationMs = DEFAULT_RULE_WINDOW_MS,
+            validDurationMs = optLong("validDurationMs", DEFAULT_RULE_WINDOW_MS),
             minScore = optInt("minScore", 70),
-            coordinateFallback = optJSONObject("coordinateFallback")?.toCoordinateFallback(),
+            coordinateFallback = coordinateFallback,
             packageId = optString("packageId", "local"),
             createdAt = optLong("createdAt", System.currentTimeMillis())
         )
