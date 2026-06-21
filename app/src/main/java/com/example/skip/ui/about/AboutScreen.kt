@@ -62,7 +62,7 @@ fun AboutScreen(
                     }
                 }
                 if (!UpdateDownloadVerifier.verifySha256OrDelete(file, release.apkAsset.digestSha256)) {
-                    error("更新 APK 校验失败")
+                    error(UpdateDownloadVerifier.failureMessageFor(release.apkAsset.digestSha256))
                 }
                 when (val validation = ApkUpdateInstaller.validateDownloadedApk(context, file, versionCode)) {
                     ApkValidationResult.Valid -> file
@@ -82,11 +82,7 @@ fun AboutScreen(
         scope.launch {
             runCatching { UpdateRepository.checkLatestRelease() }
                 .onSuccess { release ->
-                    if (VersionComparator.isNewer(release.tagName, versionName)) {
-                        downloadAndInstall(release)
-                    } else {
-                        state = UpdateCheckState.Latest(release)
-                    }
+                    state = UpdateCardBehavior.stateAfterCheck(release, versionName)
                 }
                 .onFailure {
                     state = UpdateCheckState.Error(it.userMessage("检测失败"))
@@ -212,8 +208,13 @@ private fun VersionCardStateContent(
 
         is UpdateCheckState.Available -> {
             Text(
-                text = releaseSummary("发现新版本", state.release),
+                text = updateReleaseSummary("发现新版本", state.release),
                 style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "点击此卡片下载并交给系统安装器。",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             ReleasePageButton(state.release, onOpenReleasePage)
@@ -242,7 +243,7 @@ private fun VersionCardStateContent(
 
         is UpdateCheckState.Downloaded -> {
             Text(
-                text = releaseSummary("更新 APK 已下载", state.release),
+                text = updateReleaseSummary("更新 APK 已下载", state.release),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -288,11 +289,24 @@ private fun ReleasePageButton(
     }
 }
 
-private fun releaseSummary(prefix: String, release: UpdateRelease): String {
+internal fun updateReleaseSummary(prefix: String, release: UpdateRelease): String {
     val published = release.publishedAt.takeIf(String::isNotBlank)
         ?.let { "\n发布时间：$it" }
         .orEmpty()
-    return "$prefix：${release.versionName}$published"
+    val digestSummary = release.apkAsset.digestSha256.take(12)
+    return "$prefix：${release.versionName}" +
+        "\nAPK：${release.apkAsset.name}" +
+        "\n大小：${formatUpdateAssetSize(release.apkAsset.size)}" +
+        "\nSHA-256：${digestSummary}…" +
+        published
+}
+
+private fun formatUpdateAssetSize(size: Long): String {
+    return if (size < 1024L) {
+        "${size} B"
+    } else {
+        "${size / 1024L} KB"
+    }
 }
 
 private fun Throwable.userMessage(prefix: String): String {

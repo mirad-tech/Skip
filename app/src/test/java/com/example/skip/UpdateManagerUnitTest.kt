@@ -1,5 +1,8 @@
 package com.example.skip
 
+import com.example.skip.ui.about.ApkArchiveMetadata
+import com.example.skip.ui.about.ApkUpdateInstaller
+import com.example.skip.ui.about.ApkValidationResult
 import com.example.skip.ui.about.UpdateDownloadVerifier
 import com.example.skip.ui.about.UpdateCardAction
 import com.example.skip.ui.about.UpdateCardBehavior
@@ -9,11 +12,11 @@ import com.example.skip.ui.about.UpdateRepository
 import com.example.skip.ui.about.UpdateRelease
 import com.example.skip.ui.about.UpdateReleaseParser
 import com.example.skip.ui.about.VersionComparator
+import com.example.skip.ui.about.updateReleaseSummary
 import java.io.File
 import java.security.MessageDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -60,7 +63,7 @@ class UpdateManagerUnitTest {
     }
 
     @Test
-    fun releaseParserFallsBackToFirstApkAsset() {
+    fun releaseParserRejectsUnexpectedApkAssetName() {
         val json = """
             {
               "tag_name": "v1.0.5",
@@ -76,10 +79,10 @@ class UpdateManagerUnitTest {
             }
         """.trimIndent()
 
-        val release = UpdateReleaseParser.parse(json)
+        val result = runCatching { UpdateReleaseParser.parse(json) }
 
-        assertEquals("Skip-1.0.5.apk", release.apkAsset.name)
-        assertNull(release.apkAsset.digestSha256)
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("可信"))
     }
 
     @Test
@@ -128,12 +131,71 @@ class UpdateManagerUnitTest {
     }
 
     @Test
+    fun releaseParserRejectsReleaseApkWithoutDigest() {
+        val json = releaseJson(
+            assetJson = """
+                {
+                  "name": "Skip-v1.0.5-release.apk",
+                  "size": 12,
+                  "browser_download_url": "https://example.com/release.apk"
+                }
+            """.trimIndent()
+        )
+
+        val result = runCatching { UpdateReleaseParser.parse(json) }
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("digest"))
+    }
+
+    @Test
+    fun releaseParserRejectsNonSha256Digest() {
+        val json = releaseJson(
+            assetJson = trustedAssetJson(digest = "md5:${"a".repeat(32)}")
+        )
+
+        val result = runCatching { UpdateReleaseParser.parse(json) }
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("sha256"))
+    }
+
+    @Test
+    fun releaseParserNormalizesUppercaseSha256Digest() {
+        val json = releaseJson(
+            assetJson = trustedAssetJson(digest = "sha256:${"A".repeat(64)}")
+        )
+
+        val release = UpdateReleaseParser.parse(json)
+
+        assertEquals("a".repeat(64), release.apkAsset.digestSha256)
+    }
+
+    @Test
+    fun releaseParserRejectsAmbiguousTrustedApkAssets() {
+        val json = """
+            {
+              "tag_name": "v1.0.5",
+              "assets": [
+                ${trustedAssetJson(digest = "sha256:${"a".repeat(64)}")},
+                ${trustedAssetJson(digest = "sha256:${"b".repeat(64)}")}
+              ]
+            }
+        """.trimIndent()
+
+        val result = runCatching { UpdateReleaseParser.parse(json) }
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("唯一"))
+    }
+
+    @Test
     fun updateDownloadVerifierDeletesFileWhenSha256DoesNotMatch() {
         val temp = File.createTempFile("skip-update", ".apk")
         temp.writeText("bad-apk")
         val expected = sha256("good-apk".toByteArray())
 
-        val verified = UpdateDownloadVerifier.verifySha256OrDelete(temp, expected)
+        val verified = UpdateDownloadVerifier.verifySha256OrDelete(temp, "sha256:$expected")
 
         assertFalse(verified)
         assertFalse(temp.exists())
@@ -148,6 +210,113 @@ class UpdateManagerUnitTest {
         val verified = UpdateDownloadVerifier.verifySha256OrDelete(temp, "sha256:${sha256(bytes)}")
 
         assertTrue(verified)
+        assertTrue(temp.exists())
+        temp.delete()
+    }
+
+    @Test
+    fun updateDownloadVerifierDeletesFileWhenExpectedDigestIsMissingOrBlank() {
+        listOf(null, "", "   ").forEach { digest ->
+            val temp = File.createTempFile("skip-update", ".apk")
+            temp.writeText("apk")
+
+            val verified = UpdateDownloadVerifier.verifySha256OrDelete(temp, digest)
+
+            assertFalse(verified)
+            assertFalse(temp.exists())
+        }
+    }
+
+    @Test
+    fun updateDownloadVerifierDeletesFileWhenExpectedDigestFormatIsInvalid() {
+        listOf(
+            "${"a".repeat(64)}",
+            "md5:${"a".repeat(32)}",
+            "sha256:not-valid"
+        ).forEach { digest ->
+            val temp = File.createTempFile("skip-update", ".apk")
+            temp.writeText("apk")
+
+            val verified = UpdateDownloadVerifier.verifySha256OrDelete(temp, digest)
+
+            assertFalse(verified)
+            assertFalse(temp.exists())
+        }
+    }
+
+    @Test
+    fun updateDownloadVerifierRejectsUppercaseDigestAlgorithmEvenWhenHashMatches() {
+        val temp = File.createTempFile("skip-update", ".apk")
+        val bytes = "apk".toByteArray()
+        temp.writeBytes(bytes)
+
+        val verified = UpdateDownloadVerifier.verifySha256OrDelete(temp, "SHA256:${sha256(bytes)}")
+
+        assertFalse(verified)
+        assertFalse(temp.exists())
+    }
+
+    @Test
+    fun apkInstallerRejectsPackageNameMismatchAndDeletesFile() {
+        val temp = tempApk()
+
+        val result = ApkUpdateInstaller.validateArchiveMetadataOrDelete(
+            file = temp,
+            expectedPackageName = "com.example.skip",
+            currentVersionCode = 14,
+            installedCertificateSha256 = setOf("installed"),
+            archive = ApkArchiveMetadata("com.example.other", 15, setOf("installed"))
+        )
+
+        assertInvalid(result, "包名不匹配")
+        assertFalse(temp.exists())
+    }
+
+    @Test
+    fun apkInstallerRejectsNonUpgradeVersionAndDeletesFile() {
+        val temp = tempApk()
+
+        val result = ApkUpdateInstaller.validateArchiveMetadataOrDelete(
+            file = temp,
+            expectedPackageName = "com.example.skip",
+            currentVersionCode = 14,
+            installedCertificateSha256 = setOf("installed"),
+            archive = ApkArchiveMetadata("com.example.skip", 14, setOf("installed"))
+        )
+
+        assertInvalid(result, "版本不高于")
+        assertFalse(temp.exists())
+    }
+
+    @Test
+    fun apkInstallerRejectsMismatchedCertificateAndDeletesFile() {
+        val temp = tempApk()
+
+        val result = ApkUpdateInstaller.validateArchiveMetadataOrDelete(
+            file = temp,
+            expectedPackageName = "com.example.skip",
+            currentVersionCode = 14,
+            installedCertificateSha256 = setOf("installed"),
+            archive = ApkArchiveMetadata("com.example.skip", 15, setOf("downloaded"))
+        )
+
+        assertInvalid(result, "签名证书不匹配")
+        assertFalse(temp.exists())
+    }
+
+    @Test
+    fun apkInstallerAcceptsNewerArchiveWithMatchingCertificate() {
+        val temp = tempApk()
+
+        val result = ApkUpdateInstaller.validateArchiveMetadataOrDelete(
+            file = temp,
+            expectedPackageName = "com.example.skip",
+            currentVersionCode = 14,
+            installedCertificateSha256 = setOf("first", "second"),
+            archive = ApkArchiveMetadata("com.example.skip", 15, setOf("second", "first"))
+        )
+
+        assertTrue(result is ApkValidationResult.Valid)
         assertTrue(temp.exists())
         temp.delete()
     }
@@ -184,6 +353,29 @@ class UpdateManagerUnitTest {
     }
 
     @Test
+    fun updateCardBehaviorMakesNewVersionAvailableBeforeDownload() {
+        val release = sampleRelease()
+
+        assertEquals(
+            UpdateCheckState.Available(release),
+            UpdateCardBehavior.stateAfterCheck(release, currentVersionName = "1.0.4")
+        )
+        assertEquals(
+            UpdateCheckState.Latest(release),
+            UpdateCardBehavior.stateAfterCheck(release, currentVersionName = "1.0.5")
+        )
+    }
+
+    @Test
+    fun updateReleaseSummaryIncludesAssetSizeAndDigest() {
+        val summary = updateReleaseSummary("发现新版本", sampleRelease())
+
+        assertTrue(summary.contains("Skip-v1.0.5-release.apk"))
+        assertTrue(summary.contains("大小：12 B"))
+        assertTrue(summary.contains("SHA-256：aaaaaaaaaaaa"))
+    }
+
+    @Test
     fun manifestDeclaresUpdatePermissionsAndNarrowFileProvider() {
         val manifest = readProjectFile("app/src/main/AndroidManifest.xml")
         val filePaths = readProjectFile("app/src/main/res/xml/file_paths.xml")
@@ -205,6 +397,35 @@ class UpdateManagerUnitTest {
 
     private fun readProjectFile(path: String): String {
         return listOf(File(path), File("../$path")).first { it.exists() }.readText()
+    }
+
+    private fun releaseJson(assetJson: String): String {
+        return """
+            {
+              "tag_name": "v1.0.5",
+              "assets": [$assetJson]
+            }
+        """.trimIndent()
+    }
+
+    private fun trustedAssetJson(digest: String): String {
+        return """
+            {
+              "name": "Skip-v1.0.5-release.apk",
+              "size": 12,
+              "browser_download_url": "https://example.com/release.apk",
+              "digest": "$digest"
+            }
+        """.trimIndent()
+    }
+
+    private fun tempApk(): File {
+        return File.createTempFile("skip-update", ".apk").apply { writeText("apk") }
+    }
+
+    private fun assertInvalid(result: ApkValidationResult, messagePart: String) {
+        assertTrue(result is ApkValidationResult.Invalid)
+        assertTrue((result as ApkValidationResult.Invalid).message.contains(messagePart))
     }
 
     private fun sampleRelease(): UpdateRelease {

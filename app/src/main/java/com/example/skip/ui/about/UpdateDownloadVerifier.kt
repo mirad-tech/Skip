@@ -6,7 +6,6 @@ import java.security.MessageDigest
 internal object UpdateDownloadVerifier {
     fun verifySha256OrDelete(file: File, expectedDigestSha256: String?): Boolean {
         val expected = normalizeExpectedDigest(expectedDigestSha256)
-        if (expected == null && expectedDigestSha256.isNullOrBlank()) return true
         if (expected == null) {
             file.delete()
             return false
@@ -17,13 +16,22 @@ internal object UpdateDownloadVerifier {
         return matches
     }
 
+    fun failureMessageFor(expectedDigestSha256: String?): String {
+        return when {
+            expectedDigestSha256.isNullOrBlank() -> "更新 APK 缺少 SHA-256 digest"
+            normalizeExpectedDigest(expectedDigestSha256) == null -> {
+                "更新 APK digest 格式错误，必须为 sha256:<64hex>"
+            }
+            else -> "更新 APK SHA-256 不匹配"
+        }
+    }
+
     private fun normalizeExpectedDigest(value: String?): String? {
         if (value.isNullOrBlank()) return null
-        val digest = value.removePrefix("sha256:")
-            .removePrefix("SHA256:")
-            .trim()
-            .lowercase()
+        if (!value.startsWith("sha256:")) return null
+        val digest = value.substring("sha256:".length)
         return digest.takeIf { it.length == 64 && it.all { char -> char in '0'..'9' || char in 'a'..'f' } }
+            ?.lowercase()
     }
 
     private fun sha256(file: File): String {

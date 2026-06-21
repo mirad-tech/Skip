@@ -14,7 +14,7 @@ internal data class UpdateAsset(
     val name: String,
     val size: Long,
     val browserDownloadUrl: String,
-    val digestSha256: String?
+    val digestSha256: String
 )
 
 internal sealed interface UpdateCheckState {
