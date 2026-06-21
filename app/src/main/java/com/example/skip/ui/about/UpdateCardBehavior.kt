@@ -8,6 +8,14 @@ internal enum class UpdateCardAction {
 }
 
 internal object UpdateCardBehavior {
+    fun stateAfterCheck(release: UpdateRelease, currentVersionName: String): UpdateCheckState {
+        return if (VersionComparator.isNewer(release.tagName, currentVersionName)) {
+            UpdateCheckState.Available(release)
+        } else {
+            UpdateCheckState.Latest(release)
+        }
+    }
+
     fun nextActionFor(state: UpdateCheckState): UpdateCardAction {
         return when (state) {
             UpdateCheckState.Idle,
