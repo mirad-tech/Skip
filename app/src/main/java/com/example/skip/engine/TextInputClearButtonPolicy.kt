@@ -21,7 +21,7 @@ object TextInputClearButtonPolicy {
         "clear search"
     )
 
-    fun shouldBlockDefaultRuleCandidate(
+    fun shouldBlockRuleCandidate(
         viewId: String,
         text: String,
         contentDescription: String
@@ -37,6 +37,14 @@ object TextInputClearButtonPolicy {
             .lowercase(Locale.ROOT)
         if (label.isBlank()) return false
         return clearLabelSignals.any { signal -> label.contains(signal) }
+    }
+
+    fun shouldBlockDefaultRuleCandidate(
+        viewId: String,
+        text: String,
+        contentDescription: String
+    ): Boolean {
+        return shouldBlockRuleCandidate(viewId, text, contentDescription)
     }
 
     private fun String.normalizeForPolicy(): String {

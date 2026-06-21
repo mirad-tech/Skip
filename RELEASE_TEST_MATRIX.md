@@ -7,15 +7,25 @@
 每个阶段完成后运行：
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
 .\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:assembleRelease
+.\gradlew.bat :app:compileDebugAndroidTestKotlin
 git diff --check
 ```
 
-如果 release 构建可用：
+`assembleRelease` 是当前唯一的 release-like 验证：它会执行正式 release 的签名校验、R8 (`minifyReleaseWithR8`)、资源压缩和 release lint。每次发布前都必须实际运行，不能用 Debug 构建替代。
+
+当前不新增 release-like 构建变体：
+
+- 项目只有 Debug AndroidTest 任务，正式 Release 依赖本机签名配置。
+- 新增 minified Debug / r8Regression 变体会改变 build type、签名和 AndroidTest 组合，超出本轮最小安全收口范围。
+- 后续如需要在设备上跑 minified AndroidTest，应单独设计 debug 签名的 release-like 变体，且不得改变正式 Release 的签名、R8 或发布配置。
+
+需要设备验证时运行：
 
 ```powershell
-.\gradlew.bat :app:assembleRelease
+.\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
 本轮自动化结果（2026-06-19，1.0.5）：
@@ -83,7 +93,19 @@ git diff --check
 | 坐标兜底超出 6 秒 | 不执行点击 | 未测 |
 | 坐标兜底命中高风险词 | 不点击，记录安全阻止 | 未测 |
 | 导入安全示例规则 | 导入成功 | 未测 |
-| 导入高风险规则 | 导入失败或被安全策略标记 | 未测 |
+| 导入高风险规则 | Hard Block，不保存规则，显示明确原因 | 未测 |
+| 导入宽 regex / 低 minScore / area=any | Hard Block 或需要额外确认 | 未测 |
+| 导入纯 View ID | 泛化 ID Hard Block；完整低风险 ID 需要额外确认 | 未测 |
+| 导入坐标兜底规则 | 缺包名、缺锚点、短锚点或高风险词 Hard Block | 未测 |
+| JSON apps[].enabled | 显示该字段不生效的提示，不误导为应用开关 | 未测 |
+| JSON 文件资源边界 | 超大文件、超多规则或嵌套过深被拒绝 | 未测 |
+| JSON 规则初始状态 | 默认停用，本地确认后再启用 | 未测 |
+| JSON 导入线程 | 文件读取与解析不阻塞 UI | 未测 |
+| 自定义规则命中搜索清除按钮 | 不点击 | 未测 |
+| JSON 规则命中搜索清除按钮 | 不点击 | 未测 |
+| 纯中文“跳过”普通页面 | 不点击 | 未测 |
+| `跳过 5` / `跳过广告` | 可在低风险开屏或广告场景命中 | 未测 |
+| `跳过登录` / `跳过更新` / `跳过授权` | 不点击 | 未测 |
 | 导出日志 | JSON 不含完整页面内容 | 未测 |
 | 导出诊断包 | JSON 包含设备、运行时、规则快照、点击日志、规则日志和摘要 | 未测 |
 | 诊断包隐私检查 | JSON 不含完整页面内容、账号、密码、验证码、支付信息 | 未测 |

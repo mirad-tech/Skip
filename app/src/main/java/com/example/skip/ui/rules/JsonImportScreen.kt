@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -22,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -33,6 +36,9 @@ import com.example.skip.data.RuleRepository
 import com.example.skip.model.DuplicateStrategy
 import com.example.skip.model.RuleImportResult
 import com.example.skip.ui.common.SimpleScreenScaffold
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -42,26 +48,31 @@ fun JsonImportScreen(onBack: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var strategy by remember { mutableStateOf(DuplicateStrategy.Override) }
     var showPreview by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val text = runCatching {
-            context.contentResolver.openInputStream(uri)
-                ?.bufferedReader(Charsets.UTF_8)
-                ?.use { it.readText() }
-                .orEmpty()
-        }.getOrElse {
-            error = "读取文件失败：${it.message.orEmpty()}"
-            return@rememberLauncherForActivityResult
-        }
-        val result = RuleLifecycleRepository.parseJsonImport(text = text, context = context)
-        if (result.success) {
-            importResult = result
-            showPreview = true
-            error = null
-        } else {
-            error = result.errorMessage
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val text = context.contentResolver.openInputStream(uri)
+                        ?.use(RuleImportManager::readJsonText)
+                        ?: throw IllegalArgumentException("无法打开文件")
+                    RuleLifecycleRepository.parseJsonImport(text = text, context = context)
+                }
+            }
+            result.onSuccess { parsed ->
+                if (parsed.success) {
+                    importResult = parsed
+                    showPreview = true
+                    error = null
+                } else {
+                    error = parsed.errorMessage
+                }
+            }.onFailure {
+                error = "读取文件失败：${it.message.orEmpty()}"
+            }
         }
     }
     val exportLauncher = rememberLauncherForActivityResult(
@@ -157,12 +168,25 @@ private fun JsonPreviewDialog(
         onDismissRequest = onDismiss,
         title = { Text("确认导入") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (result.extraConfirmationMessages.isNotEmpty()) {
+                    Text(
+                        text = "该规则会驱动无障碍点击；坐标兜底风险更高。规则仅本地保存，不上传、不联网，建议先观察再启用。",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 RuleImportManager.previewImport(result, strategy).forEachIndexed { index, line ->
                     Text(
                         text = line,
                         fontWeight = if (index == 0) FontWeight.Medium else null,
-                        color = if (line.startsWith("提示：") || line.startsWith("额外确认：")) {
+                        color = if (
+                            line.startsWith("提示：") ||
+                            line.startsWith("额外确认：") ||
+                            line.startsWith("需要额外确认：")
+                        ) {
                             MaterialTheme.colorScheme.error
                         } else {
                             MaterialTheme.colorScheme.onSurface
@@ -173,7 +197,9 @@ private fun JsonPreviewDialog(
         },
         confirmButton = {
             Button(onClick = onConfirm) {
-                Text("确认导入")
+                Text(
+                    if (result.extraConfirmationMessages.isEmpty()) "确认导入" else "我已了解风险并导入"
+                )
             }
         },
         dismissButton = {

@@ -60,6 +60,7 @@ import com.example.skip.ui.common.initialVisibleCount
 import com.example.skip.ui.common.nextVisibleCount
 import com.example.skip.util.PrivacySanitizer
 import com.example.skip.util.RomUtils
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
@@ -1958,6 +1959,279 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun importedRulesHardBlockBroadAndSensitiveMatchers() {
+        val cases = listOf(
+            "match_all_regex" to """
+                {"id":"match_all_regex","matchTexts":[".*"],"textMatchMode":"regex","area":"top_right"}
+            """,
+            "anchored_match_all_regex" to """
+                {"id":"anchored_match_all_regex","matchTexts":["^.*$"],"textMatchMode":"regex","area":"top_right"}
+            """,
+            "short_contains" to """
+                {"id":"short_contains","matchTexts":["跳"],"area":"top_right"}
+            """,
+            "generic_view_id" to """
+                {"id":"generic_view_id","matchViewIds":["close"],"area":"top_right"}
+            """,
+            "broad_regex_any_area" to """
+                {"id":"broad_regex_any_area","matchTexts":["skip.*"],"textMatchMode":"regex","area":"any"}
+            """,
+            "low_score_broad_regex" to """
+                {"id":"low_score_broad_regex","matchTexts":["skip.*"],"textMatchMode":"regex","area":"top_right","minScore":55}
+            """
+        )
+
+        cases.forEach { (id, rule) ->
+            val result = RuleImportManager.parseRulePackage(
+                """
+                    {"apps":[{"packageName":"com.example.news","rules":[$rule]}]}
+                """.trimIndent()
+            )
+
+            assertFalse("$id must be hard blocked", result.success)
+            assertTrue(result.errorMessage.contains("硬性阻断"))
+        }
+
+        val protectedPackage = RuleImportManager.parseRulePackage(
+            """
+                {"apps":[{"packageName":"com.android.settings","rules":[
+                  {"id":"settings_skip","matchTexts":["跳过广告"],"area":"top_right"}
+                ]}]}
+            """.trimIndent(),
+            selfPackageName = "com.example.skip"
+        )
+        assertFalse(protectedPackage.success)
+        assertTrue(protectedPackage.errorMessage.contains("硬性阻断"))
+    }
+
+    @Test
+    fun jsonImportDefaultsRulesDisabledAndExplainsIgnoredAppEnabled() {
+        val result = RuleImportManager.parseRulePackage(
+            """
+                {
+                  "apps": [
+                    {
+                      "packageName": "com.example.news",
+                      "enabled": true,
+                      "rules": [
+                        {
+                          "id": "safe_splash_skip",
+                          "enabled": true,
+                          "matchTexts": ["跳过广告"],
+                          "area": "top_right"
+                        }
+                      ]
+                    }
+                  ]
+                }
+            """.trimIndent()
+        )
+
+        assertTrue(result.errorMessage, result.success)
+        assertFalse(result.rules.single().enabled)
+        assertTrue(result.warningMessages.any { it.contains("apps[].enabled") && it.contains("不生效") })
+        assertTrue(result.warningMessages.any { it.contains("默认以停用状态") })
+    }
+
+    @Test
+    fun jsonImportWarnsForFullLowRiskViewIdAndShowsExtraConfirmation() {
+        val result = RuleImportManager.parseRulePackage(
+            """
+                {
+                  "apps": [
+                    {
+                      "packageName": "com.example.news",
+                      "rules": [
+                        {
+                          "id": "full_view_id",
+                          "matchViewIds": ["com.example.news:id/splash_close"],
+                          "area": "top_right"
+                        }
+                      ]
+                    }
+                  ]
+                }
+            """.trimIndent()
+        )
+
+        assertTrue(result.errorMessage, result.success)
+        assertTrue(result.warningMessages.any { it.contains("完整 View ID") })
+        assertTrue(
+            RuleImportManager.previewImport(result, DuplicateStrategy.Skip)
+                .any { it.contains("需要额外确认") }
+        )
+    }
+
+    @Test
+    fun textInputClearButtonPolicyAlsoProtectsCustomAndJsonRules() {
+        val scoreEvaluatorSource = readProjectFile(
+            "app/src/main/java/com/example/skip/engine/ScoreEvaluator.kt"
+        )
+
+        listOf(RuleSource.BuiltIn, RuleSource.UserSimple, RuleSource.JsonFile).forEach { source ->
+            val rule = SkipRule(
+                id = "${source.value}_search_clear",
+                source = source,
+                name = "搜索清除",
+                packageName = "com.example.news",
+                appName = "News",
+                matchViewIds = listOf("com.example.news:id/search_close_btn")
+            )
+            assertTrue(
+                "${rule.source} must retain search-clear protection",
+                TextInputClearButtonPolicy.shouldBlockDefaultRuleCandidate(
+                    viewId = rule.matchViewIds.single(),
+                    text = "",
+                    contentDescription = "清除搜索"
+                )
+            )
+        }
+        assertTrue(scoreEvaluatorSource.contains("shouldBlockRuleCandidate"))
+        assertFalse(scoreEvaluatorSource.contains("defaultRule && TextInputClearButtonPolicy"))
+    }
+
+    @Test
+    fun chineseStandaloneSkipRequiresAdOrCountdownEvidence() {
+        val allowedLabelMethod = ScoreEvaluator::class.java
+            .getDeclaredMethod(
+                "isAllowedDefaultGenericSkipLabel",
+                String::class.java,
+                String::class.java
+            )
+            .apply { isAccessible = true }
+        val scoreEvaluatorSource = readProjectFile(
+            "app/src/main/java/com/example/skip/engine/ScoreEvaluator.kt"
+        )
+
+        assertTrue(SafetyGuard.isStandaloneSkipText("skip"))
+        assertTrue(SafetyGuard.isStandaloneSkipText("跳过"))
+        assertFalse(allowedLabelMethod.invoke(ScoreEvaluator, "跳过", "") as Boolean)
+        assertTrue(allowedLabelMethod.invoke(ScoreEvaluator, "跳过 5", "") as Boolean)
+        assertTrue(allowedLabelMethod.invoke(ScoreEvaluator, "跳过 5s", "") as Boolean)
+        assertTrue(allowedLabelMethod.invoke(ScoreEvaluator, "跳过广告", "") as Boolean)
+        assertFalse(allowedLabelMethod.invoke(ScoreEvaluator, "跳过登录", "") as Boolean)
+        assertFalse(allowedLabelMethod.invoke(ScoreEvaluator, "跳过设置", "") as Boolean)
+        assertFalse(allowedLabelMethod.invoke(ScoreEvaluator, "跳过更新", "") as Boolean)
+        assertFalse(allowedLabelMethod.invoke(ScoreEvaluator, "跳过授权", "") as Boolean)
+        assertFalse(allowedLabelMethod.invoke(ScoreEvaluator, "跳过此步骤", "") as Boolean)
+        assertTrue(scoreEvaluatorSource.contains("generic_skip_context_missing"))
+        assertFalse(scoreEvaluatorSource.contains("defaultRule &&\n            idRule == null"))
+    }
+
+    @Test
+    fun releaseTestMatrixRequiresRepeatableR8AndAndroidTestCompilation() {
+        val matrix = readProjectFile("RELEASE_TEST_MATRIX.md")
+
+        assertTrue(matrix.contains(".\\gradlew.bat :app:testDebugUnitTest --rerun-tasks"))
+        assertTrue(matrix.contains(".\\gradlew.bat :app:assembleDebug"))
+        assertTrue(matrix.contains(".\\gradlew.bat :app:assembleRelease"))
+        assertTrue(matrix.contains(".\\gradlew.bat :app:compileDebugAndroidTestKotlin"))
+        assertTrue(matrix.contains("minifyReleaseWithR8"))
+        assertTrue(matrix.contains("release-like"))
+    }
+
+    @Test
+    fun jsonImportRequiresExtraConfirmationForShortContainsAndLargePackages() {
+        val json = buildString {
+            append("{\"apps\":[")
+            repeat(3) { appIndex ->
+                if (appIndex > 0) append(',')
+                append("{\"packageName\":\"com.example.news$appIndex\",\"rules\":[")
+                repeat(20) { ruleIndex ->
+                    if (ruleIndex > 0) append(',')
+                    append("{\"id\":\"rule_${appIndex}_$ruleIndex\",\"matchTexts\":[\"跳过\"],\"area\":\"top_right\"}")
+                }
+                append("]}")
+            }
+            append("]}")
+        }
+
+        val result = RuleImportManager.parseRulePackage(json)
+
+        assertTrue(result.errorMessage, result.success)
+        assertTrue(result.extraConfirmationMessages.any { it.contains("contains 匹配词较短") })
+        assertTrue(result.extraConfirmationMessages.any { it.contains("规则数量较多") })
+    }
+
+    @Test
+    fun jsonImportRejectsOversizedTooManyAndTooDeepInputs() {
+        val oversized = """
+            {"description":"${"a".repeat(256 * 1024)}","apps":[
+              {"packageName":"com.example.news","rules":[
+                {"id":"safe","matchTexts":["跳过广告"],"area":"top_right"}
+              ]}
+            ]}
+        """.trimIndent()
+        val tooManyRules = buildString {
+            append("{\"apps\":[{\"packageName\":\"com.example.news\",\"rules\":[")
+            repeat(101) { index ->
+                if (index > 0) append(',')
+                append("{\"id\":\"rule_$index\",\"matchTexts\":[\"跳过广告\"],\"area\":\"top_right\"}")
+            }
+            append("]}]}")
+        }
+        val nestedMetadata = buildString {
+            append("{\"metadata\":")
+            repeat(17) { append("{\"next\":") }
+            append("\"value\"")
+            repeat(17) { append('}') }
+            append(",\"apps\":[{\"packageName\":\"com.example.news\",\"rules\":[")
+            append("{\"id\":\"safe\",\"matchTexts\":[\"跳过广告\"],\"area\":\"top_right\"}")
+            append("]}]}")
+        }
+
+        listOf(oversized, tooManyRules, nestedMetadata).forEach { json ->
+            val result = RuleImportManager.parseRulePackage(json)
+            assertFalse(result.success)
+            assertTrue(result.errorMessage.contains("限制") || result.errorMessage.contains("过深"))
+        }
+    }
+
+    @Test
+    fun jsonImportRejectsTotalRuleLimitAndUnsafeCoordinateAnchors() {
+        val totalLimitJson = buildString {
+            append("{\"apps\":[")
+            repeat(6) { appIndex ->
+                if (appIndex > 0) append(',')
+                append("{\"packageName\":\"com.example.news$appIndex\",\"rules\":[")
+                repeat(20) { ruleIndex ->
+                    if (ruleIndex > 0) append(',')
+                    append("{\"id\":\"rule_${appIndex}_$ruleIndex\",\"matchTexts\":[\"跳过广告\"],\"area\":\"top_right\"}")
+                }
+                append("]}")
+            }
+            append("]}")
+        }
+        val shortAnchorJson = """
+            {"apps":[{"packageName":"com.example.news","rules":[
+              {"id":"short_anchor","matchTexts":["跳过广告"],"coordinateFallback":{
+                "enabled":true,"xRatio":0.9,"yRatio":0.1,"anchorTexts":["跳"]
+              }}
+            ]}]}
+        """.trimIndent()
+
+        val totalLimit = RuleImportManager.parseRulePackage(totalLimitJson)
+        val shortAnchor = RuleImportManager.parseRulePackage(shortAnchorJson)
+
+        assertFalse(totalLimit.success)
+        assertTrue(totalLimit.errorMessage.contains("规则总数超过限制"))
+        assertFalse(shortAnchor.success)
+        assertTrue(shortAnchor.errorMessage.contains("硬性阻断"))
+    }
+
+    @Test
+    fun jsonImportReaderIsBoundedAndScreenUsesIoDispatcher() {
+        val oversizedInput = ByteArrayInputStream(ByteArray(256 * 1024 + 1) { 'a'.code.toByte() })
+        val readFailure = runCatching { RuleImportManager.readJsonText(oversizedInput) }.exceptionOrNull()
+        val screenSource = readProjectFile("app/src/main/java/com/example/skip/ui/rules/JsonImportScreen.kt")
+
+        assertTrue(readFailure is IllegalArgumentException)
+        assertTrue(screenSource.contains("withContext(Dispatchers.IO)"))
+        assertFalse(screenSource.contains(".readText()"))
+        assertTrue(screenSource.contains("verticalScroll(rememberScrollState())"))
+    }
+
+    @Test
     fun importedRulesRejectMalformedRegexBeforeRuntime() {
         val json = """
             {
@@ -2128,11 +2402,11 @@ class SafetyAndLogUnitTest {
                       "name": "右上角跳过",
                       "enabled": true,
                       "activityName": "com.example.news.SplashActivity",
-                      "matchTexts": ["跳过"],
+                      "matchTexts": ["跳过广告"],
                       "matchViewIds": ["com.example.news:id/skip"],
                       "textMatchMode": "regex",
                       "area": "any",
-                      "minScore": 55,
+                      "minScore": 65,
                       "coordinateFallback": {
                         "enabled": true,
                         "xRatio": 0.9,
