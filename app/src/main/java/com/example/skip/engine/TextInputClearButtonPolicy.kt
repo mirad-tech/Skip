@@ -3,6 +3,8 @@ package com.example.skip.engine
 import java.util.Locale
 
 object TextInputClearButtonPolicy {
+    const val BLOCKED_REASON = "text_input_clear_button"
+
     private val inputIdSignals = listOf(
         "search",
         "query",

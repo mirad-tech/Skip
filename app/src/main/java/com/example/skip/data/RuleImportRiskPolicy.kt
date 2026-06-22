@@ -44,6 +44,12 @@ object RuleImportRiskPolicy {
         "设置", "安装", "更新"
     )
 
+    private enum class RegexRisk {
+        MatchAll,
+        Broad,
+        Specific
+    }
+
     fun assess(
         rule: SkipRule,
         selfPackageName: String,
@@ -78,7 +84,8 @@ object RuleImportRiskPolicy {
             rule.contentDescriptionMatchMode to rule.matchContentDescriptions,
             rule.viewIdMatchMode to rule.matchViewIds
         ).filter { it.first == MatchMode.Regex }.flatMap { it.second }
-        if (regexPatterns.any(::isMatchAllRegex)) {
+        val regexRisks = regexPatterns.map(::classifyRegexRisk)
+        if (regexRisks.any { it == RegexRisk.MatchAll }) {
             risks += hardBlock("match_all_regex", "regex 不能匹配全部内容")
         }
 
@@ -95,14 +102,12 @@ object RuleImportRiskPolicy {
             risks += extraConfirm("short_contains", "contains 匹配词较短，可能扩大匹配范围")
         }
 
-        val pureViewIdRule = rule.matchTexts.isEmpty() &&
-            rule.matchContentDescriptions.isEmpty() &&
-            rule.matchViewIds.isNotEmpty()
-        if (pureViewIdRule && rule.matchViewIds.any(::isLooseOrGenericViewId)) {
-            risks += hardBlock("generic_view_id", "纯 View ID 规则必须使用完整、可识别的资源 ID")
+        val hasLiteralViewIdMatch = rule.viewIdMatchMode != MatchMode.Regex && rule.matchViewIds.isNotEmpty()
+        if (hasLiteralViewIdMatch && rule.matchViewIds.any(::isLooseOrGenericViewId)) {
+            risks += hardBlock("generic_view_id", "View ID 规则必须使用完整、可识别的资源 ID")
         }
 
-        val hasBroadRegex = regexPatterns.any(::isBroadRegex)
+        val hasBroadRegex = regexRisks.any { it == RegexRisk.Broad }
         if (hasBroadRegex && rule.area == RuleArea.Any) {
             risks += hardBlock("broad_regex_any_area", "过宽 regex 不能与 area=any 组合")
         }
@@ -134,8 +139,8 @@ object RuleImportRiskPolicy {
         if (rule.area == RuleArea.Any) {
             risks += extraConfirm("area_any", "area=any 会扩大点击区域")
         }
-        if (pureViewIdRule && rule.matchViewIds.all(::isCompleteResourceId)) {
-            risks += extraConfirm("pure_view_id", "纯 View ID 规则使用完整 View ID，仍需确认")
+        if (hasLiteralViewIdMatch && rule.matchViewIds.all(::isCompleteResourceId)) {
+            risks += extraConfirm("pure_view_id", "View ID 规则使用完整 View ID，仍需确认")
         }
         if (rule.minScore in MIN_SAFE_SCORE until 70) {
             risks += extraConfirm("near_min_score", "minScore 接近安全下限")
@@ -170,18 +175,156 @@ object RuleImportRiskPolicy {
         return risks
     }
 
-    private fun isMatchAllRegex(pattern: String): Boolean {
-        val normalized = pattern.replace("\\s+".toRegex(), "")
-        return normalized in setOf(
-            ".*", "^.*$", "(?s).*", "(?s)^.*$", "(?s:.*)", "^(?s:.*)$",
-            "[\\s\\S]*", "^[\\s\\S]*$"
-        )
+    private fun classifyRegexRisk(pattern: String): RegexRisk {
+        val normalized = normalizeRegexForRiskClassification(pattern)
+        val unwrapped = normalized
+        if (unwrapped in matchAllRegexForms) return RegexRisk.MatchAll
+        if (normalized.isObviouslyBroadRegex()) return RegexRisk.Broad
+        return RegexRisk.Specific
     }
 
-    private fun isBroadRegex(pattern: String): Boolean {
-        val normalized = pattern.replace("\\s+".toRegex(), "")
-        return normalized.contains(".*") || normalized.contains(".+") || isMatchAllRegex(pattern)
+    private fun normalizeRegexForRiskClassification(pattern: String): String {
+        var value = pattern.replace("\\s+".toRegex(), "")
+        repeat(MAX_REGEX_NORMALIZATION_PASSES) {
+            val normalized = value
+                .removePrefix("(?s)")
+                .withoutOuterAnchors()
+                .withoutOuterGroups()
+                .withoutOuterDotAllGroupQuantifier()
+                .withoutOuterSingleDotGroupQuantifier()
+            if (normalized == value) return normalized
+            value = normalized
+        }
+        return value
     }
+
+    private val matchAllRegexForms = setOf(
+        ".*",
+        "(?s).*",
+        "(?s:.)*",
+        "[\\d\\D]*",
+        "[\\D\\d]*",
+        "[\\s\\S]*",
+        "[\\S\\s]*",
+        "[\\w\\W]*",
+        "[\\W\\w]*",
+        "(?:.|\\n)*",
+        "(.|\\n)*",
+        "(?:\\d|\\D)*",
+        "(?:\\D|\\d)*",
+        "(?:\\s|\\S)*",
+        "(?:\\S|\\s)*",
+        "(?:\\w|\\W)*",
+        "(?:\\W|\\w)*",
+        "(\\d|\\D)*",
+        "(\\D|\\d)*",
+        "(\\s|\\S)*",
+        "(\\S|\\s)*",
+        "(\\w|\\W)*",
+        "(\\W|\\w)*"
+    )
+
+    private val broadUniversalRegexFragments = setOf(
+        ".*",
+        ".+",
+        "[\\d\\D]",
+        "[\\D\\d]",
+        "[\\s\\S]",
+        "[\\S\\s]",
+        "[\\w\\W]",
+        "[\\W\\w]",
+        "(?:.|\\n)",
+        "(.|\\n)",
+        "(?:\\d|\\D)",
+        "(?:\\D|\\d)",
+        "(?:\\s|\\S)",
+        "(?:\\S|\\s)",
+        "(?:\\w|\\W)",
+        "(?:\\W|\\w)",
+        "(\\d|\\D)",
+        "(\\D|\\d)",
+        "(\\s|\\S)",
+        "(\\S|\\s)",
+        "(\\w|\\W)",
+        "(\\W|\\w)"
+    )
+
+    private fun String.withoutOuterAnchors(): String {
+        var value = this
+        while (value.startsWith("^") && value.endsWith("$") && value.length > 1) {
+            value = value.substring(1, value.length - 1)
+        }
+        return value
+    }
+
+    private fun String.withoutOuterGroups(): String {
+        var value = this
+        while (true) {
+            val contentStart = value.outerGroupContentStart() ?: return value
+            if (value.matchingGroupEnd() != value.lastIndex) return value
+            value = value.substring(contentStart, value.lastIndex)
+        }
+    }
+
+    private fun String.withoutOuterDotAllGroupQuantifier(): String {
+        if (!startsWith("(?s:") || !endsWith("*")) return this
+        val groupEnd = matchingGroupEnd()
+        if (groupEnd != lastIndex - 1) return this
+        return substring(4, groupEnd) + "*"
+    }
+
+    private fun String.withoutOuterSingleDotGroupQuantifier(): String {
+        if (!endsWith("*")) return this
+        val contentStart = outerGroupContentStart() ?: return this
+        val groupEnd = matchingGroupEnd()
+        if (groupEnd != lastIndex - 1) return this
+        return if (substring(contentStart, groupEnd) == ".") ".*" else this
+    }
+
+    private fun String.outerGroupContentStart(): Int? {
+        return when {
+            startsWith("(?:") -> 3
+            startsWith("(?") -> {
+                val separator = indexOf(':')
+                if (separator > 2 && substring(2, separator).all { it.isLetter() || it == '-' }) {
+                    separator + 1
+                } else {
+                    null
+                }
+            }
+            startsWith("(") -> 1
+            else -> null
+        }
+    }
+
+    private fun String.matchingGroupEnd(): Int {
+        var depth = 0
+        var escaped = false
+        var inCharacterClass = false
+        forEachIndexed { index, character ->
+            if (escaped) {
+                escaped = false
+                return@forEachIndexed
+            }
+            when (character) {
+                '\\' -> escaped = true
+                '[' -> if (!inCharacterClass) inCharacterClass = true
+                ']' -> if (inCharacterClass) inCharacterClass = false
+                '(' -> if (!inCharacterClass) depth++
+                ')' -> if (!inCharacterClass) {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        return -1
+    }
+
+    private fun String.isObviouslyBroadRegex(): Boolean {
+        return broadUniversalRegexFragments.any(::contains)
+    }
+
+    private const val MAX_REGEX_NORMALIZATION_PASSES = 8
 
     private fun isLooseOrGenericViewId(value: String): Boolean {
         val trimmed = value.trim()
