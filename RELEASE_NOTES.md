@@ -1,5 +1,39 @@
 # Skip 发布说明
 
+## 1.0.8
+
+发布日期：待发布
+
+### 热修内容
+
+- 修复应用内更新的 SHA-256 digest 格式误判：GitHub Release API 返回的 `sha256:<64hex>` 在解析为裸 64 位 hex 后，更新校验器现在仍会严格校验并接受该 SHA-256 值。
+- 不放宽 md5、sha1、空 digest、非 hex 或非 64 位 digest；SHA-256 不匹配时仍会删除下载的 APK。
+
+### 升级说明
+
+- 1.0.7 的应用内更新可能因 digest 格式误判失败，不能通过应用内更新直接升级到 1.0.8。
+- 1.0.7 用户需要从 GitHub Release 手动下载 v1.0.8 APK 覆盖安装一次；从 v1.0.8 起后续应用内更新恢复正常。
+
+### 版本信息
+
+- `versionCode`：16
+- `versionName`：`1.0.8`
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.8-release.apk`
+- SHA256：`77D36CEE603C982E82E434D0DDF823EBE5AD9EEADDE423DB4879EFB30A10742A`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:compileDebugAndroidTestKotlin
+.\gradlew.bat :app:assembleRelease
+git diff --check
+```
+
 ## 1.0.7
 
 发布日期：2026-06-23
