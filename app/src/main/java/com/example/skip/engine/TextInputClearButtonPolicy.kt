@@ -3,6 +3,8 @@ package com.example.skip.engine
 import java.util.Locale
 
 object TextInputClearButtonPolicy {
+    const val BLOCKED_REASON = "text_input_clear_button"
+
     private val inputIdSignals = listOf(
         "search",
         "query",
@@ -21,7 +23,7 @@ object TextInputClearButtonPolicy {
         "clear search"
     )
 
-    fun shouldBlockDefaultRuleCandidate(
+    fun shouldBlockRuleCandidate(
         viewId: String,
         text: String,
         contentDescription: String
@@ -37,6 +39,14 @@ object TextInputClearButtonPolicy {
             .lowercase(Locale.ROOT)
         if (label.isBlank()) return false
         return clearLabelSignals.any { signal -> label.contains(signal) }
+    }
+
+    fun shouldBlockDefaultRuleCandidate(
+        viewId: String,
+        text: String,
+        contentDescription: String
+    ): Boolean {
+        return shouldBlockRuleCandidate(viewId, text, contentDescription)
     }
 
     private fun String.normalizeForPolicy(): String {

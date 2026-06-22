@@ -13,6 +13,8 @@ import com.example.skip.util.PrivacySanitizer
 import kotlin.math.abs
 
 object ClickExecutor {
+    const val COORDINATE_TEXT_INPUT_CLEAR_BUTTON_REASON = "coordinate_text_input_clear_button"
+
     private const val MAX_CLICKABLE_PARENT_DEPTH = 4
     private const val MAX_CLICK_TARGET_SCREEN_RATIO = 0.35f
     private const val MAX_DEFAULT_TARGET_SCREEN_RATIO = 0.10f
@@ -140,13 +142,14 @@ object ClickExecutor {
         y: Int,
         onResult: (ClickAttempt) -> Unit
     ) {
-        if (!isCoordinateFallbackGestureTargetSafe(target)) {
+        val blockReason = coordinateFallbackGestureTargetBlockReason(target)
+        if (blockReason != null) {
             onResult(
                 ClickAttempt(
                     method = ClickMethodLog.DispatchGesture,
                     accepted = false,
                     target = target,
-                    reason = "coordinate_fallback_target_unsafe"
+                    reason = blockReason
                 )
             )
             return
@@ -211,19 +214,39 @@ object ClickExecutor {
     }
 
     fun isCoordinateFallbackGestureTargetSafe(target: ClickTargetInfo): Boolean {
+        return coordinateFallbackGestureTargetBlockReason(target) == null
+    }
+
+    fun coordinateFallbackGestureTargetBlockReason(
+        target: ClickTargetInfo,
+        hasClickableNodeOrAncestor: Boolean = false
+    ): String? {
+        if (TextInputClearButtonPolicy.shouldBlockRuleCandidate(
+                viewId = target.viewId,
+                text = target.text,
+                contentDescription = target.contentDescription
+            )
+        ) {
+            return COORDINATE_TEXT_INPUT_CLEAR_BUTTON_REASON
+        }
         if (target.bounds.left >= target.bounds.right || target.bounds.top >= target.bounds.bottom ||
             target.input || target.password ||
             !target.enabled || !target.visibleToUser
         ) {
-            return false
+            return "coordinate_fallback_target_unsafe"
         }
-        if (!target.nodeClickable && !target.parentClickable) return false
+        if (!target.nodeClickable && !target.parentClickable && !hasClickableNodeOrAncestor) {
+            return "coordinate_fallback_target_unsafe"
+        }
         if (!hasCoordinateFallbackIdentity(target)) {
-            return false
+            return "coordinate_fallback_target_unsafe"
         }
-        return HighRiskClickPolicy.evaluateTexts(
+        if (!HighRiskClickPolicy.evaluateTexts(
             listOf(target.text, target.contentDescription, target.viewId, target.className)
-        ).allowed
+        ).allowed) {
+            return "coordinate_fallback_target_unsafe"
+        }
+        return null
     }
 
     fun hasCoordinateFallbackIdentity(target: ClickTargetInfo): Boolean {

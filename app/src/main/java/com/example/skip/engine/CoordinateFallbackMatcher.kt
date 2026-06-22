@@ -270,16 +270,11 @@ object CoordinateFallbackMatcher {
         if (!target.hasIdentifyingSignal()) {
             return CoordinateFallbackDecision.blocked("coordinate_fallback_target_blank")
         }
-        if (!target.nodeClickable && !target.parentClickable && !hasClickableNodeOrAncestor) {
-            return CoordinateFallbackDecision.blocked("coordinate_fallback_target_unsafe")
-        }
-        if (target.bounds.isEmptyForPolicy() ||
-            !target.enabled ||
-            !target.visibleToUser ||
-            target.password ||
-            target.input
-        ) {
-            return CoordinateFallbackDecision.blocked("coordinate_fallback_target_unsafe")
+        ClickExecutor.coordinateFallbackGestureTargetBlockReason(
+            target = target,
+            hasClickableNodeOrAncestor = hasClickableNodeOrAncestor
+        )?.let { reason ->
+            return CoordinateFallbackDecision.blocked(reason)
         }
         val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
             listOf(
@@ -535,6 +530,9 @@ object CoordinateFallbackMatcher {
         return when (reason) {
             "coordinate_fallback_anchor_missing" -> "coordinate_anchor_missing"
             "coordinate_fallback_anchor_too_short" -> "coordinate_anchor_too_short"
+            ClickExecutor.COORDINATE_TEXT_INPUT_CLEAR_BUTTON_REASON -> {
+                ClickExecutor.COORDINATE_TEXT_INPUT_CLEAR_BUTTON_REASON
+            }
             "coordinate_fallback_window_expired" -> "coordinate_window_expired"
             "coordinate_fallback_package_mismatch" -> "coordinate_package_changed"
             "coordinate_fallback_target_missing" -> "coordinate_target_missing"
@@ -549,6 +547,9 @@ object CoordinateFallbackMatcher {
             "coordinate_fallback_anchor_missing" -> "coordinate_anchor_missing"
             "coordinate_fallback_anchor_too_short" -> "coordinate_anchor_too_short"
             "coordinate_fallback_anchor_view_id_too_short" -> "coordinate_anchor_view_id_too_short"
+            ClickExecutor.COORDINATE_TEXT_INPUT_CLEAR_BUTTON_REASON -> {
+                ClickExecutor.COORDINATE_TEXT_INPUT_CLEAR_BUTTON_REASON
+            }
             "coordinate_fallback_window_expired" -> "coordinate_window_expired"
             "coordinate_fallback_package_mismatch",
             "coordinate_fallback_target_package_mismatch" -> "coordinate_package_changed"
