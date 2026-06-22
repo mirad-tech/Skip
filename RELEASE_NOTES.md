@@ -1,5 +1,47 @@
 # Skip 发布说明
 
+## 1.0.7
+
+发布日期：2026-06-23
+
+### 安全与可靠性
+
+- 加固更新链路：GitHub Release asset digest 缺失、格式错误或 SHA-256 不匹配时阻断并删除 APK。
+- 安装前校验 APK 包名、versionCode 与签名证书指纹，避免错误或不可信 APK 被安装。
+- 检查更新改为两步流程：先展示可用版本信息，再由用户确认下载与安装。
+- 加固坐标兜底：统一时间窗，点击前重新校验包名、锚点、目标身份、bounds、高风险词、输入框与敏感页面。
+- 坐标兜底不再允许空白目标、仅 className 目标或搜索输入框清除按钮目标。
+- 加固 JSON / 自定义规则导入：危险 regex、泛化 View ID、短匹配词、高风险词、异常坐标兜底等会被阻断。
+- 第三方 JSON 规则默认停用，并对 regex、area=any、完整 View ID、坐标兜底等显示额外风险确认。
+- 自定义规则与 JSON 规则现在同样受输入框清除按钮保护。
+- 收紧中文“跳过”语义：普通页面的纯“跳过”以及“跳过设置 / 登录 / 授权 / 更新”等敏感语义不会被 View ID 绕过。
+
+### 验证与兼容说明
+
+- 增加 Release / R8 构建验收矩阵与安全回归测试。
+- 出于安全考虑，部分过宽的第三方规则可能需要重新确认或保持停用。
+- 坐标兜底比旧版本更保守，建议只用于明确、低风险、稳定的目标；建议先自用观察。
+
+### 版本信息
+
+- `versionCode`：15
+- `versionName`：`1.0.7`
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.7-release.apk`
+- SHA256：`FEC5D817A278072298E2CA5DFBF8AA7CCB93949EEAFCBD128FA091CB0869D939`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:compileDebugAndroidTestKotlin
+.\gradlew.bat :app:assembleRelease
+git diff --check
+```
+
 ## 1.0.6
 
 发布日期：2026-06-20
