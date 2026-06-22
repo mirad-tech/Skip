@@ -333,7 +333,7 @@ object RuleImportManager {
                       "activityName": "*",
                       "matchTexts": ["跳过", "关闭", "Skip"],
                       "matchContentDescriptions": ["跳过", "Skip"],
-                      "matchViewIds": ["skip", "close"],
+                      "matchViewIds": ["com.example.app:id/ad_skip", "com.example.app:id/splash_close"],
                       "textMatchMode": "contains",
                       "contentDescriptionMatchMode": "contains",
                       "viewIdMatchMode": "contains",

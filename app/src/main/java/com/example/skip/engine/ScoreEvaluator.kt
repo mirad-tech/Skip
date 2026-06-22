@@ -60,6 +60,17 @@ object ScoreEvaluator {
         val descriptionValue = node.contentDescription?.toString().orEmpty()
         val viewId = node.viewIdResourceName.orEmpty()
         val defaultRule = rule.source == RuleSource.BuiltIn
+        if (SafetyGuard.isSensitiveText(textValue) || SafetyGuard.isSensitiveText(descriptionValue)) {
+            return ScoreEvaluation(
+                rule = rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = textValue.ifBlank { descriptionValue }.ifBlank { rule.name },
+                area = node.areaInScreen(),
+                passesMinScore = false,
+                failureReason = "sensitive_skip_semantic"
+            )
+        }
         if (TextInputClearButtonPolicy.shouldBlockRuleCandidate(
                 viewId = viewId,
                 text = textValue,
@@ -70,10 +81,10 @@ object ScoreEvaluator {
                 rule,
                 score = 0,
                 minScore = rule.minScore,
-                matchedKeyword = "text_input_clear_button",
+                matchedKeyword = TextInputClearButtonPolicy.BLOCKED_REASON,
                 area = node.areaInScreen(),
                 passesMinScore = false,
-                failureReason = "text_input_clear_button"
+                failureReason = TextInputClearButtonPolicy.BLOCKED_REASON
             )
         }
         val textRule = matchedTextRule(listOf(textValue), rule.matchTexts, rule.textMatchMode)

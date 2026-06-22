@@ -18,6 +18,7 @@ import com.example.skip.engine.CoordinateFallbackMatcher
 import com.example.skip.engine.ClickExecutor
 import com.example.skip.engine.ClickTargetInfo
 import com.example.skip.engine.CoordinateFallbackMatch
+import com.example.skip.engine.CoordinateFallbackMatchResult
 import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.CoordinateFallbackTargetSnapshot
 import com.example.skip.engine.NodeScanner
@@ -2005,6 +2006,132 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun importedRulesHardBlockEquivalentMatchAllRegexes() {
+        fun importRegex(pattern: String, area: String = "top_right", minScore: Int = 70) =
+            RuleImportManager.parseRulePackage(
+                """
+                    {"apps":[{"packageName":"com.example.news","rules":[
+                      {"id":"regex_rule","matchTexts":["${pattern.replace("\\", "\\\\")}"],"textMatchMode":"regex","area":"$area","minScore":$minScore}
+                    ]}]}
+                """.trimIndent()
+            )
+
+        listOf(
+            "(?s:.)*",
+            "(?s).*",
+            "(?s)^.*$",
+            "(^.*$)",
+            "(?:^.*$)",
+            "(?s:^.*$)",
+            "(?s:(?:.))*",
+            "[\\d\\D]*",
+            "[\\D\\d]*",
+            "[\\s\\S]*",
+            "[\\S\\s]*",
+            "[\\w\\W]*",
+            "[\\W\\w]*",
+            "(?:.|\\n)*",
+            "(.|\\n)*",
+            "(?:\\d|\\D)*",
+            "^([\\d\\D]*)$",
+            "^((?s:.)*)$"
+        ).forEach { pattern ->
+            val result = importRegex(pattern)
+            assertFalse("$pattern must be hard blocked", result.success)
+            assertTrue(result.errorMessage.contains("硬性阻断"))
+        }
+
+        assertFalse(importRegex("skip.*", area = "any").success)
+        val concrete = importRegex("跳过\\s*\\d{1,2}")
+        assertTrue(concrete.errorMessage, concrete.success)
+        assertTrue(concrete.extraConfirmationMessages.any { it.contains("regex") })
+        val englishConcrete = importRegex("skip\\s*\\d+")
+        assertTrue(englishConcrete.errorMessage, englishConcrete.success)
+        assertTrue(englishConcrete.extraConfirmationMessages.any { it.contains("regex") })
+    }
+
+    @Test
+    fun importedRulesHardBlockGenericViewIdsEvenWithTextMatchers() {
+        fun importRule(viewId: String): RuleImportResult {
+            return RuleImportManager.parseRulePackage(
+                """
+                    {"apps":[{"packageName":"com.example.news","rules":[
+                      {"id":"mixed_view_id","matchTexts":["跳过"],"matchViewIds":["$viewId"],"area":"top_right"}
+                    ]}]}
+                """.trimIndent()
+            )
+        }
+
+        listOf("close", "btn", "button", "x", "skip", "ad", "ok").forEach { viewId ->
+            val result = importRule(viewId)
+            assertFalse("$viewId must be hard blocked even with text", result.success)
+            assertTrue(result.errorMessage.contains("硬性阻断"))
+        }
+        val fullId = importRule("com.example.news:id/ad_skip")
+        assertTrue(fullId.errorMessage, fullId.success)
+
+        val sampleFile = listOf(File("sample_rules.json"), File("../sample_rules.json")).first { it.exists() }
+        val sample = sampleFile.readText()
+        assertFalse(sample.contains("\"skip\""))
+        assertFalse(sample.contains("\"close\""))
+    }
+
+    @Test
+    fun coordinateFallbackBlocksTextInputClearTargetsBeforeGesture() {
+        listOf(
+            RuleSource.UserSimple to "com.example.news:id/search_close_btn",
+            RuleSource.JsonFile to "com.example.news:id/search_clear_btn"
+        ).forEach { (source, viewId) ->
+            val target = coordinateFallbackTarget(text = "", viewId = viewId)
+            val result = CoordinateFallbackMatcher.evaluateInitialCandidate(
+                rule = coordinateFallbackRule().copy(source = source),
+                packageName = "com.example.news",
+                selfPackageName = "com.example.skip",
+                elapsedSinceForegroundMs = 500L,
+                screenWidth = 1080,
+                screenHeight = 2400,
+                hasAnchor = true,
+                activeTextInput = false,
+                pageSafetyTexts = emptyList(),
+                target = CoordinateFallbackTargetSnapshot(
+                    target = target,
+                    packageName = "com.example.news",
+                    hasClickableNodeOrAncestor = true
+                )
+            )
+
+            assertTrue("$source must block text-input clear target", result is CoordinateFallbackMatchResult.Blocked)
+            assertEquals(
+                "coordinate_text_input_clear_button",
+                (result as CoordinateFallbackMatchResult.Blocked).reason
+            )
+            assertFalse(ClickExecutor.isCoordinateFallbackGestureTargetSafe(target))
+        }
+
+        val ordinaryAdClose = coordinateFallbackTarget(
+            text = "关闭广告",
+            viewId = "com.example.news:id/ad_close"
+        )
+        assertTrue(ClickExecutor.isCoordinateFallbackGestureTargetSafe(ordinaryAdClose))
+    }
+
+    @Test
+    fun sensitiveSkipSemanticsBlockBeforeViewIdMatching() {
+        val scoreEvaluatorSource = readProjectFile(
+            "app/src/main/java/com/example/skip/engine/ScoreEvaluator.kt"
+        )
+
+        assertTrue(SafetyGuard.isSensitiveText("跳过设置"))
+        assertTrue(SafetyGuard.isSensitiveText("跳过登录"))
+        assertTrue(SafetyGuard.isSensitiveText("跳过授权"))
+        assertFalse(SafetyGuard.isSensitiveText("跳过 5"))
+        assertFalse(SafetyGuard.isSensitiveText("跳过广告"))
+        assertFalse(SafetyGuard.isSensitiveText("skip"))
+        assertTrue(scoreEvaluatorSource.contains("SafetyGuard.isSensitiveText(textValue)"))
+        assertTrue(scoreEvaluatorSource.contains("SafetyGuard.isSensitiveText(descriptionValue)"))
+    }
+
+    @Test
     fun jsonImportDefaultsRulesDisabledAndExplainsIgnoredAppEnabled() {
         val result = RuleImportManager.parseRulePackage(
             """
@@ -2403,7 +2530,7 @@ class SafetyAndLogUnitTest {
                       "enabled": true,
                       "activityName": "com.example.news.SplashActivity",
                       "matchTexts": ["跳过广告"],
-                      "matchViewIds": ["com.example.news:id/skip"],
+                      "matchViewIds": ["com.example.news:id/ad_skip"],
                       "textMatchMode": "regex",
                       "area": "any",
                       "minScore": 65,
@@ -2428,7 +2555,7 @@ class SafetyAndLogUnitTest {
         assertTrue(preview.contains("com.example.news"))
         assertTrue(preview.contains("右上角跳过"))
         assertTrue(preview.contains("com.example.news.SplashActivity"))
-        assertTrue(preview.contains("matchViewIds=com.example.news:id/skip"))
+        assertTrue(preview.contains("matchViewIds=com.example.news:id/ad_skip"))
         assertTrue(preview.contains("textMatchMode=regex"))
         assertTrue(preview.contains("coordinateFallback=enabled"))
         assertTrue(preview.contains("额外确认"))

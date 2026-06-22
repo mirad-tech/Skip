@@ -136,6 +136,21 @@ object SafetyGuard {
         "password"
     ) + HighRiskClickPolicy.blockedTerms
 
+    private val sensitiveSkipPhrases = listOf(
+        "跳过登录",
+        "跳过注册",
+        "跳过验证",
+        "跳过绑定",
+        "跳过设置",
+        "跳过更新",
+        "跳过授权",
+        "跳过支付",
+        "跳过安装",
+        "跳过删除",
+        "跳过卸载",
+        "跳过此步骤"
+    )
+
     fun canHandlePackage(context: Context, packageName: String): Boolean {
         if (packageName.isBlank()) return false
         if (isSelfPackage(context, packageName)) return false
@@ -235,8 +250,15 @@ object SafetyGuard {
 
     fun isSensitiveText(text: String): Boolean {
         val lower = text.lowercase(Locale.ROOT)
-        return protectedPageKeywords.any { lower.contains(it.lowercase(Locale.ROOT)) } ||
+        return hasSensitiveSkipSemantic(text) ||
+            protectedPageKeywords.any { lower.contains(it.lowercase(Locale.ROOT)) } ||
             HighRiskClickPolicy.isHighRiskText(text)
+    }
+
+    fun hasSensitiveSkipSemantic(text: String): Boolean {
+        val normalized = text.lowercase(Locale.ROOT)
+            .replace("\\s+".toRegex(), "")
+        return sensitiveSkipPhrases.any(normalized::contains)
     }
 
     fun protectedSummary(): String {
