@@ -39,7 +39,7 @@ fun RuleFormatScreen(onBack: () -> Unit) {
             )
             InfoCard(
                 title = "按应用策略",
-                body = "appPolicies 可导入 defaultRuleEnabled 和 customRulesEnabled；Skip 自身策略会被忽略，受保护应用仍不会执行规则。"
+                body = "appPolicies 可导入 defaultRuleEnabled 和 customRulesEnabled；apps[].enabled 当前不生效。Skip 自身和受保护应用不会执行规则。"
             )
             InfoCard(
                 title = "area 支持",
@@ -51,15 +51,15 @@ fun RuleFormatScreen(onBack: () -> Unit) {
             )
             InfoCard(
                 title = "常见错误",
-                body = "JSON 格式错误、packageName 为空、rules 为空、rule id 为空、action 不是 click、area 不合法、minScore 不是 0 到 100 的数字。"
+                body = "JSON 格式错误、packageName 为空、rules 为空、rule id 为空、action 不是 click、area 不合法、minScore 不在 0 到 100、文件过大、规则过多或嵌套过深。"
             )
             InfoCard(
                 title = "建议",
-                body = "validDurationMs 会统一收紧到 8000，cooldownMs 不建议小于 800，area=any 和低 minScore 都会增加误触风险。"
+                body = "JSON 规则默认以停用状态导入；请先观察再本地启用。regex、area=any、纯 View ID 和坐标兜底需要额外确认。"
             )
             InfoCard(
                 title = "坐标兜底限制",
-                body = "coordinateFallback 默认关闭；启用时必须绑定 packageName、限制启动后 8 秒内、配置 anchorTexts/anchorContentDescriptions/anchorViewIds、cooldownMs 不低于 800，并且不能包含同意、授权、允许、支付、购买、确认支付、登录、注册、隐私政策、用户协议、安装、删除、卸载、转账、发送、提交等高风险内容。"
+                body = "coordinateFallback 默认关闭；启用时必须绑定 packageName、限制启动后 6 秒内、配置强 anchorTexts/anchorContentDescriptions/anchorViewIds、cooldownMs 不低于 800，并且不能包含同意、授权、允许、支付、购买、确认支付、登录、注册、隐私政策、用户协议、安装、删除、卸载、转账、发送、提交等高风险内容。"
             )
 
             Button(
