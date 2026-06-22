@@ -215,6 +215,25 @@ class UpdateManagerUnitTest {
     }
 
     @Test
+    fun parsedGithubDigestCanBeUsedByDownloadVerifier() {
+        val bytes = "github-release-apk".toByteArray()
+        val release = UpdateReleaseParser.parse(
+            releaseJson(assetJson = trustedAssetJson(digest = "sha256:${sha256(bytes)}"))
+        )
+        val temp = File.createTempFile("skip-update", ".apk")
+        temp.writeBytes(bytes)
+
+        val verified = UpdateDownloadVerifier.verifySha256OrDelete(
+            file = temp,
+            expectedDigestSha256 = release.apkAsset.digestSha256
+        )
+
+        assertTrue(verified)
+        assertTrue(temp.exists())
+        temp.delete()
+    }
+
+    @Test
     fun updateDownloadVerifierDeletesFileWhenExpectedDigestIsMissingOrBlank() {
         listOf(null, "", "   ").forEach { digest ->
             val temp = File.createTempFile("skip-update", ".apk")
@@ -230,9 +249,11 @@ class UpdateManagerUnitTest {
     @Test
     fun updateDownloadVerifierDeletesFileWhenExpectedDigestFormatIsInvalid() {
         listOf(
-            "${"a".repeat(64)}",
             "md5:${"a".repeat(32)}",
-            "sha256:not-valid"
+            "sha1:${"a".repeat(40)}",
+            "sha256:${"g".repeat(64)}",
+            "sha256:${"a".repeat(63)}",
+            "${"a".repeat(63)}"
         ).forEach { digest ->
             val temp = File.createTempFile("skip-update", ".apk")
             temp.writeText("apk")

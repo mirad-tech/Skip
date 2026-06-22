@@ -20,7 +20,7 @@ internal object UpdateDownloadVerifier {
         return when {
             expectedDigestSha256.isNullOrBlank() -> "更新 APK 缺少 SHA-256 digest"
             normalizeExpectedDigest(expectedDigestSha256) == null -> {
-                "更新 APK digest 格式错误，必须为 sha256:<64hex>"
+                "更新 APK digest 格式错误，必须为 sha256:<64hex> 或 <64hex>"
             }
             else -> "更新 APK SHA-256 不匹配"
         }
@@ -28,9 +28,14 @@ internal object UpdateDownloadVerifier {
 
     private fun normalizeExpectedDigest(value: String?): String? {
         if (value.isNullOrBlank()) return null
-        if (!value.startsWith("sha256:")) return null
-        val digest = value.substring("sha256:".length)
-        return digest.takeIf { it.length == 64 && it.all { char -> char in '0'..'9' || char in 'a'..'f' } }
+        val digest = when {
+            value.startsWith("sha256:") -> value.substring("sha256:".length)
+            ':' in value -> return null
+            else -> value
+        }
+        return digest.takeIf { it.length == 64 && it.all { char ->
+            char in '0'..'9' || char in 'a'..'f' || char in 'A'..'F'
+        } }
             ?.lowercase()
     }
 
