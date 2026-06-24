@@ -1,21 +1,17 @@
 package com.example.skip.engine
 
-import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.skip.data.RuleRepository
 import com.example.skip.model.CoordinateFallback
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import java.util.Locale
-import kotlin.math.abs
 
 object CoordinateFallbackMatcher {
     private const val MIN_COORDINATE_FALLBACK_COOLDOWN_MS = 800L
     private const val MIN_ANCHOR_TEXT_LENGTH = 3
     private const val MIN_ANCHOR_VIEW_ID_LENGTH = 6
     private const val MIN_ANCHOR_CONTAINS_LENGTH = 6
-    private const val MAX_CLICKABLE_ANCESTOR_DEPTH = 4
-    private const val MAX_TARGET_DRIFT_PX = 48
 
     fun evaluate(
         rule: SkipRule,
@@ -127,7 +123,7 @@ object CoordinateFallbackMatcher {
         }
 
         var firstBlocked: CoordinateFallbackMatchResult.Blocked? = null
-        val pageSafetyTexts by lazy { root.pageSafetyTexts() }
+        val pageSafetyTexts by lazy { CurrentTargetRevalidator.pageSafetyTexts(root) }
         coordinateRules.forEach { rule ->
             val fallback = rule.coordinateFallback ?: return@forEach
             val hasAnchor = !fallback.hasAnchorRequirement() || root.containsAnchor(fallback)
@@ -149,7 +145,11 @@ object CoordinateFallbackMatcher {
                 }
                 return@forEach
             }
-            val coordinateTarget = root.findTargetAtPoint(decision.x, decision.y)
+            val coordinateTarget = CurrentTargetRevalidator.snapshotAtPoint(
+                root = root,
+                x = decision.x,
+                y = decision.y
+            )
             val initialResult = evaluateInitialCandidate(
                 rule = rule,
                 packageName = packageName,
@@ -160,7 +160,7 @@ object CoordinateFallbackMatcher {
                 hasAnchor = hasAnchor,
                 activeTextInput = false,
                 pageSafetyTexts = emptyList(),
-                target = coordinateTarget?.toSnapshot()
+                target = coordinateTarget
             )
             when (initialResult) {
                 is CoordinateFallbackMatchResult.Matched -> {
@@ -305,7 +305,7 @@ object CoordinateFallbackMatcher {
     ): CoordinateFallbackRevalidation {
         val fallback = rule.coordinateFallback
         val hasAnchor = root != null && fallback != null && root.containsAnchor(fallback)
-        val currentTarget = root?.findTargetAtPoint(x, y)
+        val currentTarget = CurrentTargetRevalidator.snapshotAtPoint(root, x, y)
         return evaluateBeforeGesture(
             rule = rule,
             expectedPackageName = expectedPackageName,
@@ -315,9 +315,9 @@ object CoordinateFallbackMatcher {
             rootAvailable = root != null,
             hasAnchor = hasAnchor,
             activeTextInput = activeTextInput,
-            pageSafetyTexts = root?.pageSafetyTexts().orEmpty(),
+            pageSafetyTexts = CurrentTargetRevalidator.pageSafetyTexts(root),
             originalTarget = originalTarget,
-            currentTarget = currentTarget?.toSnapshot()
+            currentTarget = currentTarget
         )
     }
 
@@ -334,13 +334,6 @@ object CoordinateFallbackMatcher {
         originalTarget: ClickTargetInfo,
         currentTarget: CoordinateFallbackTargetSnapshot?
     ): CoordinateFallbackRevalidation {
-        if (!rootAvailable) return CoordinateFallbackRevalidation.blocked("coordinate_root_missing")
-        if (currentPackageName != expectedPackageName) {
-            return CoordinateFallbackRevalidation.blocked("coordinate_package_changed")
-        }
-        if (activeTextInput) {
-            return CoordinateFallbackRevalidation.blocked("coordinate_active_text_input")
-        }
         val ruleDecision = evaluate(
             rule = rule,
             packageName = currentPackageName,
@@ -353,28 +346,24 @@ object CoordinateFallbackMatcher {
         if (!ruleDecision.allowed) {
             return CoordinateFallbackRevalidation.blocked(ruleDecision.toRevalidationReason())
         }
-        if (pageSafetyTexts.any(SafetyGuard::isSensitiveText)) {
-            return CoordinateFallbackRevalidation.blocked("coordinate_page_unsafe")
-        }
-        val snapshot = currentTarget
-            ?: return CoordinateFallbackRevalidation.blocked("coordinate_target_missing")
-        val targetDecision = evaluateTargetAtPoint(
-            target = snapshot.target,
-            targetPackageName = snapshot.packageName,
+        val targetRevalidation = CurrentTargetRevalidator.evaluate(
+            rootAvailable = rootAvailable,
             expectedPackageName = expectedPackageName,
-            ancestorSafetyTexts = snapshot.ancestorSafetyTexts,
-            hasClickableNodeOrAncestor = snapshot.hasClickableNodeOrAncestor
+            currentPackageName = currentPackageName,
+            activeTextInput = activeTextInput,
+            pageSafetyTexts = pageSafetyTexts,
+            originalTarget = originalTarget,
+            currentTarget = currentTarget
         )
-        if (!targetDecision.allowed) {
-            return CoordinateFallbackRevalidation.blocked(targetDecision.toRevalidationReason())
-        }
-        if (!snapshot.target.matchesOriginalTarget(originalTarget)) {
-            return CoordinateFallbackRevalidation.blocked("coordinate_target_changed")
+        if (!targetRevalidation.allowed) {
+            return CoordinateFallbackRevalidation.blocked(
+                targetRevalidation.reason.toCoordinateRevalidationReason()
+            )
         }
         return CoordinateFallbackRevalidation(
             allowed = true,
             reason = "coordinate_target_revalidated",
-            target = snapshot.target
+            target = targetRevalidation.target
         )
     }
 
@@ -405,27 +394,6 @@ object CoordinateFallbackMatcher {
             }
         }
         return false
-    }
-
-    private fun AccessibilityNodeInfo.findTargetAtPoint(x: Int, y: Int): CoordinateTarget? {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(this)
-        var best: CoordinateTarget? = null
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            val bounds = Rect()
-            node.getBoundsInScreen(bounds)
-            if (node.isVisibleToUser && bounds.containsForPolicy(x, y)) {
-                val candidate = node.toCoordinateTarget()
-                if (best == null || bounds.area() < best!!.target.bounds.area()) {
-                    best = candidate
-                }
-            }
-            for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
-            }
-        }
-        return best
     }
 
     private fun AccessibilityNodeInfo.matchesAnchor(fallback: CoordinateFallback): Boolean {
@@ -483,49 +451,6 @@ object CoordinateFallbackMatcher {
         return ClickExecutor.hasCoordinateFallbackIdentity(this)
     }
 
-    private fun AccessibilityNodeInfo.toCoordinateTarget(): CoordinateTarget {
-        val ancestorSafetyTexts = mutableListOf<String>()
-        var current: AccessibilityNodeInfo? = this
-        var depth = 0
-        var hasClickableNodeOrAncestor = false
-        while (current != null && depth <= MAX_CLICKABLE_ANCESTOR_DEPTH) {
-            hasClickableNodeOrAncestor = hasClickableNodeOrAncestor || current.isClickable
-            ancestorSafetyTexts += listOf(
-                current.text?.toString().orEmpty(),
-                current.contentDescription?.toString().orEmpty(),
-                current.viewIdResourceName.orEmpty(),
-                current.className?.toString().orEmpty()
-            )
-            current = current.parent
-            depth++
-        }
-        return CoordinateTarget(
-            target = ClickExecutor.describeTarget(this),
-            packageName = packageName?.toString().orEmpty(),
-            ancestorSafetyTexts = ancestorSafetyTexts,
-            hasClickableNodeOrAncestor = hasClickableNodeOrAncestor
-        )
-    }
-
-    private fun AccessibilityNodeInfo.pageSafetyTexts(): List<String> {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(this)
-        val values = mutableListOf<String>()
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            values += listOf(
-                node.text?.toString().orEmpty(),
-                node.contentDescription?.toString().orEmpty(),
-                node.viewIdResourceName.orEmpty(),
-                node.className?.toString().orEmpty()
-            )
-            for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
-            }
-        }
-        return values
-    }
-
     private fun CoordinateFallbackDecision.toRevalidationReason(): String {
         return when (reason) {
             "coordinate_fallback_anchor_missing" -> "coordinate_anchor_missing"
@@ -538,6 +463,19 @@ object CoordinateFallbackMatcher {
             "coordinate_fallback_target_missing" -> "coordinate_target_missing"
             "coordinate_fallback_target_package_mismatch" -> "coordinate_package_changed"
             "coordinate_fallback_target_blank" -> "coordinate_target_blank"
+            else -> "coordinate_target_unsafe"
+        }
+    }
+
+    private fun String.toCoordinateRevalidationReason(): String {
+        return when (this) {
+            "current_target_root_missing" -> "coordinate_root_missing"
+            "current_target_package_changed",
+            "current_target_package_mismatch" -> "coordinate_package_changed"
+            "current_target_active_text_input" -> "coordinate_active_text_input"
+            "current_target_page_unsafe" -> "coordinate_page_unsafe"
+            "current_target_missing" -> "coordinate_target_missing"
+            "current_target_changed" -> "coordinate_target_changed"
             else -> "coordinate_target_unsafe"
         }
     }
@@ -560,34 +498,6 @@ object CoordinateFallbackMatcher {
         }
     }
 
-    private fun ClickTargetInfo.matchesOriginalTarget(original: ClickTargetInfo): Boolean {
-        if (!bounds.isNearCoordinateTarget(original.bounds)) return false
-        if (viewId.isNotBlank() || original.viewId.isNotBlank()) return viewId == original.viewId
-        if (text.isNotBlank() || original.text.isNotBlank()) return text == original.text
-        if (contentDescription.isNotBlank() || original.contentDescription.isNotBlank()) {
-            return contentDescription == original.contentDescription
-        }
-        return className.isNotBlank() && className == original.className
-    }
-
-    private fun Rect.isNearCoordinateTarget(other: Rect): Boolean {
-        return abs(left - other.left) <= MAX_TARGET_DRIFT_PX &&
-            abs(top - other.top) <= MAX_TARGET_DRIFT_PX &&
-            abs(right - other.right) <= MAX_TARGET_DRIFT_PX &&
-            abs(bottom - other.bottom) <= MAX_TARGET_DRIFT_PX
-    }
-
-    private fun Rect.area(): Int {
-        return (right - left).coerceAtLeast(0) * (bottom - top).coerceAtLeast(0)
-    }
-
-    private fun Rect.isEmptyForPolicy(): Boolean {
-        return left >= right || top >= bottom
-    }
-
-    private fun Rect.containsForPolicy(x: Int, y: Int): Boolean {
-        return left < right && top < bottom && x >= left && x < right && y >= top && y < bottom
-    }
 }
 
 data class CoordinateFallbackDecision(
@@ -638,21 +548,5 @@ data class CoordinateFallbackRevalidation(
         fun blocked(reason: String): CoordinateFallbackRevalidation {
             return CoordinateFallbackRevalidation(allowed = false, reason = reason)
         }
-    }
-}
-
-private data class CoordinateTarget(
-    val target: ClickTargetInfo,
-    val packageName: String,
-    val ancestorSafetyTexts: List<String>,
-    val hasClickableNodeOrAncestor: Boolean
-) {
-    fun toSnapshot(): CoordinateFallbackTargetSnapshot {
-        return CoordinateFallbackTargetSnapshot(
-            target = target,
-            packageName = packageName,
-            ancestorSafetyTexts = ancestorSafetyTexts,
-            hasClickableNodeOrAncestor = hasClickableNodeOrAncestor
-        )
     }
 }

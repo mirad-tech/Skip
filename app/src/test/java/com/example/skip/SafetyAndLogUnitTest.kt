@@ -17,6 +17,7 @@ import com.example.skip.data.StatsRepository
 import com.example.skip.engine.CoordinateFallbackMatcher
 import com.example.skip.engine.ClickExecutor
 import com.example.skip.engine.ClickTargetInfo
+import com.example.skip.engine.CurrentTargetRevalidator
 import com.example.skip.engine.CoordinateFallbackMatch
 import com.example.skip.engine.CoordinateFallbackMatchResult
 import com.example.skip.engine.HighRiskClickPolicy
@@ -51,6 +52,7 @@ import com.example.skip.service.EventContext
 import com.example.skip.service.AppDisplayNamePolicy
 import com.example.skip.service.OpeningAdRescanPolicy
 import com.example.skip.service.PendingClickRelocationPolicy
+import com.example.skip.service.PendingActivityScopePolicy
 import com.example.skip.service.SkipAccessibilityService
 import com.example.skip.service.StableClickDelayPolicy
 import com.example.skip.ui.logs.CLICK_LOG_DISPLAY_LIMIT
@@ -130,6 +132,13 @@ class SafetyAndLogUnitTest {
     fun safeRegexMatcherRejectsMalformedRegexWithoutThrowing() {
         assertTrue(SafeRegexMatcher.containsMatch("skip\\s*\\d+", "skip 5"))
         assertFalse(SafeRegexMatcher.containsMatch("(skip", "skip 5"))
+    }
+
+    @Test
+    fun safeRegexMatcherRequiresANonEmptyMatch() {
+        assertFalse(SafeRegexMatcher.containsMatch("a*", "付款"))
+        assertFalse(SafeRegexMatcher.containsMatch("(?=skip)", "skip now"))
+        assertTrue(SafeRegexMatcher.containsMatch("skip\\s*\\d+", "skip 5"))
     }
 
     @Test
@@ -1859,6 +1868,166 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun normalGestureFallbackRevalidatesCurrentTargetBeforeDispatching() {
+        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
+        val runGestureFallback = source.substringAfter("private fun runGestureFallback")
+            .substringBefore("private fun verifyClickEffect")
+
+        assertTrue(runGestureFallback.contains("CurrentTargetRevalidator.revalidateAtPoint"))
+        assertFalse(runGestureFallback.contains("ClickExecutor.gestureClick(this, pending.candidate"))
+    }
+
+    @Test
+    fun coordinateAndNormalGesturePathsShareCurrentTargetRevalidation() {
+        val source = readProjectFile("app/src/main/java/com/example/skip/engine/CoordinateFallbackMatcher.kt")
+
+        assertTrue(source.contains("CurrentTargetRevalidator.evaluate"))
+    }
+
+    @Test
+    fun currentTargetRevalidationAcceptsTheSameSafeTarget() {
+        val original = coordinateFallbackTarget(
+            text = "跳过广告",
+            viewId = "com.example.news:id/skip"
+        )
+        val result = CurrentTargetRevalidator.evaluate(
+            rootAvailable = true,
+            expectedPackageName = "com.example.news",
+            currentPackageName = "com.example.news",
+            activeTextInput = false,
+            pageSafetyTexts = emptyList(),
+            originalTarget = original,
+            currentTarget = CoordinateFallbackTargetSnapshot(
+                target = original,
+                packageName = "com.example.news",
+                hasClickableNodeOrAncestor = true
+            )
+        )
+
+        assertTrue(result.allowed)
+        assertEquals("current_target_revalidated", result.reason)
+        assertEquals(original, result.target)
+    }
+
+    @Test
+    fun currentTargetRevalidationRejectsChangedOrUnsafeTargets() {
+        val original = coordinateFallbackTarget(
+            text = "跳过广告",
+            viewId = "com.example.news:id/skip"
+        )
+        fun evaluate(
+            target: ClickTargetInfo = original,
+            packageName: String = "com.example.news",
+            currentPackageName: String = "com.example.news",
+            activeTextInput: Boolean = false,
+            pageSafetyTexts: List<String> = emptyList()
+        ) = CurrentTargetRevalidator.evaluate(
+            rootAvailable = true,
+            expectedPackageName = "com.example.news",
+            currentPackageName = currentPackageName,
+            activeTextInput = activeTextInput,
+            pageSafetyTexts = pageSafetyTexts,
+            originalTarget = original,
+            currentTarget = CoordinateFallbackTargetSnapshot(
+                target = target,
+                packageName = packageName,
+                hasClickableNodeOrAncestor = true
+            )
+        )
+
+        assertFalse(evaluate(target = original.copy(viewId = "com.example.news:id/pay")).allowed)
+        assertFalse(evaluate(target = original.copy(bounds = testRect(760, 200, 820, 260))).allowed)
+        assertFalse(evaluate(currentPackageName = "com.example.other").allowed)
+        assertFalse(evaluate(activeTextInput = true).allowed)
+        assertFalse(evaluate(pageSafetyTexts = listOf("立即支付")).allowed)
+        assertFalse(evaluate(target = original.copy(input = true)).allowed)
+    }
+
+    @Test
+    fun currentTargetRevalidationRequiresEveryAvailableIdentitySignalToStayStable() {
+        fun evaluate(original: ClickTargetInfo, current: ClickTargetInfo) =
+            CurrentTargetRevalidator.evaluate(
+                rootAvailable = true,
+                expectedPackageName = "com.example.news",
+                currentPackageName = "com.example.news",
+                activeTextInput = false,
+                pageSafetyTexts = emptyList(),
+                originalTarget = original,
+                currentTarget = CoordinateFallbackTargetSnapshot(
+                    target = current,
+                    packageName = "com.example.news",
+                    hasClickableNodeOrAncestor = true
+                )
+            )
+
+        val textTarget = coordinateFallbackTarget(text = "跳过", viewId = "")
+        assertFalse(evaluate(textTarget, textTarget.copy(text = "关闭")).allowed)
+
+        val descriptionTarget = coordinateFallbackTarget(text = "", viewId = "")
+            .copy(contentDescription = "关闭广告")
+        assertFalse(evaluate(
+            descriptionTarget,
+            descriptionTarget.copy(contentDescription = "跳过广告")
+        ).allowed)
+
+        val classTarget = coordinateFallbackTarget(
+            text = "跳过广告",
+            viewId = "com.example.news:id/skip"
+        )
+        assertFalse(evaluate(
+            classTarget,
+            classTarget.copy(className = "android.widget.ImageButton")
+        ).allowed)
+    }
+
+    @Test
+    fun delayedRescanUsesTheCurrentActivityInsteadOfHistoricalContext() {
+        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
+        val relocateAndClick = source.substringAfter("private fun relocateAndClick")
+            .substringBefore("private fun runCoordinateFallback")
+
+        assertTrue(relocateAndClick.contains("PendingActivityScopePolicy.evaluate"))
+        assertTrue(relocateAndClick.contains("currentActivityName"))
+        assertFalse(relocateAndClick.contains("pending.eventContext.activityName"))
+        assertTrue(relocateAndClick.contains("rules = listOf(rule)"))
+    }
+
+    @Test
+    fun pendingActivityScopePolicyCancelsExactRulesButKeepsWildcards() {
+        val exact = SkipRule(
+            id = "splash_only",
+            source = RuleSource.JsonFile,
+            name = "开屏页跳过",
+            packageName = "com.example.news",
+            appName = "News",
+            activityName = "com.example.news.SplashActivity",
+            matchTexts = listOf("跳过")
+        )
+        val wildcard = exact.copy(id = "wildcard", activityName = "*")
+
+        assertTrue(PendingActivityScopePolicy.evaluate(
+            rule = exact,
+            currentActivityName = "com.example.news.SplashActivity",
+            activityIdentityKnown = true
+        ).allowed)
+        assertFalse(PendingActivityScopePolicy.evaluate(
+            rule = exact,
+            currentActivityName = "com.example.news.HomeActivity",
+            activityIdentityKnown = true
+        ).allowed)
+        assertFalse(PendingActivityScopePolicy.evaluate(
+            rule = exact,
+            currentActivityName = "",
+            activityIdentityKnown = false
+        ).allowed)
+        assertTrue(PendingActivityScopePolicy.evaluate(
+            rule = wildcard,
+            currentActivityName = "com.example.news.HomeActivity",
+            activityIdentityKnown = false
+        ).allowed)
+    }
+
+    @Test
     fun importedRulesRejectHighRiskTermsAndUnsafeCoordinateFallback() {
         val highRiskJson = """
             {
@@ -2048,6 +2217,28 @@ class SafetyAndLogUnitTest {
         val englishConcrete = importRegex("skip\\s*\\d+")
         assertTrue(englishConcrete.errorMessage, englishConcrete.success)
         assertTrue(englishConcrete.extraConfirmationMessages.any { it.contains("regex") })
+    }
+
+    @Test
+    fun importedRulesRejectEmptyMatchingRegexesInEveryField() {
+        val fields = listOf(
+            "matchTexts" to "textMatchMode",
+            "matchContentDescriptions" to "contentDescriptionMatchMode",
+            "matchViewIds" to "viewIdMatchMode"
+        )
+
+        fields.forEach { (field, mode) ->
+            val result = RuleImportManager.parseRulePackage(
+                """
+                    {"apps":[{"packageName":"com.example.news","rules":[
+                      {"id":"empty_regex_$field","$field":["a*"],"$mode":"regex","area":"top_right"}
+                    ]}]}
+                """.trimIndent()
+            )
+
+            assertFalse("$field must reject a zero-length regex", result.success)
+            assertTrue(result.errorMessage.contains("硬性阻断"))
+        }
     }
 
     @Test
