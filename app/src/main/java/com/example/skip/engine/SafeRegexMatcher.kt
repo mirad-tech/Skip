@@ -22,7 +22,8 @@ internal object SafeRegexMatcher {
     fun containsMatch(pattern: String, input: CharSequence): Boolean {
         return (cached(pattern) as? CachedRegex.Valid)
             ?.regex
-            ?.containsMatchIn(input)
+            ?.findAll(input)
+            ?.any { it.value.isNotEmpty() }
             ?: false
     }
 

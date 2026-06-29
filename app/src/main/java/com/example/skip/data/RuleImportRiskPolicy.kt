@@ -85,7 +85,9 @@ object RuleImportRiskPolicy {
             rule.viewIdMatchMode to rule.matchViewIds
         ).filter { it.first == MatchMode.Regex }.flatMap { it.second }
         val regexRisks = regexPatterns.map(::classifyRegexRisk)
-        if (regexRisks.any { it == RegexRisk.MatchAll }) {
+        if (regexRisks.any { it == RegexRisk.MatchAll } ||
+            regexPatterns.any(::matchesEmptyInput)
+        ) {
             risks += hardBlock("match_all_regex", "regex 不能匹配全部内容")
         }
 
@@ -181,6 +183,10 @@ object RuleImportRiskPolicy {
         if (unwrapped in matchAllRegexForms) return RegexRisk.MatchAll
         if (normalized.isObviouslyBroadRegex()) return RegexRisk.Broad
         return RegexRisk.Specific
+    }
+
+    private fun matchesEmptyInput(pattern: String): Boolean {
+        return runCatching { Regex(pattern).containsMatchIn("") }.getOrDefault(false)
     }
 
     private fun normalizeRegexForRiskClassification(pattern: String): String {

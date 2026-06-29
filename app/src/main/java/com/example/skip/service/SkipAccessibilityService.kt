@@ -23,6 +23,7 @@ import com.example.skip.engine.ClickExecutor
 import com.example.skip.engine.CoordinateFallbackMatch
 import com.example.skip.engine.CoordinateFallbackMatcher
 import com.example.skip.engine.CoordinateFallbackMatchResult
+import com.example.skip.engine.CurrentTargetRevalidator
 import com.example.skip.engine.HighRiskClickDecision
 import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.NodeScanner
@@ -47,6 +48,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private var openingAdRescanKey: String? = null
     private var lastWindowStateChangedAt = 0L
     private var currentActivityName: String = ""
+    private var currentActivityIdentityKnown = false
     private val lastToastAt = mutableMapOf<String, Long>()
     private val lastCoordinateFallbackBlockedAt = mutableMapOf<String, Long>()
     private var popupView: View? = null
@@ -72,6 +74,7 @@ class SkipAccessibilityService : AccessibilityService() {
         SettingsRepository.markServiceActive(this)
         if (!SettingsRepository.isMasterEnabled(this)) {
             currentActivityName = ""
+            currentActivityIdentityKnown = false
             SettingsRepository.setLastFailureReason(this, "automation_paused")
             return
         }
@@ -91,6 +94,11 @@ class SkipAccessibilityService : AccessibilityService() {
             event.className?.toString().orEmpty()
         } else {
             ""
+        }
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            currentActivityIdentityKnown = observedActivityName.isNotBlank()
+        } else if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            currentActivityIdentityKnown = false
         }
         if (observedActivityName.isNotBlank()) {
             currentActivityName = observedActivityName
@@ -239,7 +247,10 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (pendingClick != null) return
+        pendingClick?.let { pending ->
+            cancelPendingClickForActivityScope(pending, eventContext)
+            return
+        }
 
         if (rules.isEmpty()) {
             SettingsRepository.setLastFailureReason(this, "no_enabled_rules")
@@ -375,6 +386,7 @@ class SkipAccessibilityService : AccessibilityService() {
             lastClickSignature = null
             openingAdRescanKey = null
             currentActivityName = ""
+            currentActivityIdentityKnown = false
         }
     }
 
@@ -778,9 +790,32 @@ class SkipAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow
         if (cancelIfUnsafeDelayedClickWindow(pending, root)) return
 
+        val currentRule = pending.activeRules.firstOrNull { rule ->
+            rule.id == pending.ruleId && rule.packageName == pending.packageName
+        }
+        val activityDecision = PendingActivityScopePolicy.evaluate(
+            rule = currentRule,
+            currentActivityName = currentActivityName,
+            activityIdentityKnown = currentActivityIdentityKnown
+        )
+        if (!activityDecision.allowed) {
+            finishPendingClick(
+                pending = pending,
+                stage = ClickLogStage.SkippedBySafety,
+                success = false,
+                reason = activityDecision.reason,
+                attempt = null,
+                blockedReason = activityDecision.reason
+            )
+            return
+        }
+        val rule = currentRule ?: return
         val elapsed = (System.currentTimeMillis() - foregroundState.foregroundStartTimeMillis).coerceAtLeast(0L)
-        val currentRules = pending.activeRules.filter { it.packageName == pending.packageName }
-        val scan = NodeScanner.scan(root ?: return, currentRules, elapsed, pending.eventContext.activityName)
+        val currentRules = NodeScanner.filterRulesForActivity(
+            rules = listOf(rule),
+            currentActivityName = currentActivityName
+        )
+        val scan = NodeScanner.scan(root ?: return, currentRules, elapsed, currentActivityName)
         val match = scan.bestMatch
         if (match == null) {
             finishPendingClick(
@@ -994,7 +1029,28 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun runGestureFallback(pending: PendingClick) {
         if (pendingClick?.signature != pending.signature) return
-        if (cancelIfUnsafeDelayedClickWindow(pending, rootInActiveWindow)) return
+        val root = rootInActiveWindow
+        if (cancelIfUnsafeDelayedClickWindow(pending, root)) return
+        val currentRule = pending.activeRules.firstOrNull { rule ->
+            rule.id == pending.ruleId && rule.packageName == pending.packageName
+        }
+        val activityDecision = PendingActivityScopePolicy.evaluate(
+            rule = currentRule,
+            currentActivityName = currentActivityName,
+            activityIdentityKnown = currentActivityIdentityKnown
+        )
+        if (!activityDecision.allowed) {
+            finishPendingClick(
+                pending = pending,
+                stage = ClickLogStage.SkippedBySafety,
+                success = false,
+                reason = activityDecision.reason,
+                attempt = pending.firstAttempt,
+                effectConfirmReason = activityDecision.reason,
+                blockedReason = activityDecision.reason
+            )
+            return
+        }
         if (SafetyGuard.isProtectedPackage(pending.packageName) ||
             pending.textKeywordIsStandaloneSkip ||
             pending.isLargeCandidateBounds
@@ -1009,12 +1065,39 @@ class SkipAccessibilityService : AccessibilityService() {
             )
             return
         }
-        ClickExecutor.gestureClick(this, pending.candidate, allowLargeBounds = false) { gestureAttempt ->
-            if (pendingClick?.signature != pending.signature) return@gestureClick
+        val currentPackageName = root?.packageName?.toString().orEmpty().ifBlank {
+            foregroundPackage.orEmpty()
+        }
+        val revalidation = CurrentTargetRevalidator.revalidateAtPoint(
+            root = root,
+            expectedPackageName = pending.packageName,
+            currentPackageName = currentPackageName,
+            x = pending.candidate.bounds.centerX(),
+            y = pending.candidate.bounds.centerY(),
+            originalTarget = pending.candidate,
+            activeTextInput = ActiveTextInputGuard.hasFocusedEditableInput(root)
+        )
+        if (!revalidation.allowed || revalidation.target == null) {
+            finishPendingClick(
+                pending = pending,
+                stage = ClickLogStage.SkippedBySafety,
+                success = false,
+                reason = revalidation.reason,
+                attempt = pending.firstAttempt,
+                effectConfirmReason = revalidation.reason,
+                blockedReason = revalidation.reason,
+                detail = "gesture_revalidation=${revalidation.reason}"
+            )
+            return
+        }
+        val updated = pending.copy(target = revalidation.target, candidate = revalidation.target)
+        pendingClick = updated
+        ClickExecutor.gestureClick(this, updated.candidate, allowLargeBounds = false) { gestureAttempt ->
+            if (pendingClick?.signature != updated.signature) return@gestureClick
             if (!gestureAttempt.accepted) {
-                val firstReason = pending.firstAttempt?.reason.orEmpty()
+                val firstReason = updated.firstAttempt?.reason.orEmpty()
                 finishPendingClick(
-                    pending = pending,
+                    pending = updated,
                     stage = ClickLogStage.ClickFailed,
                     success = false,
                     reason = listOf(firstReason, gestureAttempt.reason)
@@ -1027,20 +1110,20 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             logEvent(
                 stage = ClickLogStage.ClickActionSuccess,
-                eventContext = pending.eventContext,
-                pending = pending,
+                eventContext = updated.eventContext,
+                pending = updated,
                 clickMethod = gestureAttempt.method,
                 actionReturnValue = true,
                 clickResult = true,
-                delayBeforeClickMs = pending.delayBeforeClickMs,
+                delayBeforeClickMs = updated.delayBeforeClickMs,
                 clickTargetSource = ClickTargetSourceLog.GestureOnNodeCenter
             )
             mainHandler.postDelayed(
                 {
-                    if (pendingClick?.signature == pending.signature) {
-                        val result = verifyClickEffect(pending)
+                    if (pendingClick?.signature == updated.signature) {
+                        val result = verifyClickEffect(updated)
                         finishPendingClick(
-                            pending = pending,
+                            pending = updated,
                             stage = result.stage,
                             success = result.success,
                             reason = result.reason,
@@ -1125,8 +1208,8 @@ class SkipAccessibilityService : AccessibilityService() {
             eventType = pending.eventContext.eventType,
             eventPackageName = pending.eventContext.eventPackageName,
             packageName = currentPackageName,
-            activityName = pending.eventContext.activityName,
-            windowId = pending.eventContext.windowId,
+            activityName = currentActivityName,
+            windowId = root?.windowId ?: pending.eventContext.windowId,
             root = root,
             now = System.currentTimeMillis(),
             defaultRuleWindowMs = pending.eventContext.defaultRuleWindowMs
@@ -1155,6 +1238,31 @@ class SkipAccessibilityService : AccessibilityService() {
             eventContext = delayedEventContext
         )
         return true
+    }
+
+    private fun cancelPendingClickForActivityScope(
+        pending: PendingClick,
+        eventContext: EventContext
+    ) {
+        val currentRule = pending.activeRules.firstOrNull { rule ->
+            rule.id == pending.ruleId && rule.packageName == pending.packageName
+        }
+        val decision = PendingActivityScopePolicy.evaluate(
+            rule = currentRule,
+            currentActivityName = currentActivityName,
+            activityIdentityKnown = currentActivityIdentityKnown
+        )
+        if (decision.allowed) return
+        finishPendingClick(
+            pending = pending,
+            stage = ClickLogStage.SkippedBySafety,
+            success = false,
+            reason = decision.reason,
+            attempt = pending.firstAttempt,
+            effectConfirmReason = decision.reason,
+            blockedReason = decision.reason,
+            eventContext = eventContext
+        )
     }
 
     private fun logScan(scan: ScanReport, eventContext: EventContext) {
