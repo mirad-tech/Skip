@@ -28,13 +28,14 @@ git diff --check
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-本轮自动化结果（2026-06-19，1.0.5）：
+本轮自动化结果（2026-07-01，1.0.9）：
 
 | 命令 | 结果 | 备注 |
 | --- | --- | --- |
-| `.\gradlew.bat :app:testDebugUnitTest` | 通过 | exit 0 |
+| `.\gradlew.bat :app:testDebugUnitTest --rerun-tasks` | 通过 | exit 0；164 tests，0 failures，0 errors |
 | `.\gradlew.bat :app:assembleDebug` | 通过 | exit 0 |
 | `.\gradlew.bat :app:assembleRelease` | 通过 | exit 0，R8 / shrinkResources 执行完成 |
+| `.\gradlew.bat :app:compileDebugAndroidTestKotlin` | 通过 | exit 0 |
 | `git diff --check` | 通过 | exit 0，仅有 CRLF 工作区提示，无空白错误 |
 
 ## Manifest 权限检查

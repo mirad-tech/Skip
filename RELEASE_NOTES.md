@@ -1,5 +1,37 @@
 # Skip 发布说明
 
+## 1.0.9
+
+发布日期：2026-07-01
+
+### 安全与可靠性
+
+- 延迟点击和普通手势兜底在执行前重新校验当前目标，页面、包名、输入框、敏感内容或目标身份变化时不再继续点击。
+- 坐标兜底在分发手势前重新解析坐标下的真实控件，并复用高风险点击策略；不确定时记录安全阻止而不是继续点击。
+- Activity 作用域规则在当前页面身份未知或发生变化时 fail closed，避免同包其它页面复用待执行点击。
+- 导入阶段阻断可匹配空字符串的 regex，运行时忽略零长度 regex 命中，降低过宽规则误命中风险。
+- 从仓库历史中移除未引用的 Word 复现附件，保持公开仓库只保留源码、文档和必要示例。
+
+### 版本信息
+
+- `versionCode`：17
+- `versionName`：`1.0.9`
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.9-release.apk`
+- SHA256：`57EB5E150536F272ABC3BB2E04353EBC1D912853DCA4388E5293405318B5A463`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:compileDebugAndroidTestKotlin
+.\gradlew.bat :app:assembleRelease
+git diff --check
+```
+
 ## 1.0.8
 
 发布日期：2026-06-23
