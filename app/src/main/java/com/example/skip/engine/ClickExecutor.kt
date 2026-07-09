@@ -36,6 +36,20 @@ object ClickExecutor {
         )
     }
 
+    fun targetWithActionIdentity(
+        candidate: ClickTargetInfo,
+        actionTarget: ClickTargetInfo?
+    ): ClickTargetInfo {
+        return candidate.copy(
+            text = candidate.text.ifBlank { actionTarget?.text.orEmpty() },
+            contentDescription = candidate.contentDescription.ifBlank {
+                actionTarget?.contentDescription.orEmpty()
+            },
+            viewId = candidate.viewId.ifBlank { actionTarget?.viewId.orEmpty() },
+            parentClickable = candidate.parentClickable || actionTarget != null
+        )
+    }
+
     fun findClickableSelection(
         node: AccessibilityNodeInfo,
         defaultRule: Boolean

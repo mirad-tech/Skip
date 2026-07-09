@@ -5,7 +5,6 @@ import android.view.accessibility.AccessibilityNodeInfo
 import kotlin.math.abs
 
 internal object CurrentTargetRevalidator {
-    private const val MAX_CLICKABLE_ANCESTOR_DEPTH = 4
     private const val MAX_TARGET_DRIFT_PX = 48
 
     fun revalidateAtPoint(
@@ -94,8 +93,20 @@ internal object CurrentTargetRevalidator {
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
             if (node.isVisibleToUser && bounds.containsForPolicy(x, y)) {
-                val candidate = node.toTargetSnapshot()
-                if (best == null || bounds.area() < best!!.target.bounds.area()) {
+                val resolution = ClickExecutor.resolveCandidate(node)
+                val action = resolution.relaxedSelection ?: continue
+                val target = ClickExecutor.targetWithActionIdentity(
+                    candidate = resolution.candidate,
+                    actionTarget = action.target
+                )
+                if (!ClickExecutor.hasCoordinateFallbackIdentity(target)) continue
+                val candidate = CoordinateFallbackTargetSnapshot(
+                    target = target,
+                    packageName = node.packageName?.toString().orEmpty(),
+                    ancestorSafetyTexts = resolution.ancestorSafetyTexts,
+                    hasClickableNodeOrAncestor = true
+                )
+                if (best == null || target.bounds.area() < best!!.target.bounds.area()) {
                     best = candidate
                 }
             }
@@ -124,30 +135,6 @@ internal object CurrentTargetRevalidator {
             }
         }
         return values
-    }
-
-    private fun AccessibilityNodeInfo.toTargetSnapshot(): CoordinateFallbackTargetSnapshot {
-        val ancestorSafetyTexts = mutableListOf<String>()
-        var current: AccessibilityNodeInfo? = this
-        var depth = 0
-        var hasClickableNodeOrAncestor = false
-        while (current != null && depth <= MAX_CLICKABLE_ANCESTOR_DEPTH) {
-            hasClickableNodeOrAncestor = hasClickableNodeOrAncestor || current.isClickable
-            ancestorSafetyTexts += listOf(
-                current.text?.toString().orEmpty(),
-                current.contentDescription?.toString().orEmpty(),
-                current.viewIdResourceName.orEmpty(),
-                current.className?.toString().orEmpty()
-            )
-            current = current.parent
-            depth++
-        }
-        return CoordinateFallbackTargetSnapshot(
-            target = ClickExecutor.describeTarget(this),
-            packageName = packageName?.toString().orEmpty(),
-            ancestorSafetyTexts = ancestorSafetyTexts,
-            hasClickableNodeOrAncestor = hasClickableNodeOrAncestor
-        )
     }
 
     private fun ClickTargetInfo.matchesOriginalTarget(original: ClickTargetInfo): Boolean {

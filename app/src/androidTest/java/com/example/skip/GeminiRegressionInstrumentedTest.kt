@@ -1,6 +1,7 @@
 package com.example.skip
 
 import android.os.SystemClock
+import android.graphics.Rect
 import android.util.Log
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -8,6 +9,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.engine.NodeScanner
+import com.example.skip.engine.CurrentTargetRevalidator
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickMethodLog
 import com.example.skip.model.ClickLogStage
@@ -198,6 +200,23 @@ class GeminiRegressionInstrumentedTest {
             val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
 
             assertNull(NodeScanner.findBestMatch(root, listOf(builtInDefaultRule("com.example.news", "News")), 8_001L))
+        }
+    }
+
+    @Test
+    fun coordinateSnapshotKeepsDecorativeChildBoundsAndUsesClickableParentIdentity() {
+        ScannerFixtureActivity.scenario =
+            ScannerFixtureActivity.Scenario.CoordinateIdentityChildInsideClickableParent
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+
+            val snapshot = CurrentTargetRevalidator.snapshotAtPoint(root, 950, 70)
+
+            assertNotNull(snapshot)
+            assertEquals("com.example.news:id/splash_skip", snapshot!!.target.viewId)
+            assertEquals(Rect(920, 40, 980, 100), snapshot.target.bounds)
+            assertTrue(snapshot.hasClickableNodeOrAncestor)
         }
     }
 

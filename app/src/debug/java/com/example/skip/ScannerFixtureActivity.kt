@@ -20,7 +20,8 @@ class ScannerFixtureActivity : Activity() {
         BilibiliCountdownSkip,
         BilibiliSearchClearButton,
         FocusedTopSearchField,
-        StandaloneSkipInsideClickableParent
+        StandaloneSkipInsideClickableParent,
+        CoordinateIdentityChildInsideClickableParent
     }
 
     companion object {
@@ -64,6 +65,10 @@ class ScannerFixtureActivity : Activity() {
                     Scenario.StandaloneSkipInsideClickableParent -> addView(
                         StandaloneSkipClickableParent(context),
                         FrameLayout.LayoutParams(144, 112)
+                    )
+                    Scenario.CoordinateIdentityChildInsideClickableParent -> addView(
+                        CoordinateIdentityClickableParent(context),
+                        FrameLayout.LayoutParams(120, 104)
                     )
                 }
             }
@@ -239,6 +244,50 @@ private class StandaloneSkipTextView(
         info?.setEnabled(true)
         info?.setClickable(false)
         info?.setBoundsInScreen(Rect(944, 48, 1_016, 112))
+    }
+}
+
+private class CoordinateIdentityClickableParent(
+    context: android.content.Context
+) : FrameLayout(context) {
+    init {
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        addView(
+            CoordinateIdentityDecorativeChild(context),
+            FrameLayout.LayoutParams(60, 60)
+        )
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.viewIdResourceName = "com.example.news:id/splash_skip"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(896, 24, 1_016, 128))
+    }
+}
+
+private class CoordinateIdentityDecorativeChild(
+    context: android.content.Context
+) : ImageView(context) {
+    init {
+        isEnabled = true
+        isClickable = false
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.text = ""
+        info?.contentDescription = ""
+        info?.viewIdResourceName = ""
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(false)
+        info?.setBoundsInScreen(Rect(920, 40, 980, 100))
     }
 }
 

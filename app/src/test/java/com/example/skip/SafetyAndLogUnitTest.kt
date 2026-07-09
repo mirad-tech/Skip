@@ -1673,6 +1673,29 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun coordinateTargetKeepsChildBoundsAndUsesClickableParentIdentity() {
+        val child = testClickTarget(920, 40, 980, 100).copy(
+            text = "",
+            viewId = "",
+            nodeClickable = false,
+            parentClickable = true
+        )
+        val parent = testClickTarget(
+            896,
+            24,
+            1_016,
+            128,
+            viewId = "com.example.news:id/splash_skip"
+        )
+
+        val merged = ClickExecutor.targetWithActionIdentity(child, parent)
+
+        assertEquals("920,40,980,100", merged.boundsString())
+        assertEquals("com.example.news:id/splash_skip", merged.viewId)
+        assertTrue(merged.parentClickable)
+    }
+
+    @Test
     fun importedAndStoredCoordinateFallbackWindowsUseSharedMaximum() {
         val json = """
             {
