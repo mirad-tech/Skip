@@ -55,6 +55,7 @@ data class ClickLog(
     val blockedReason: String = "",
     val defaultRuleAreaAllowed: Boolean? = null,
     val textKeywordIsStandaloneSkip: Boolean = false,
+    val standaloneSkipAllowed: Boolean = false,
     val effectConfirmReason: String = "",
     val safetyModeEnabled: Boolean = false,
     val clickSkippedBySafetyMode: Boolean = false,

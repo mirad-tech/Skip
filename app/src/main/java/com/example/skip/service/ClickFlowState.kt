@@ -45,6 +45,7 @@ internal data class ClickMatchSnapshot(
     val isLargeCandidateBounds: Boolean,
     val defaultRuleAreaAllowed: Boolean?,
     val textKeywordIsStandaloneSkip: Boolean,
+    val standaloneSkipAllowed: Boolean = false,
     val clickTargetSource: ClickTargetSourceLog
 ) {
     companion object {
@@ -65,6 +66,7 @@ internal data class ClickMatchSnapshot(
                 isLargeCandidateBounds = match.isLargeCandidateBounds,
                 defaultRuleAreaAllowed = match.defaultRuleAreaAllowed,
                 textKeywordIsStandaloneSkip = match.textKeywordIsStandaloneSkip,
+                standaloneSkipAllowed = match.standaloneSkipAllowed,
                 clickTargetSource = match.clickTargetSource
             )
         }
@@ -89,6 +91,7 @@ internal data class PendingClick(
     val isLargeCandidateBounds: Boolean,
     val defaultRuleAreaAllowed: Boolean?,
     val textKeywordIsStandaloneSkip: Boolean,
+    val standaloneSkipAllowed: Boolean = false,
     val clickTargetSource: ClickTargetSourceLog,
     val startedAt: Long,
     val eventContext: EventContext,
@@ -170,6 +173,7 @@ internal object ClickFlowStateMachine {
             isLargeCandidateBounds = false,
             defaultRuleAreaAllowed = null,
             textKeywordIsStandaloneSkip = false,
+            standaloneSkipAllowed = false,
             clickTargetSource = ClickTargetSourceLog.CoordinateFallback,
             startedAt = startedAt,
             eventContext = eventContext,
@@ -198,6 +202,7 @@ internal object ClickFlowStateMachine {
             isLargeCandidateBounds = match.isLargeCandidateBounds,
             defaultRuleAreaAllowed = match.defaultRuleAreaAllowed,
             textKeywordIsStandaloneSkip = match.textKeywordIsStandaloneSkip,
+            standaloneSkipAllowed = match.standaloneSkipAllowed,
             clickTargetSource = match.clickTargetSource
         )
     }
@@ -227,6 +232,7 @@ internal object ClickFlowStateMachine {
             isLargeCandidateBounds = match.isLargeCandidateBounds,
             defaultRuleAreaAllowed = match.defaultRuleAreaAllowed,
             textKeywordIsStandaloneSkip = match.textKeywordIsStandaloneSkip,
+            standaloneSkipAllowed = match.standaloneSkipAllowed,
             clickTargetSource = match.clickTargetSource,
             startedAt = startedAt,
             eventContext = eventContext

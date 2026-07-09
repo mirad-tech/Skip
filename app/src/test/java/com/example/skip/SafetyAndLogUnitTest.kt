@@ -1146,6 +1146,36 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun allowedStandaloneSkipStateSurvivesPendingClickAndLogSerialization() {
+        val pending = ClickFlowStateMachine.startFromMatch(
+            packageName = "com.example.news",
+            appName = "News",
+            match = testMatchSnapshot(
+                matchedKeyword = "跳过",
+                standaloneSkipAllowed = true
+            ),
+            activeRules = emptyList(),
+            signature = "standalone-skip",
+            eventContext = testEventContext(),
+            delayBeforeClickMs = 100L
+        )
+        val log = ClickLogEventFactory.build(
+            stage = ClickLogStage.ClickAttempted,
+            eventContext = pending.eventContext,
+            pending = pending,
+            now = 1L,
+            appName = "News",
+            deviceRom = "",
+            safetyModeEnabled = false
+        )
+        val fields = LogRepository.clickLogJsonFields(log)
+
+        assertTrue(pending.standaloneSkipAllowed)
+        assertTrue(log.standaloneSkipAllowed)
+        assertEquals(true, fields["standaloneSkipAllowed"])
+    }
+
+    @Test
     fun clickLogEventFactoryBuildsPendingLogOutsideServiceAdapter() {
         val eventContext = testEventContext()
         val target = testClickTarget(10, 10, 60, 40, text = "跳过", viewId = "skip_button")
@@ -1996,6 +2026,25 @@ class SafetyAndLogUnitTest {
 
         assertTrue(runGestureFallback.contains("CurrentTargetRevalidator.revalidateAtPoint"))
         assertFalse(runGestureFallback.contains("ClickExecutor.gestureClick(this, pending.candidate"))
+    }
+
+    @Test
+    fun gestureFallbackOnlyAllowsAuthorizedStandaloneSkipToReachCurrentTargetRevalidation() {
+        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
+        val runGestureFallback = source.substringAfter("private fun runGestureFallback")
+            .substringBefore("private fun verifyClickEffect")
+        val standaloneGuard = "pending.textKeywordIsStandaloneSkip && !pending.standaloneSkipAllowed"
+
+        assertTrue(runGestureFallback.contains(standaloneGuard))
+        assertTrue(
+            runGestureFallback.indexOf("CurrentTargetRevalidator.revalidateAtPoint") >
+                runGestureFallback.indexOf(standaloneGuard)
+        )
+        assertTrue(runGestureFallback.contains("DefaultStandaloneSkipPolicy.MAX_CANDIDATE_AREA_RATIO"))
+        assertTrue(
+            runGestureFallback.indexOf("DefaultStandaloneSkipPolicy.MAX_CANDIDATE_AREA_RATIO") <
+                runGestureFallback.indexOf("val updated = pending.copy")
+        )
     }
 
     @Test
@@ -3832,7 +3881,8 @@ class SafetyAndLogUnitTest {
         ruleSource: RuleSource = RuleSource.UserSimple,
         target: ClickTargetInfo = testClickTarget(10, 10, 60, 40, text = "跳过"),
         score: Int = 100,
-        matchedKeyword: String = "跳过"
+        matchedKeyword: String = "跳过",
+        standaloneSkipAllowed: Boolean = false
     ): ClickMatchSnapshot {
         return ClickMatchSnapshot(
             ruleId = ruleId,
@@ -3850,6 +3900,7 @@ class SafetyAndLogUnitTest {
             isLargeCandidateBounds = false,
             defaultRuleAreaAllowed = true,
             textKeywordIsStandaloneSkip = false,
+            standaloneSkipAllowed = standaloneSkipAllowed,
             clickTargetSource = ClickTargetSourceLog.NodeSelf
         )
     }
