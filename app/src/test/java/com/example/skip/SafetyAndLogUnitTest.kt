@@ -20,9 +20,12 @@ import com.example.skip.engine.ClickTargetInfo
 import com.example.skip.engine.CurrentTargetRevalidator
 import com.example.skip.engine.CoordinateFallbackMatch
 import com.example.skip.engine.CoordinateFallbackMatchResult
+import com.example.skip.engine.DefaultStandaloneSkipContext
+import com.example.skip.engine.DefaultStandaloneSkipPolicy
 import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.CoordinateFallbackTargetSnapshot
 import com.example.skip.engine.NodeScanner
+import com.example.skip.engine.ResolvedActionPath
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.engine.ScoreEvaluator
@@ -126,6 +129,58 @@ class SafetyAndLogUnitTest {
 
         assertTrue(decision.allowed)
         assertEquals("", decision.reason)
+    }
+
+    @Test
+    fun defaultStandaloneSkipPolicyAllowsOnlySmallTopRightBuiltInCandidate() {
+        val allowed = DefaultStandaloneSkipPolicy.evaluate(
+            DefaultStandaloneSkipContext(
+                ruleSource = RuleSource.BuiltIn,
+                appElapsedMs = 7_999L,
+                area = RuleArea.TopRight,
+                candidateAreaRatio = 0.015f,
+                candidate = testClickTarget(920, 40, 1_000, 100, text = "跳过"),
+                actionPath = ResolvedActionPath(parentDepth = 1, hasSafeClickableTarget = true),
+                ancestorSafetyTexts = emptyList()
+            )
+        )
+
+        assertTrue(allowed.allowed)
+        assertEquals("", allowed.reason)
+    }
+
+    @Test
+    fun defaultStandaloneSkipPolicyRejectsWrongAreaLargeLateOrSensitiveCandidate() {
+        fun decision(
+            area: RuleArea = RuleArea.TopRight,
+            elapsed: Long = 1_000L,
+            ratio: Float = 0.01f,
+            safety: List<String> = emptyList()
+        ) = DefaultStandaloneSkipPolicy.evaluate(
+            DefaultStandaloneSkipContext(
+                ruleSource = RuleSource.BuiltIn,
+                appElapsedMs = elapsed,
+                area = area,
+                candidateAreaRatio = ratio,
+                candidate = testClickTarget(920, 40, 1_000, 100, text = "跳过"),
+                actionPath = ResolvedActionPath(parentDepth = 1, hasSafeClickableTarget = true),
+                ancestorSafetyTexts = safety
+            )
+        )
+
+        assertEquals("standalone_skip_not_top_right", decision(area = RuleArea.Center).reason)
+        assertEquals("standalone_skip_window_expired", decision(elapsed = 8_001L).reason)
+        assertEquals("standalone_skip_candidate_too_large", decision(ratio = 0.021f).reason)
+        assertEquals("standalone_skip_unsafe_ancestor", decision(safety = listOf("登录")).reason)
+    }
+
+    @Test
+    fun defaultStandaloneSkipPolicyAcceptsOnlyExactSkipLabels() {
+        assertTrue(DefaultStandaloneSkipPolicy.isStandaloneSkipLabel("跳过", ""))
+        assertTrue(DefaultStandaloneSkipPolicy.isStandaloneSkipLabel("", "SKIP"))
+        assertFalse(DefaultStandaloneSkipPolicy.isStandaloneSkipLabel("跳过 5", ""))
+        assertFalse(DefaultStandaloneSkipPolicy.isStandaloneSkipLabel("关闭", "×"))
+        assertFalse(DefaultStandaloneSkipPolicy.isStandaloneSkipLabel("skip ad", ""))
     }
 
     @Test
