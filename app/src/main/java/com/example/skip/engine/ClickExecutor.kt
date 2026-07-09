@@ -27,6 +27,15 @@ object ClickExecutor {
         return findClickableSelection(node, defaultRule = false)?.node
     }
 
+    internal fun resolveCandidate(node: AccessibilityNodeInfo): ClickCandidateResolution {
+        return ClickCandidateResolution(
+            candidate = describeTarget(node),
+            strictSelection = findClickableSelection(node, defaultRule = true),
+            relaxedSelection = findClickableSelection(node, defaultRule = false),
+            ancestorSafetyTexts = node.collectAncestorSafetyTexts()
+        )
+    }
+
     fun findClickableSelection(
         node: AccessibilityNodeInfo,
         defaultRule: Boolean
@@ -285,6 +294,22 @@ object ClickExecutor {
         )
     }
 
+    private fun AccessibilityNodeInfo.collectAncestorSafetyTexts(): List<String> {
+        val values = mutableListOf<String>()
+        var current: AccessibilityNodeInfo? = this
+        repeat(4) {
+            val ancestor = current ?: return values
+            values += listOf(
+                ancestor.text?.toString().orEmpty(),
+                ancestor.contentDescription?.toString().orEmpty(),
+                ancestor.viewIdResourceName.orEmpty(),
+                ancestor.className?.toString().orEmpty()
+            )
+            current = ancestor.parent
+        }
+        return values
+    }
+
     fun isTargetPresent(root: AccessibilityNodeInfo?, target: ClickTargetInfo): Boolean {
         if (root == null) return false
         val queue = ArrayDeque<AccessibilityNodeInfo>()
@@ -401,6 +426,19 @@ data class ClickTargetSelection(
     val parentDepth: Int,
     val source: ClickTargetSourceLog
 )
+
+internal data class ClickCandidateResolution(
+    val candidate: ClickTargetInfo,
+    val strictSelection: ClickTargetSelection?,
+    val relaxedSelection: ClickTargetSelection?,
+    val ancestorSafetyTexts: List<String>
+) {
+    fun actionPathFor(selection: ClickTargetSelection?): ResolvedActionPath =
+        ResolvedActionPath(
+            parentDepth = selection?.parentDepth ?: Int.MAX_VALUE,
+            hasSafeClickableTarget = selection != null
+        )
+}
 
 data class ClickTargetInfo(
     val bounds: Rect,

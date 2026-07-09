@@ -3,7 +3,6 @@ package com.example.skip.engine
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.MatchResult
-import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 
 object RuleMatcher {
@@ -12,10 +11,10 @@ object RuleMatcher {
         rule: SkipRule,
         appElapsedMs: Long
     ): CandidateEvaluation? {
-        val defaultRule = rule.source == RuleSource.BuiltIn
-        val clickSelection = ClickExecutor.findClickableSelection(node, defaultRule)
-        val scoredRule = ScoreEvaluator.evaluate(node, rule, appElapsedMs, clickSelection) ?: return null
-        val candidate = ClickExecutor.describeTarget(node)
+        val resolution = ClickExecutor.resolveCandidate(node)
+        val scoredRule = ScoreEvaluator.evaluate(node, rule, appElapsedMs, resolution) ?: return null
+        val candidate = resolution.candidate
+        val clickSelection = scoredRule.clickSelection
         val target = clickSelection?.target ?: candidate
         val highRiskDecision = HighRiskClickPolicy.evaluateTexts(
             listOf(
@@ -27,7 +26,7 @@ object RuleMatcher {
                 target.contentDescription,
                 candidate.viewId,
                 target.viewId
-            )
+            ) + resolution.ancestorSafetyTexts
         )
         val blockedByHighRiskPolicy = !highRiskDecision.allowed
         val match = if (scoredRule.passesMinScore && clickSelection != null && !blockedByHighRiskPolicy) {
@@ -50,6 +49,7 @@ object RuleMatcher {
                 isLargeCandidateBounds = scoredRule.isLargeCandidateBounds,
                 defaultRuleAreaAllowed = scoredRule.defaultRuleAreaAllowed,
                 textKeywordIsStandaloneSkip = scoredRule.textKeywordIsStandaloneSkip,
+                standaloneSkipAllowed = scoredRule.standaloneSkipAllowed,
                 clickTargetSource = clickSelection.source
             )
         } else {

@@ -22,6 +22,7 @@ data class MatchResult(
     val isLargeCandidateBounds: Boolean,
     val defaultRuleAreaAllowed: Boolean?,
     val textKeywordIsStandaloneSkip: Boolean,
+    val standaloneSkipAllowed: Boolean,
     val clickTargetSource: ClickTargetSourceLog
 )
 

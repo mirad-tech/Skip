@@ -9,6 +9,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.TextView
 
 class ScannerFixtureActivity : Activity() {
     enum class Scenario {
@@ -18,7 +19,8 @@ class ScannerFixtureActivity : Activity() {
         BilibiliDanmakuClose,
         BilibiliCountdownSkip,
         BilibiliSearchClearButton,
-        FocusedTopSearchField
+        FocusedTopSearchField,
+        StandaloneSkipInsideClickableParent
     }
 
     companion object {
@@ -58,6 +60,10 @@ class ScannerFixtureActivity : Activity() {
                     Scenario.FocusedTopSearchField -> addView(
                         FocusedTopSearchContainer(context),
                         FrameLayout.LayoutParams(1080, 180)
+                    )
+                    Scenario.StandaloneSkipInsideClickableParent -> addView(
+                        StandaloneSkipClickableParent(context),
+                        FrameLayout.LayoutParams(144, 112)
                     )
                 }
             }
@@ -191,6 +197,48 @@ private class BilibiliSearchContainer(
             BilibiliSearchClearButton(context),
             FrameLayout.LayoutParams(144, 120)
         )
+    }
+}
+
+private class StandaloneSkipClickableParent(
+    context: android.content.Context
+) : FrameLayout(context) {
+    init {
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        addView(
+            StandaloneSkipTextView(context),
+            FrameLayout.LayoutParams(72, 64)
+        )
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(896, 24, 1_040, 136))
+    }
+}
+
+private class StandaloneSkipTextView(
+    context: android.content.Context
+) : TextView(context) {
+    init {
+        text = "跳过"
+        isEnabled = true
+        isClickable = false
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.text = "跳过"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(false)
+        info?.setBoundsInScreen(Rect(944, 48, 1_016, 112))
     }
 }
 

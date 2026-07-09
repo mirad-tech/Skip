@@ -175,6 +175,33 @@ class GeminiRegressionInstrumentedTest {
     }
 
     @Test
+    fun standaloneSkipInSmallClickableParentMatchesBuiltInRule() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.StandaloneSkipInsideClickableParent
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+            val match = NodeScanner.findBestMatch(root, listOf(builtInDefaultRule("com.example.news", "News")), 1_000L)
+
+            assertNotNull(match)
+            assertEquals("跳过", match!!.matchedKeyword)
+            assertEquals(ClickTargetSourceLog.ClickableParent, match.clickTargetSource)
+            assertEquals(1, match.clickedParentDepth)
+            assertTrue(match.standaloneSkipAllowed)
+        }
+    }
+
+    @Test
+    fun standaloneSkipAfterEightSecondsDoesNotMatchBuiltInRule() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.StandaloneSkipInsideClickableParent
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+
+            assertNull(NodeScanner.findBestMatch(root, listOf(builtInDefaultRule("com.example.news", "News")), 8_001L))
+        }
+    }
+
+    @Test
     fun mobileTicketHomeAnnouncementCloseIsNotDefaultSplashCandidate() {
         ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.MobileTicketHome
         val rule = SkipRule(
