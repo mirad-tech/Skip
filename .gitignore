@@ -4,6 +4,7 @@
 /AGENTS.md
 /.agents/
 /.codex/
+/.worktrees/
 .codex-security-scans/
 .gradle/
 .gradle-home/
