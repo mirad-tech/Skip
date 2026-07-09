@@ -184,6 +184,49 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun defaultStandaloneSkipPolicyRejectsNonExactLabelsAtDecisionTime() {
+        listOf("关闭", "×", "close", "跳过 5").forEach { label ->
+            listOf(
+                testClickTarget(920, 40, 1_000, 100, text = label),
+                testClickTarget(920, 40, 1_000, 100, contentDescription = label)
+            ).forEach { candidate ->
+                val decision = DefaultStandaloneSkipPolicy.evaluate(
+                    DefaultStandaloneSkipContext(
+                        ruleSource = RuleSource.BuiltIn,
+                        appElapsedMs = 1_000L,
+                        area = RuleArea.TopRight,
+                        candidateAreaRatio = 0.01f,
+                        candidate = candidate,
+                        actionPath = ResolvedActionPath(parentDepth = 1, hasSafeClickableTarget = true),
+                        ancestorSafetyTexts = emptyList()
+                    )
+                )
+
+                assertFalse("candidate label must not be relaxed: $label", decision.allowed)
+                assertEquals("standalone_skip_label_not_exact", decision.reason)
+            }
+        }
+    }
+
+    @Test
+    fun defaultStandaloneSkipPolicyRejectsNonFiniteCandidateAreaRatio() {
+        val decision = DefaultStandaloneSkipPolicy.evaluate(
+            DefaultStandaloneSkipContext(
+                ruleSource = RuleSource.BuiltIn,
+                appElapsedMs = 1_000L,
+                area = RuleArea.TopRight,
+                candidateAreaRatio = Float.NaN,
+                candidate = testClickTarget(920, 40, 1_000, 100, text = "跳过"),
+                actionPath = ResolvedActionPath(parentDepth = 1, hasSafeClickableTarget = true),
+                ancestorSafetyTexts = emptyList()
+            )
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("standalone_skip_candidate_too_large", decision.reason)
+    }
+
+    @Test
     fun safeRegexMatcherRejectsMalformedRegexWithoutThrowing() {
         assertTrue(SafeRegexMatcher.containsMatch("skip\\s*\\d+", "skip 5"))
         assertFalse(SafeRegexMatcher.containsMatch("(skip", "skip 5"))
