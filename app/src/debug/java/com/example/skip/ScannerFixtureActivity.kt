@@ -21,7 +21,9 @@ class ScannerFixtureActivity : Activity() {
         BilibiliSearchClearButton,
         FocusedTopSearchField,
         StandaloneSkipInsideClickableParent,
-        CoordinateIdentityChildInsideClickableParent
+        StandaloneSkipInsideEditableActionPath,
+        CoordinateIdentityChildInsideClickableParent,
+        CoordinateIdentityInsideVisibleNonClickableParent
     }
 
     companion object {
@@ -66,9 +68,17 @@ class ScannerFixtureActivity : Activity() {
                         StandaloneSkipClickableParent(context),
                         FrameLayout.LayoutParams(144, 112)
                     )
+                    Scenario.StandaloneSkipInsideEditableActionPath -> addView(
+                        StandaloneSkipEditableActionParent(context),
+                        FrameLayout.LayoutParams(144, 112)
+                    )
                     Scenario.CoordinateIdentityChildInsideClickableParent -> addView(
                         CoordinateIdentityClickableParent(context),
                         FrameLayout.LayoutParams(120, 104)
+                    )
+                    Scenario.CoordinateIdentityInsideVisibleNonClickableParent -> addView(
+                        VisibleNonClickableCoordinateParent(context),
+                        FrameLayout.LayoutParams(1080, 1920)
                     )
                 }
             }
@@ -247,6 +257,51 @@ private class StandaloneSkipTextView(
     }
 }
 
+private class StandaloneSkipEditableActionParent(
+    context: android.content.Context
+) : FrameLayout(context) {
+    init {
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        addView(
+            EditableActionPathNode(context),
+            FrameLayout.LayoutParams(96, 80)
+        )
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(896, 24, 1_040, 136))
+    }
+}
+
+private class EditableActionPathNode(
+    context: android.content.Context
+) : FrameLayout(context) {
+    init {
+        isEnabled = true
+        isClickable = false
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        addView(
+            StandaloneSkipTextView(context),
+            FrameLayout.LayoutParams(72, 64)
+        )
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.setEditable(true)
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(false)
+        info?.setBoundsInScreen(Rect(920, 32, 1_024, 120))
+    }
+}
+
 private class CoordinateIdentityClickableParent(
     context: android.content.Context
 ) : FrameLayout(context) {
@@ -287,6 +342,49 @@ private class CoordinateIdentityDecorativeChild(
         info?.setVisibleToUser(true)
         info?.setEnabled(true)
         info?.setClickable(false)
+        info?.setBoundsInScreen(Rect(920, 40, 980, 100))
+    }
+}
+
+private class VisibleNonClickableCoordinateParent(
+    context: android.content.Context
+) : FrameLayout(context) {
+    init {
+        isEnabled = true
+        isClickable = false
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        addView(
+            NestedCoordinateSkipButton(context),
+            FrameLayout.LayoutParams(60, 60)
+        )
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(false)
+        info?.setBoundsInScreen(Rect(0, 0, 1080, 1920))
+    }
+}
+
+private class NestedCoordinateSkipButton(
+    context: android.content.Context
+) : Button(context) {
+    init {
+        text = "跳过"
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.text = "跳过"
+        info?.viewIdResourceName = "com.example.news:id/nested_splash_skip"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
         info?.setBoundsInScreen(Rect(920, 40, 980, 100))
     }
 }

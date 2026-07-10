@@ -536,7 +536,9 @@ data class CoordinateFallbackTargetSnapshot(
     val target: ClickTargetInfo,
     val packageName: String,
     val ancestorSafetyTexts: List<String> = emptyList(),
-    val hasClickableNodeOrAncestor: Boolean = false
+    val hasClickableNodeOrAncestor: Boolean = false,
+    val actionParentDepth: Int = Int.MAX_VALUE,
+    val hasUnsafeActionNode: Boolean = false
 )
 
 data class CoordinateFallbackRevalidation(

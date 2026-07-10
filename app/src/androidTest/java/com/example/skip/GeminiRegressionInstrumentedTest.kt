@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleRepository
+import com.example.skip.engine.ClickExecutor
 import com.example.skip.engine.NodeScanner
 import com.example.skip.engine.CurrentTargetRevalidator
 import com.example.skip.model.ClickLog
@@ -60,7 +61,9 @@ class GeminiRegressionInstrumentedTest {
                 stage = ClickLogStage.ClickActionSuccess,
                 success = true,
                 matchedKeyword = "skip ad",
-                nodeText = "跳过广告"
+                nodeText = "跳过广告",
+                textKeywordIsStandaloneSkip = true,
+                standaloneSkipAllowed = true
             )
         )
         val payload = LogRepository.serializeClickLogPersistence(logs, emptyMap())
@@ -68,6 +71,18 @@ class GeminiRegressionInstrumentedTest {
         val restored = LogRepository.deserializeClickLogPersistence(payload.logsJson)
 
         assertEquals(logs, restored)
+        assertTrue(restored.single().textKeywordIsStandaloneSkip)
+        assertTrue(restored.single().standaloneSkipAllowed)
+    }
+
+    @Test
+    fun clickLogPersistenceDefaultsMissingStandaloneSkipAuthorizationToFalse() {
+        val restored = LogRepository.deserializeClickLogPersistence(
+            """[{"timeMillis":1,"packageName":"com.example.news"}]"""
+        )
+
+        assertEquals(1, restored.size)
+        assertEquals(false, restored.single().standaloneSkipAllowed)
     }
 
     @Test
@@ -204,6 +219,32 @@ class GeminiRegressionInstrumentedTest {
     }
 
     @Test
+    fun standaloneSkipInsideEditableActionPathIsRejected() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.StandaloneSkipInsideEditableActionPath
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+            val skipNode = root.findAccessibilityNodeInfosByText("跳过").first { node ->
+                node.text?.toString() == "跳过"
+            }
+
+            val resolution = ClickExecutor.resolveCandidate(skipNode)
+            val action = resolution.relaxedSelection
+
+            assertNotNull(action)
+            assertEquals(2, action!!.parentDepth)
+            assertTrue(resolution.actionPathFor(action).hasUnsafeNode)
+            assertNull(
+                NodeScanner.findBestMatch(
+                    root,
+                    listOf(builtInDefaultRule("com.example.news", "News")),
+                    1_000L
+                )
+            )
+        }
+    }
+
+    @Test
     fun coordinateSnapshotKeepsDecorativeChildBoundsAndUsesClickableParentIdentity() {
         ScannerFixtureActivity.scenario =
             ScannerFixtureActivity.Scenario.CoordinateIdentityChildInsideClickableParent
@@ -217,6 +258,22 @@ class GeminiRegressionInstrumentedTest {
             assertEquals("com.example.news:id/splash_skip", snapshot!!.target.viewId)
             assertEquals(Rect(920, 40, 980, 100), snapshot.target.bounds)
             assertTrue(snapshot.hasClickableNodeOrAncestor)
+        }
+    }
+
+    @Test
+    fun coordinateSnapshotTraversesVisibleNonClickableParentToReachSafeDescendant() {
+        ScannerFixtureActivity.scenario =
+            ScannerFixtureActivity.Scenario.CoordinateIdentityInsideVisibleNonClickableParent
+        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+
+            val snapshot = CurrentTargetRevalidator.snapshotAtPoint(root, 950, 70)
+
+            assertNotNull(snapshot)
+            assertEquals("com.example.news:id/nested_splash_skip", snapshot!!.target.viewId)
+            assertEquals(Rect(920, 40, 980, 100), snapshot.target.bounds)
         }
     }
 

@@ -24,12 +24,13 @@ import com.example.skip.engine.CoordinateFallbackMatch
 import com.example.skip.engine.CoordinateFallbackMatcher
 import com.example.skip.engine.CoordinateFallbackMatchResult
 import com.example.skip.engine.CurrentTargetRevalidator
-import com.example.skip.engine.DefaultStandaloneSkipPolicy
 import com.example.skip.engine.HighRiskClickDecision
 import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.NodeScanner
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
+import com.example.skip.engine.ScoreEvaluator
+import com.example.skip.engine.StandaloneSkipGestureRevalidationPolicy
 import com.example.skip.model.ClickLogStage
 import com.example.skip.model.ClickMethodLog
 import com.example.skip.model.ClickTargetSourceLog
@@ -1078,8 +1079,8 @@ class SkipAccessibilityService : AccessibilityService() {
             originalTarget = pending.candidate,
             activeTextInput = ActiveTextInputGuard.hasFocusedEditableInput(root)
         )
-        val revalidatedCandidate = revalidation.target
-        if (!revalidation.allowed || revalidatedCandidate == null) {
+        val revalidatedSnapshot = revalidation.snapshot
+        if (!revalidation.allowed || revalidatedSnapshot == null) {
             finishPendingClick(
                 pending = pending,
                 stage = ClickLogStage.SkippedBySafety,
@@ -1092,21 +1093,32 @@ class SkipAccessibilityService : AccessibilityService() {
             )
             return
         }
+        val revalidatedCandidate = revalidatedSnapshot.target
         val revalidatedCandidateAreaRatio = ClickExecutor.areaRatio(revalidatedCandidate.bounds)
-        if (pending.textKeywordIsStandaloneSkip &&
-            (!revalidatedCandidateAreaRatio.isFinite() ||
-                revalidatedCandidateAreaRatio <= 0f ||
-                revalidatedCandidateAreaRatio > DefaultStandaloneSkipPolicy.MAX_CANDIDATE_AREA_RATIO)
-        ) {
-            finishPendingClick(
-                pending = pending,
-                stage = ClickLogStage.ClickEffectUnknown,
-                success = false,
-                reason = "gesture_fallback_blocked",
-                attempt = pending.firstAttempt,
-                effectConfirmReason = "gesture_fallback_blocked"
+        if (pending.standaloneSkipAllowed) {
+            val currentAppElapsedMs = (
+                System.currentTimeMillis() - foregroundState.foregroundStartTimeMillis
+                ).coerceAtLeast(0L)
+            val standaloneDecision = StandaloneSkipGestureRevalidationPolicy.evaluate(
+                ruleSource = pending.ruleSource,
+                appElapsedMs = currentAppElapsedMs,
+                area = ScoreEvaluator.areaInScreen(revalidatedCandidate.bounds),
+                candidateAreaRatio = revalidatedCandidateAreaRatio,
+                snapshot = revalidatedSnapshot
             )
-            return
+            if (!standaloneDecision.allowed) {
+                finishPendingClick(
+                    pending = pending,
+                    stage = ClickLogStage.SkippedBySafety,
+                    success = false,
+                    reason = standaloneDecision.reason,
+                    attempt = pending.firstAttempt,
+                    effectConfirmReason = standaloneDecision.reason,
+                    blockedReason = standaloneDecision.reason,
+                    detail = "standalone_skip_gesture_revalidation=${standaloneDecision.reason}"
+                )
+                return
+            }
         }
         val updated = pending.copy(
             target = revalidatedCandidate,

@@ -30,6 +30,7 @@ import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.engine.ScoreEvaluator
 import com.example.skip.engine.SafeRegexMatcher
+import com.example.skip.engine.StandaloneSkipGestureRevalidationPolicy
 import com.example.skip.engine.TextInputClearButtonPolicy
 import com.example.skip.model.AppPolicy
 import com.example.skip.model.ClickLog
@@ -150,6 +151,31 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun currentTargetTraversalEvaluatesDescendantsWhenParentHasNoCandidate() {
+        data class TestNode(
+            val candidateArea: Int? = null,
+            val children: List<TestNode> = emptyList()
+        )
+
+        val descendant = TestNode(candidateArea = 20)
+        val root = TestNode(children = listOf(descendant))
+        val visited = mutableListOf<TestNode>()
+
+        val selected = CurrentTargetRevalidator.selectBestCandidateFromTree(
+            root = root,
+            childrenOf = TestNode::children,
+            candidateOf = { node: TestNode ->
+                visited += node
+                node.candidateArea
+            },
+            isBetter = { candidate: Int, best: Int -> candidate < best }
+        )
+
+        assertEquals(listOf(root, descendant), visited)
+        assertEquals(20, selected)
+    }
+
+    @Test
     fun defaultStandaloneSkipPolicyRejectsWrongAreaLargeLateOrSensitiveCandidate() {
         fun decision(
             area: RuleArea = RuleArea.TopRight,
@@ -224,6 +250,153 @@ class SafetyAndLogUnitTest {
 
         assertFalse(decision.allowed)
         assertEquals("standalone_skip_candidate_too_large", decision.reason)
+    }
+
+    @Test
+    fun defaultStandaloneSkipPolicyRejectsUnsafeNodeInResolvedActionPath() {
+        val decision = DefaultStandaloneSkipPolicy.evaluate(
+            DefaultStandaloneSkipContext(
+                ruleSource = RuleSource.BuiltIn,
+                appElapsedMs = 1_000L,
+                area = RuleArea.TopRight,
+                candidateAreaRatio = 0.01f,
+                candidate = testClickTarget(920, 40, 1_000, 100, text = "跳过"),
+                actionPath = ResolvedActionPath(
+                    parentDepth = 2,
+                    hasSafeClickableTarget = true,
+                    hasUnsafeNode = true
+                ),
+                ancestorSafetyTexts = emptyList()
+            )
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("standalone_skip_candidate_unsafe", decision.reason)
+    }
+
+    @Test
+    fun actionPathSafetyTreatsCustomEditableNodeAsUnsafeWithoutOtherInputSignals() {
+        assertTrue(
+            ClickExecutor.isUnsafeActionPathNodeState(
+                editable = true,
+                password = false,
+                className = "android.view.View",
+                supportsSetText = false,
+                enabled = true,
+                visibleToUser = true
+            )
+        )
+        assertFalse(
+            ClickExecutor.isUnsafeActionPathNodeState(
+                editable = false,
+                password = false,
+                className = "android.view.View",
+                supportsSetText = false,
+                enabled = true,
+                visibleToUser = true
+            )
+        )
+    }
+
+    @Test
+    fun gestureRevalidationRejectsChangedLabelEvenWhenViewIdStillMatches() {
+        val original = testClickTarget(
+            920,
+            40,
+            1_000,
+            100,
+            text = "跳过",
+            viewId = "com.example.news:id/splash_skip"
+        )
+        val current = CoordinateFallbackTargetSnapshot(
+            target = original.copy(text = "关闭"),
+            packageName = "com.example.news",
+            hasClickableNodeOrAncestor = true,
+            actionParentDepth = 1
+        )
+        val targetRevalidation = CurrentTargetRevalidator.evaluate(
+            rootAvailable = true,
+            expectedPackageName = "com.example.news",
+            currentPackageName = "com.example.news",
+            activeTextInput = false,
+            pageSafetyTexts = emptyList(),
+            originalTarget = original,
+            currentTarget = current
+        )
+
+        assertTrue(targetRevalidation.allowed)
+        val decision = StandaloneSkipGestureRevalidationPolicy.evaluate(
+            ruleSource = RuleSource.BuiltIn,
+            appElapsedMs = 1_000L,
+            area = RuleArea.TopRight,
+            candidateAreaRatio = 0.01f,
+            snapshot = targetRevalidation.snapshot!!
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("standalone_skip_label_not_exact", decision.reason)
+    }
+
+    @Test
+    fun gestureRevalidationRejectsStandaloneSkipAfterEightSeconds() {
+        val decision = StandaloneSkipGestureRevalidationPolicy.evaluate(
+            ruleSource = RuleSource.BuiltIn,
+            appElapsedMs = 8_001L,
+            area = RuleArea.TopRight,
+            candidateAreaRatio = 0.01f,
+            snapshot = standaloneSkipGestureSnapshot(parentDepth = 1)
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("standalone_skip_window_expired", decision.reason)
+    }
+
+    @Test
+    fun gestureRevalidationRejectsStandaloneSkipActionParentDeeperThanTwo() {
+        val decision = StandaloneSkipGestureRevalidationPolicy.evaluate(
+            ruleSource = RuleSource.BuiltIn,
+            appElapsedMs = 1_000L,
+            area = RuleArea.TopRight,
+            candidateAreaRatio = 0.01f,
+            snapshot = standaloneSkipGestureSnapshot(parentDepth = 3)
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("standalone_skip_no_safe_action_path", decision.reason)
+    }
+
+    @Test
+    fun gestureRevalidationAllowsCurrentSafeSmallExactStandaloneSkip() {
+        val decision = StandaloneSkipGestureRevalidationPolicy.evaluate(
+            ruleSource = RuleSource.BuiltIn,
+            appElapsedMs = 8_000L,
+            area = RuleArea.TopRight,
+            candidateAreaRatio = 0.02f,
+            snapshot = standaloneSkipGestureSnapshot(parentDepth = 2)
+        )
+
+        assertTrue(decision.allowed)
+        assertEquals("", decision.reason)
+    }
+
+    @Test
+    fun gestureRevalidationRegionIsDerivedFromCurrentCandidateBounds() {
+        assertEquals(
+            RuleArea.TopRight,
+            ScoreEvaluator.areaInScreen(
+                bounds = testRect(900, 40, 1_000, 100),
+                screenWidth = 1_080,
+                screenHeight = 1_920
+            )
+        )
+        assertEquals(
+            RuleArea.Center,
+            ScoreEvaluator.areaInScreen(
+                bounds = testRect(440, 860, 640, 1_060),
+                screenWidth = 1_080,
+                screenHeight = 1_920
+            )
+        )
     }
 
     @Test
@@ -1172,6 +1345,7 @@ class SafetyAndLogUnitTest {
             appName = "News",
             match = testMatchSnapshot(
                 matchedKeyword = "跳过",
+                textKeywordIsStandaloneSkip = true,
                 standaloneSkipAllowed = true
             ),
             activeRules = emptyList(),
@@ -1191,7 +1365,9 @@ class SafetyAndLogUnitTest {
         val fields = LogRepository.clickLogJsonFields(log)
 
         assertTrue(pending.standaloneSkipAllowed)
+        assertTrue(pending.textKeywordIsStandaloneSkip)
         assertTrue(log.standaloneSkipAllowed)
+        assertTrue(log.textKeywordIsStandaloneSkip)
         assertEquals(true, fields["standaloneSkipAllowed"])
     }
 
@@ -2049,25 +2225,6 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
-    fun gestureFallbackOnlyAllowsAuthorizedStandaloneSkipToReachCurrentTargetRevalidation() {
-        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
-        val runGestureFallback = source.substringAfter("private fun runGestureFallback")
-            .substringBefore("private fun verifyClickEffect")
-        val standaloneGuard = "pending.textKeywordIsStandaloneSkip && !pending.standaloneSkipAllowed"
-
-        assertTrue(runGestureFallback.contains(standaloneGuard))
-        assertTrue(
-            runGestureFallback.indexOf("CurrentTargetRevalidator.revalidateAtPoint") >
-                runGestureFallback.indexOf(standaloneGuard)
-        )
-        assertTrue(runGestureFallback.contains("DefaultStandaloneSkipPolicy.MAX_CANDIDATE_AREA_RATIO"))
-        assertTrue(
-            runGestureFallback.indexOf("DefaultStandaloneSkipPolicy.MAX_CANDIDATE_AREA_RATIO") <
-                runGestureFallback.indexOf("val updated = pending.copy")
-        )
-    }
-
-    @Test
     fun coordinateAndNormalGesturePathsShareCurrentTargetRevalidation() {
         val source = readProjectFile("app/src/main/java/com/example/skip/engine/CoordinateFallbackMatcher.kt")
 
@@ -2097,6 +2254,31 @@ class SafetyAndLogUnitTest {
         assertTrue(result.allowed)
         assertEquals("current_target_revalidated", result.reason)
         assertEquals(original, result.target)
+    }
+
+    @Test
+    fun currentTargetRevalidationRejectsUnsafeActionPathSnapshot() {
+        val original = coordinateFallbackTarget(
+            text = "跳过广告",
+            viewId = "com.example.news:id/skip"
+        )
+        val result = CurrentTargetRevalidator.evaluate(
+            rootAvailable = true,
+            expectedPackageName = "com.example.news",
+            currentPackageName = "com.example.news",
+            activeTextInput = false,
+            pageSafetyTexts = emptyList(),
+            originalTarget = original,
+            currentTarget = CoordinateFallbackTargetSnapshot(
+                target = original,
+                packageName = "com.example.news",
+                hasClickableNodeOrAncestor = true,
+                hasUnsafeActionNode = true
+            )
+        )
+
+        assertFalse(result.allowed)
+        assertEquals("current_target_unsafe", result.reason)
     }
 
     @Test
@@ -3902,6 +4084,7 @@ class SafetyAndLogUnitTest {
         target: ClickTargetInfo = testClickTarget(10, 10, 60, 40, text = "跳过"),
         score: Int = 100,
         matchedKeyword: String = "跳过",
+        textKeywordIsStandaloneSkip: Boolean = false,
         standaloneSkipAllowed: Boolean = false
     ): ClickMatchSnapshot {
         return ClickMatchSnapshot(
@@ -3919,7 +4102,7 @@ class SafetyAndLogUnitTest {
             candidateAreaRatio = 0.02f,
             isLargeCandidateBounds = false,
             defaultRuleAreaAllowed = true,
-            textKeywordIsStandaloneSkip = false,
+            textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
             standaloneSkipAllowed = standaloneSkipAllowed,
             clickTargetSource = ClickTargetSourceLog.NodeSelf
         )
@@ -3984,6 +4167,27 @@ class SafetyAndLogUnitTest {
             visibleToUser = true,
             password = false,
             input = false
+        )
+    }
+
+    private fun standaloneSkipGestureSnapshot(
+        parentDepth: Int,
+        hasUnsafeActionNode: Boolean = false
+    ): CoordinateFallbackTargetSnapshot {
+        return CoordinateFallbackTargetSnapshot(
+            target = testClickTarget(
+                920,
+                40,
+                1_000,
+                100,
+                text = "跳过",
+                viewId = "com.example.news:id/splash_skip"
+            ),
+            packageName = "com.example.news",
+            ancestorSafetyTexts = emptyList(),
+            hasClickableNodeOrAncestor = true,
+            actionParentDepth = parentDepth,
+            hasUnsafeActionNode = hasUnsafeActionNode
         )
     }
 

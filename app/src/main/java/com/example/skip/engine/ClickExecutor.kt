@@ -32,7 +32,8 @@ object ClickExecutor {
             candidate = describeTarget(node),
             strictSelection = findClickableSelection(node, defaultRule = true),
             relaxedSelection = findClickableSelection(node, defaultRule = false),
-            ancestorSafetyTexts = node.collectAncestorSafetyTexts()
+            ancestorSafetyTexts = node.collectAncestorSafetyTexts(),
+            unsafeNodeDepths = node.collectUnsafeActionPathNodeDepths()
         )
     }
 
@@ -324,6 +325,49 @@ object ClickExecutor {
         return values
     }
 
+    private fun AccessibilityNodeInfo.collectUnsafeActionPathNodeDepths(): Set<Int> {
+        val unsafeDepths = mutableSetOf<Int>()
+        var current: AccessibilityNodeInfo? = this
+        var depth = 0
+        while (current != null && depth <= MAX_CLICKABLE_PARENT_DEPTH) {
+            if (current.isUnsafeActionPathNode()) unsafeDepths += depth
+            current = current.parent
+            depth++
+        }
+        return unsafeDepths
+    }
+
+    private fun AccessibilityNodeInfo.isUnsafeActionPathNode(): Boolean {
+        val classNameValue = className?.toString().orEmpty()
+        val supportsSetText = actionList.any { action ->
+            action.id == AccessibilityNodeInfo.ACTION_SET_TEXT
+        }
+        return isUnsafeActionPathNodeState(
+            editable = isEditable,
+            password = isPassword,
+            className = classNameValue,
+            supportsSetText = supportsSetText,
+            enabled = isEnabled,
+            visibleToUser = isVisibleToUser
+        )
+    }
+
+    internal fun isUnsafeActionPathNodeState(
+        editable: Boolean,
+        password: Boolean,
+        className: String,
+        supportsSetText: Boolean,
+        enabled: Boolean,
+        visibleToUser: Boolean
+    ): Boolean {
+        return editable ||
+            password ||
+            className.contains("EditText", ignoreCase = true) ||
+            supportsSetText ||
+            !enabled ||
+            !visibleToUser
+    }
+
     fun isTargetPresent(root: AccessibilityNodeInfo?, target: ClickTargetInfo): Boolean {
         if (root == null) return false
         val queue = ArrayDeque<AccessibilityNodeInfo>()
@@ -445,12 +489,16 @@ internal data class ClickCandidateResolution(
     val candidate: ClickTargetInfo,
     val strictSelection: ClickTargetSelection?,
     val relaxedSelection: ClickTargetSelection?,
-    val ancestorSafetyTexts: List<String>
+    val ancestorSafetyTexts: List<String>,
+    val unsafeNodeDepths: Set<Int>
 ) {
     fun actionPathFor(selection: ClickTargetSelection?): ResolvedActionPath =
         ResolvedActionPath(
             parentDepth = selection?.parentDepth ?: Int.MAX_VALUE,
-            hasSafeClickableTarget = selection != null
+            hasSafeClickableTarget = selection != null,
+            hasUnsafeNode = selection?.let { action ->
+                unsafeNodeDepths.any { depth -> depth <= action.parentDepth }
+            } == true
         )
 }
 

@@ -51,6 +51,9 @@ internal object CurrentTargetRevalidator {
         if (snapshot.packageName.isBlank() || snapshot.packageName != expectedPackageName) {
             return CurrentTargetRevalidation.blocked("current_target_package_mismatch")
         }
+        if (snapshot.hasUnsafeActionNode) {
+            return CurrentTargetRevalidation.blocked("current_target_unsafe")
+        }
         if (SafetyGuard.isProtectedPackage(snapshot.packageName) ||
             !ClickExecutor.hasCoordinateFallbackIdentity(snapshot.target) ||
             ClickExecutor.coordinateFallbackGestureTargetBlockReason(
@@ -75,7 +78,7 @@ internal object CurrentTargetRevalidator {
         return CurrentTargetRevalidation(
             allowed = true,
             reason = "current_target_revalidated",
-            target = snapshot.target
+            snapshot = snapshot
         )
     }
 
@@ -85,34 +88,63 @@ internal object CurrentTargetRevalidator {
         y: Int
     ): CoordinateFallbackTargetSnapshot? {
         if (root == null) return null
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var best: CoordinateFallbackTargetSnapshot? = null
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            val bounds = Rect()
-            node.getBoundsInScreen(bounds)
-            if (node.isVisibleToUser && bounds.containsForPolicy(x, y)) {
+        return selectBestCandidateFromTree(
+            root = root,
+            childrenOf = { node ->
+                buildList {
+                    for (index in 0 until node.childCount) {
+                        node.getChild(index)?.let(::add)
+                    }
+                }
+            },
+            candidateOf = snapshotCandidate@ { node ->
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                if (!node.isVisibleToUser || !bounds.containsForPolicy(x, y)) {
+                    return@snapshotCandidate null
+                }
                 val resolution = ClickExecutor.resolveCandidate(node)
-                val action = resolution.relaxedSelection ?: continue
+                val action = resolution.relaxedSelection ?: return@snapshotCandidate null
+                val actionPath = resolution.actionPathFor(action)
                 val target = ClickExecutor.targetWithActionIdentity(
                     candidate = resolution.candidate,
                     actionTarget = action.target
                 )
-                if (!ClickExecutor.hasCoordinateFallbackIdentity(target)) continue
-                val candidate = CoordinateFallbackTargetSnapshot(
+                if (!ClickExecutor.hasCoordinateFallbackIdentity(target)) {
+                    return@snapshotCandidate null
+                }
+                CoordinateFallbackTargetSnapshot(
                     target = target,
                     packageName = node.packageName?.toString().orEmpty(),
                     ancestorSafetyTexts = resolution.ancestorSafetyTexts,
-                    hasClickableNodeOrAncestor = true
+                    hasClickableNodeOrAncestor = true,
+                    actionParentDepth = actionPath.parentDepth,
+                    hasUnsafeActionNode = actionPath.hasUnsafeNode
                 )
-                if (best == null || target.bounds.area() < best!!.target.bounds.area()) {
-                    best = candidate
-                }
+            },
+            isBetter = { candidate, currentBest ->
+                candidate.target.bounds.area() < currentBest.target.bounds.area()
             }
-            for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
+        )
+    }
+
+    internal fun <Node, Candidate> selectBestCandidateFromTree(
+        root: Node,
+        childrenOf: (Node) -> Iterable<Node>,
+        candidateOf: (Node) -> Candidate?,
+        isBetter: (Candidate, Candidate) -> Boolean
+    ): Candidate? {
+        val queue = ArrayDeque<Node>()
+        queue.add(root)
+        var best: Candidate? = null
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val candidate = candidateOf(node)
+            val currentBest = best
+            if (candidate != null && (currentBest == null || isBetter(candidate, currentBest))) {
+                best = candidate
             }
+            childrenOf(node).forEach(queue::add)
         }
         return best
     }
@@ -169,8 +201,11 @@ internal object CurrentTargetRevalidator {
 internal data class CurrentTargetRevalidation(
     val allowed: Boolean,
     val reason: String,
-    val target: ClickTargetInfo? = null
+    val snapshot: CoordinateFallbackTargetSnapshot? = null
 ) {
+    val target: ClickTargetInfo?
+        get() = snapshot?.target
+
     companion object {
         fun blocked(reason: String): CurrentTargetRevalidation {
             return CurrentTargetRevalidation(allowed = false, reason = reason)

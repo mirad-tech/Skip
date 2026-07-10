@@ -299,20 +299,32 @@ object ScoreEvaluator {
         return SafeRegexMatcher.containsMatch(keyword.normalizeForRuleMatch(), this)
     }
 
-    private fun areaInScreen(bounds: Rect): RuleArea {
-        if (bounds.isEmpty) return RuleArea.Any
+    internal fun areaInScreen(bounds: Rect): RuleArea {
         val screenWidth = android.content.res.Resources.getSystem().displayMetrics.widthPixels
             .coerceAtLeast(1)
         val screenHeight = android.content.res.Resources.getSystem().displayMetrics.heightPixels
             .coerceAtLeast(1)
+        return areaInScreen(bounds, screenWidth, screenHeight)
+    }
+
+    internal fun areaInScreen(
+        bounds: Rect,
+        screenWidth: Int,
+        screenHeight: Int
+    ): RuleArea {
+        if (bounds.left >= bounds.right || bounds.top >= bounds.bottom) return RuleArea.Any
+        val width = screenWidth.coerceAtLeast(1)
+        val height = screenHeight.coerceAtLeast(1)
+        val centerX = (bounds.left + bounds.right) shr 1
+        val centerY = (bounds.top + bounds.bottom) shr 1
         val column = when {
-            bounds.centerX() < screenWidth / 3f -> 0
-            bounds.centerX() < screenWidth * 2f / 3f -> 1
+            centerX < width / 3f -> 0
+            centerX < width * 2f / 3f -> 1
             else -> 2
         }
         val row = when {
-            bounds.centerY() < screenHeight / 3f -> 0
-            bounds.centerY() < screenHeight * 2f / 3f -> 1
+            centerY < height / 3f -> 0
+            centerY < height * 2f / 3f -> 1
             else -> 2
         }
         return when (row to column) {
