@@ -227,6 +227,26 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun diagnosticGuideDocumentsStandaloneSkipDecisions() {
+        val guide = readProjectFile("LOG_DIAGNOSTIC_GUIDE.md")
+
+        listOf(
+            "standalone_skip_not_top_right",
+            "standalone_skip_window_expired",
+            "standalone_skip_candidate_too_large",
+            "standalone_skip_no_safe_action_path",
+            "standalone_skip_unsafe_ancestor",
+            "standalone_skip_label_not_exact",
+            "standalone_skip_rule_source_forbidden",
+            "standalone_skip_candidate_unsafe",
+            "standalone_skip_forbidden",
+            "standaloneSkipAllowed"
+        ).forEach { value ->
+            assertTrue("missing diagnostic: $value", guide.contains(value))
+        }
+    }
+
+    @Test
     fun safeRegexMatcherRejectsMalformedRegexWithoutThrowing() {
         assertTrue(SafeRegexMatcher.containsMatch("skip\\s*\\d+", "skip 5"))
         assertFalse(SafeRegexMatcher.containsMatch("(skip", "skip 5"))

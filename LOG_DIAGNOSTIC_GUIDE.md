@@ -33,7 +33,26 @@
 - `clickLogs[].elapsedSinceForegroundMs`、`defaultRuleWindowMs`、`isWithinDefaultRuleWindow`：判断是否错过启动时间窗。
 - `clickLogs[].rootWindowNull` 和 `canRetrieveWindowContent`：判断系统是否没有提供可读取窗口。
 - `clickLogs[].clickTargetSource`、`isFixedCoordinateClick`：判断是否走了坐标兜底或被坐标兜底限制。
+- `clickLogs[].standaloneSkipAllowed`：判断该次点击是否通过默认纯“跳过 / skip”限制。
 - `diagnosticSummary.categoryCounts`：快速定位无候选、低分、冷却、时间窗、安全阻止、坐标兜底限制、窗口为空、包名变化等常见原因。
+
+## 纯“跳过 / skip”诊断
+
+默认规则只会对精确的纯“跳过 / skip”候选放宽匹配，并且仍要求位于右上区域、前台八秒内、候选足够小且存在安全可点击路径。出现以下失败原因时，可按下表排查：
+
+| 失败原因 | 含义 | 建议处理 |
+| --- | --- | --- |
+| `standalone_skip_not_top_right` | 纯“跳过 / skip”不在右上区域 | 不使用普通/自定义纯标签规则放宽；改用带明确广告/开屏语义的文本或稳定 View ID。 |
+| `standalone_skip_window_expired` | 已超过前台八秒限制 | 检查开屏加载时机，不扩大默认纯跳过时间窗。 |
+| `standalone_skip_candidate_too_large` | 候选占屏超过 2% | 不使用普通/自定义纯标签规则放宽；改用带明确广告/开屏语义的文本或稳定 View ID。 |
+| `standalone_skip_no_safe_action_path` | 未找到两层内的安全可点击路径 | 检查无障碍树或使用带锚点的坐标规则。 |
+| `standalone_skip_unsafe_ancestor` | 候选链包含高风险语义 | 不执行自动点击。 |
+| `standalone_skip_label_not_exact` | 候选标签不是精确的“跳过 / skip”（例如关闭、×、close 或倒计时） | 保持默认规则；仅为稳定且精确的目标创建自定义规则。 |
+| `standalone_skip_rule_source_forbidden` | 只有内置默认规则评估受限纯跳过 | 不使用普通/自定义纯标签规则放宽；改用带明确广告/开屏语义的文本或稳定 View ID。 |
+| `standalone_skip_candidate_unsafe` | 候选处于禁用、不可见、输入或密码状态，必须拒绝 | 检查目标控件状态，不绕过候选安全限制。 |
+| `standalone_skip_forbidden` | 普通/自定义规则不能放宽精确纯跳过 | 应使用带明确广告/开屏语义的文本或稳定 View ID。 |
+
+`standaloneSkipAllowed=true` 表示该次点击通过了默认纯“跳过 / skip”的全部限制，不能等同于对任意包含“跳过 / skip”文本的放行。
 
 ## 隐私边界
 
