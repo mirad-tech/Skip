@@ -2269,6 +2269,7 @@ class SafetyAndLogUnitTest {
             .substringBefore("private fun verifyClickEffect")
 
         assertTrue(runGestureFallback.contains("CurrentTargetRevalidator.revalidateAtPoint"))
+        assertTrue(runGestureFallback.contains("ClickExecutor.targetWithActionIdentity"))
         assertFalse(runGestureFallback.contains("ClickExecutor.gestureClick(this, pending.candidate"))
     }
 

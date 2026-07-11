@@ -1070,13 +1070,17 @@ class SkipAccessibilityService : AccessibilityService() {
         val currentPackageName = root?.packageName?.toString().orEmpty().ifBlank {
             foregroundPackage.orEmpty()
         }
+        val expectedTarget = ClickExecutor.targetWithActionIdentity(
+            candidate = pending.candidate,
+            actionTarget = pending.target
+        )
         val revalidation = CurrentTargetRevalidator.revalidateAtPoint(
             root = root,
             expectedPackageName = pending.packageName,
             currentPackageName = currentPackageName,
             x = pending.candidate.bounds.centerX(),
             y = pending.candidate.bounds.centerY(),
-            originalTarget = pending.candidate,
+            originalTarget = expectedTarget,
             activeTextInput = ActiveTextInputGuard.hasFocusedEditableInput(root)
         )
         val revalidatedSnapshot = revalidation.snapshot
