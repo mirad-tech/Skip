@@ -210,6 +210,54 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun defaultStandaloneSkipPolicyRejectsConflictingNonBlankLabels() {
+        assertFalse(DefaultStandaloneSkipPolicy.isStandaloneSkipLabel("关闭", "跳过"))
+        assertFalse(DefaultStandaloneSkipPolicy.isStandaloneSkipLabel("skip", "close"))
+
+        val decision = DefaultStandaloneSkipPolicy.evaluate(
+            DefaultStandaloneSkipContext(
+                ruleSource = RuleSource.BuiltIn,
+                appElapsedMs = 1_000L,
+                area = RuleArea.TopRight,
+                candidateAreaRatio = 0.01f,
+                candidate = testClickTarget(
+                    920,
+                    40,
+                    1_000,
+                    100,
+                    text = "关闭",
+                    contentDescription = "跳过"
+                ),
+                actionPath = ResolvedActionPath(parentDepth = 1, hasSafeClickableTarget = true),
+                ancestorSafetyTexts = emptyList()
+            )
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("standalone_skip_label_not_exact", decision.reason)
+    }
+
+    @Test
+    fun actionPathSafetyTextsIncludeTheDeepestClickableAncestor() {
+        data class TestNode(val value: String, val parent: TestNode? = null)
+
+        val depth5 = TestNode("depth5")
+        val depth4 = TestNode("depth4", depth5)
+        val depth3 = TestNode("depth3", depth4)
+        val depth2 = TestNode("depth2", depth3)
+        val depth1 = TestNode("depth1", depth2)
+        val candidate = TestNode("depth0", depth1)
+
+        val values = ClickExecutor.collectActionPathValues(
+            start = candidate,
+            parentOf = TestNode::parent,
+            valuesOf = { node -> listOf(node.value) }
+        )
+
+        assertEquals(listOf("depth0", "depth1", "depth2", "depth3", "depth4"), values)
+    }
+
+    @Test
     fun defaultStandaloneSkipPolicyRejectsNonExactLabelsAtDecisionTime() {
         listOf("关闭", "×", "close", "跳过 5").forEach { label ->
             listOf(

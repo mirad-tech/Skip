@@ -26,9 +26,13 @@ internal object DefaultStandaloneSkipPolicy {
     const val MAX_CANDIDATE_AREA_RATIO = 0.02f
     private const val MAX_ACTION_PARENT_DEPTH = 2
 
-    fun isStandaloneSkipLabel(text: String, contentDescription: String): Boolean =
-        listOf(text, contentDescription).any { value ->
-            value.trim() == "跳过" || value.trim().equals("skip", ignoreCase = true)
+    fun isStandaloneSkipLabel(text: String, contentDescription: String): Boolean {
+        val labels = listOf(text, contentDescription)
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+        return labels.isNotEmpty() && labels.all { value ->
+            value == "跳过" || value.equals("skip", ignoreCase = true)
+        }
     }
 
     fun evaluate(context: DefaultStandaloneSkipContext): DefaultStandaloneSkipDecision {

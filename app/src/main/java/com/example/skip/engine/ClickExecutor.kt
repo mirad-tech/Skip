@@ -310,17 +310,31 @@ object ClickExecutor {
     }
 
     private fun AccessibilityNodeInfo.collectAncestorSafetyTexts(): List<String> {
+        return collectActionPathValues(
+            start = this,
+            parentOf = AccessibilityNodeInfo::getParent,
+            valuesOf = { ancestor ->
+                listOf(
+                    ancestor.text?.toString().orEmpty(),
+                    ancestor.contentDescription?.toString().orEmpty(),
+                    ancestor.viewIdResourceName.orEmpty(),
+                    ancestor.className?.toString().orEmpty()
+                )
+            }
+        )
+    }
+
+    internal fun <Node> collectActionPathValues(
+        start: Node,
+        parentOf: (Node) -> Node?,
+        valuesOf: (Node) -> List<String>
+    ): List<String> {
         val values = mutableListOf<String>()
-        var current: AccessibilityNodeInfo? = this
-        repeat(4) {
-            val ancestor = current ?: return values
-            values += listOf(
-                ancestor.text?.toString().orEmpty(),
-                ancestor.contentDescription?.toString().orEmpty(),
-                ancestor.viewIdResourceName.orEmpty(),
-                ancestor.className?.toString().orEmpty()
-            )
-            current = ancestor.parent
+        var current: Node? = start
+        repeat(MAX_CLICKABLE_PARENT_DEPTH + 1) {
+            val node = current ?: return values
+            values += valuesOf(node)
+            current = parentOf(node)
         }
         return values
     }
