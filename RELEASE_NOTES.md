@@ -1,5 +1,37 @@
 # Skip 发布说明
 
+## 1.0.10
+
+发布日期：2026-07-12
+
+### 受限纯跳过
+
+- 默认规则可识别启动八秒内、右上角的小型纯“跳过 / skip”控件；所有非空文字或内容描述都必须严格等于“跳过”或 `skip`。
+- 小型文字子节点可以使用安全的可点击父容器执行动作，但候选到动作节点的完整路径只要包含可编辑、密码、`EditText`、`ACTION_SET_TEXT`、禁用或不可见节点，就不会点击。
+- 手势兜底会针对当前无障碍节点树重新执行完整授权；目标标签、区域、面积、动作深度或安全状态变化时不继续点击。
+- 日志保留受限纯跳过授权状态和失败原因，便于区分未命中与安全阻止。
+
+### 版本信息
+
+- `versionCode`：18
+- `versionName`：`1.0.10`
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.10-release.apk`
+- SHA256：`3FC55B19CBC86ADC5B98691867E2B0A9E1FEFD098B6A7B0E6A660866F1C9D471`
+
+### 验证摘要
+
+```powershell
+.\gradlew.bat testDebugUnitTest assembleDebug compileDebugAndroidTestKotlin assembleRelease --rerun-tasks --no-daemon --max-workers=2 "-Dorg.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8"
+git diff --check
+```
+
+- JVM 单元测试：183 tests，0 failures，0 errors，0 skipped。
+- Release APK 已完成签名、R8、资源压缩和 release lint 验证。
+- `GeminiRegressionInstrumentedTest` 未在本机设备执行，真机验证由发布者单独完成。
+
 ## 1.0.9
 
 发布日期：2026-07-01

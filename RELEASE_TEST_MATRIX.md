@@ -28,15 +28,16 @@ git diff --check
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-本轮自动化结果（2026-07-01，1.0.9）：
+本轮自动化结果（2026-07-12，1.0.10）：
 
 | 命令 | 结果 | 备注 |
 | --- | --- | --- |
-| `.\gradlew.bat :app:testDebugUnitTest --rerun-tasks` | 通过 | exit 0；164 tests，0 failures，0 errors |
+| `.\gradlew.bat testDebugUnitTest assembleDebug compileDebugAndroidTestKotlin assembleRelease --rerun-tasks --no-daemon --max-workers=2 "-Dorg.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8"` | 通过 | exit 0；183 tests，0 failures，0 errors，0 skipped；Debug、AndroidTest 编译和签名 Release 构建完成 |
 | `.\gradlew.bat :app:assembleDebug` | 通过 | exit 0 |
 | `.\gradlew.bat :app:assembleRelease` | 通过 | exit 0，R8 / shrinkResources 执行完成 |
 | `.\gradlew.bat :app:compileDebugAndroidTestKotlin` | 通过 | exit 0 |
 | `git diff --check` | 通过 | exit 0，仅有 CRLF 工作区提示，无空白错误 |
+| `GeminiRegressionInstrumentedTest` | 未在本机执行 | 无已连接 ADB 设备；由发布者在真机完成 |
 
 ## Manifest 权限检查
 
@@ -104,7 +105,9 @@ git diff --check
 | JSON 导入线程 | 文件读取与解析不阻塞 UI | 未测 |
 | 自定义规则命中搜索清除按钮 | 不点击 | 未测 |
 | JSON 规则命中搜索清除按钮 | 不点击 | 未测 |
-| 纯中文“跳过”普通页面 | 不点击 | 未测 |
+| 普通页面纯中文“跳过”（非右上、超时或不安全） | 不点击 | 未测 |
+| 启动八秒内右上小型纯“跳过 / skip” | 仅在严格标签和安全动作路径均满足时辅助点击 | 未测 |
+| 纯跳过动作路径含输入、密码或不可见节点 | 不点击，记录安全阻止 | 未测 |
 | `跳过 5` / `跳过广告` | 可在低风险开屏或广告场景命中 | 未测 |
 | `跳过登录` / `跳过更新` / `跳过授权` | 不点击 | 未测 |
 | 导出日志 | JSON 不含完整页面内容 | 未测 |
