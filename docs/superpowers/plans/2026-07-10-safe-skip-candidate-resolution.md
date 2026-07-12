@@ -10,9 +10,9 @@
 
 ## Global Constraints
 
-- 默认纯“跳过 / skip”仅限内置规则、应用前台八秒内、右上小候选、非受保护包和低风险节点链。
+- 默认纯“跳过 / skip”仅限内置规则、应用前台八秒内、右上小候选、非受保护包和低风险节点链；所有非空 `text` / `contentDescription` 必须严格等于“跳过”或忽略大小写的 `skip`。
 - 普通“关闭 / × / close”仍需广告或开屏信号；不得因本次改动使用受限放宽路径。
-- 先执行 `ACTION_CLICK`；手势仅在延迟前完成包名、输入焦点、敏感页面和身份复验后使用候选视觉中心，绝不使用大父容器中心。
+- 先执行 `ACTION_CLICK`；手势仅在当前节点树通过包名、输入焦点、敏感页面和身份复验后，重新执行完整的纯跳过资格策略；手势使用候选视觉中心，绝不使用大父容器中心。
 - 不改变用户规则 JSON 格式、坐标兜底的锚点/包名/冷却/时间窗约束或受保护包清单。
 - 所有新失败原因使用稳定的英文 snake_case，必须进入现有日志诊断链路。
 
@@ -104,7 +104,8 @@ Expected: FAIL，提示 `DefaultStandaloneSkipPolicy`、`DefaultStandaloneSkipCo
 ```kotlin
 internal data class ResolvedActionPath(
     val parentDepth: Int,
-    val hasSafeClickableTarget: Boolean
+    val hasSafeClickableTarget: Boolean,
+    val hasUnsafeNode: Boolean = false
 )
 
 internal data class DefaultStandaloneSkipContext(
@@ -124,18 +125,23 @@ internal object DefaultStandaloneSkipPolicy {
     const val MAX_CANDIDATE_AREA_RATIO = 0.02f
     private const val MAX_ACTION_PARENT_DEPTH = 2
 
-    fun isStandaloneSkipLabel(text: String, contentDescription: String): Boolean =
-        listOf(text, contentDescription).any { value ->
-            value.trim() == "跳过" || value.trim().equals("skip", ignoreCase = true)
+    fun isStandaloneSkipLabel(text: String, contentDescription: String): Boolean {
+        val labels = listOf(text, contentDescription)
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+        return labels.isNotEmpty() && labels.all { value ->
+            value == "跳过" || value.equals("skip", ignoreCase = true)
         }
+    }
 
     fun evaluate(context: DefaultStandaloneSkipContext): DefaultStandaloneSkipDecision {
+        if (!isStandaloneSkipLabel(context.candidate.text, context.candidate.contentDescription)) return DefaultStandaloneSkipDecision(false, "standalone_skip_label_not_exact")
         if (context.ruleSource != RuleSource.BuiltIn) return DefaultStandaloneSkipDecision(false, "standalone_skip_rule_source_forbidden")
         if (context.appElapsedMs > MAX_ELAPSED_MS) return DefaultStandaloneSkipDecision(false, "standalone_skip_window_expired")
         if (context.area != RuleArea.TopRight) return DefaultStandaloneSkipDecision(false, "standalone_skip_not_top_right")
         if (context.candidateAreaRatio <= 0f || context.candidateAreaRatio > MAX_CANDIDATE_AREA_RATIO) return DefaultStandaloneSkipDecision(false, "standalone_skip_candidate_too_large")
         if (!context.actionPath.hasSafeClickableTarget || context.actionPath.parentDepth > MAX_ACTION_PARENT_DEPTH) return DefaultStandaloneSkipDecision(false, "standalone_skip_no_safe_action_path")
-        if (context.candidate.input || context.candidate.password || !context.candidate.enabled || !context.candidate.visibleToUser) return DefaultStandaloneSkipDecision(false, "standalone_skip_candidate_unsafe")
+        if (context.actionPath.hasUnsafeNode || context.candidate.input || context.candidate.password || !context.candidate.enabled || !context.candidate.visibleToUser) return DefaultStandaloneSkipDecision(false, "standalone_skip_candidate_unsafe")
         if (!HighRiskClickPolicy.evaluateTexts(context.ancestorSafetyTexts + listOf(context.candidate.text, context.candidate.contentDescription, context.candidate.viewId)).allowed) return DefaultStandaloneSkipDecision(false, "standalone_skip_unsafe_ancestor")
         return DefaultStandaloneSkipDecision(true)
     }
@@ -220,7 +226,13 @@ data class ClickCandidateResolution(
     val ancestorSafetyTexts: List<String>
 ) {
     fun actionPathFor(selection: ClickTargetSelection?): ResolvedActionPath =
-        ResolvedActionPath(parentDepth = selection?.parentDepth ?: Int.MAX_VALUE, hasSafeClickableTarget = selection != null)
+        ResolvedActionPath(
+            parentDepth = selection?.parentDepth ?: Int.MAX_VALUE,
+            hasSafeClickableTarget = selection != null,
+            hasUnsafeNode = selection?.let { action ->
+                unsafeNodeDepths.any { depth -> depth <= action.parentDepth }
+            } == true
+        )
 }
 
 fun resolveCandidate(node: AccessibilityNodeInfo): ClickCandidateResolution {
@@ -233,7 +245,7 @@ fun resolveCandidate(node: AccessibilityNodeInfo): ClickCandidateResolution {
 }
 ```
 
-`collectAncestorSafetyTexts()` 必须从候选节点开始向上最多四层，收集 text、contentDescription、viewId 和 className。`ScoreEvaluator.evaluate` 的第四个参数改为 `ClickCandidateResolution`：先完成关键词、区域与基础安全判断；若标签为纯跳过且规则是内置规则，调用 Task 1 策略并仅在成功时选择 `relaxedSelection`；其他所有候选只选择 `strictSelection`。`ScoreEvaluation` 必须携带最终 `clickSelection` 和 `standaloneSkipAllowed`。
+`collectAncestorSafetyTexts()` 必须从候选节点开始向上最多四层，收集 text、contentDescription、viewId 和 className。候选到最大第四层父节点的完整动作链还必须收集危险节点深度：可编辑、密码、`EditText`、`ACTION_SET_TEXT`、禁用或不可见节点均标记为不安全；选定动作路径只要经过任一危险节点，`hasUnsafeNode` 就为 `true`。`ScoreEvaluator.evaluate` 的第四个参数改为 `ClickCandidateResolution`：先完成关键词、区域与基础安全判断；若全部非空标签均为纯跳过且规则是内置规则，调用 Task 1 策略并仅在成功时选择 `relaxedSelection`；其他所有候选只选择 `strictSelection`。`ScoreEvaluation` 必须携带最终 `clickSelection` 和 `standaloneSkipAllowed`。
 
 `RuleMatcher.evaluate` 必须使用 `resolution.candidate` 作为视觉候选、使用 `scoredRule.clickSelection` 作为动作节点，并把 `resolution.ancestorSafetyTexts` 纳入 `HighRiskClickPolicy.evaluateTexts`。为 `MatchResult` 新增 `standaloneSkipAllowed: Boolean`，并在此处赋值。
 
@@ -378,7 +390,7 @@ if (SafetyGuard.isProtectedPackage(pending.packageName) ||
 }
 ```
 
-保持 `StableClickDelayPolicy` 对所有纯跳过使用默认稳定延迟；允许的纯跳过只有在现有 `CurrentTargetRevalidator` 通过后才进入手势，且 `updated.candidate` 必须继续是候选小边界。
+保持 `StableClickDelayPolicy` 对所有纯跳过使用默认稳定延迟；允许的纯跳过只有在 `CurrentTargetRevalidator` 针对当前节点树完成复验，并由 `StandaloneSkipGestureRevalidationPolicy` 重新检查当前前台时间、区域、面积、动作深度、完整动作链安全和严格标签后才可进入手势。`updated.candidate` 必须继续是候选小边界。
 
 - [ ] **Step 4: 运行状态、日志和手势安全回归测试**
 
