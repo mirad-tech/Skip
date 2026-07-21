@@ -1,6 +1,7 @@
 package com.example.skip
 
 import android.app.Activity
+import android.content.res.Resources
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.View
@@ -98,7 +99,14 @@ private class HiddenAccessibilityContainer(
         super.onInitializeAccessibilityNodeInfo(info)
         info?.setVisibleToUser(false)
         info?.setEnabled(true)
-        info?.setBoundsInScreen(Rect(0, 0, 1080, 1920))
+        info?.setBoundsInScreen(
+            Rect(
+                0,
+                0,
+                Resources.getSystem().displayMetrics.widthPixels,
+                Resources.getSystem().displayMetrics.heightPixels
+            )
+        )
     }
 }
 
@@ -118,7 +126,7 @@ private class VisibleSkipButton(
         info?.setVisibleToUser(true)
         info?.setEnabled(true)
         info?.setClickable(true)
-        info?.setBoundsInScreen(Rect(900, 40, 1020, 120))
+        info?.setBoundsInScreen(topRightBounds(width = 120, height = 80, rightMargin = 60, top = 40))
     }
 }
 
@@ -258,7 +266,7 @@ private class StandaloneSkipClickableParent(
         info?.setVisibleToUser(true)
         info?.setEnabled(true)
         info?.setClickable(true)
-        info?.setBoundsInScreen(Rect(896, 24, 1_040, 136))
+        info?.setBoundsInScreen(topRightBounds(width = 144, height = 112, rightMargin = 40, top = 24))
     }
 }
 
@@ -278,7 +286,7 @@ private class StandaloneSkipTextView(
         info?.setVisibleToUser(true)
         info?.setEnabled(true)
         info?.setClickable(false)
-        info?.setBoundsInScreen(Rect(944, 48, 1_016, 112))
+        info?.setBoundsInScreen(topRightBounds(width = 72, height = 64, rightMargin = 64, top = 48))
     }
 }
 
@@ -300,7 +308,7 @@ private class StandaloneSkipEditableActionParent(
         info?.setVisibleToUser(true)
         info?.setEnabled(true)
         info?.setClickable(true)
-        info?.setBoundsInScreen(Rect(896, 24, 1_040, 136))
+        info?.setBoundsInScreen(topRightBounds(width = 144, height = 112, rightMargin = 40, top = 24))
     }
 }
 
@@ -323,7 +331,7 @@ private class EditableActionPathNode(
         info?.setVisibleToUser(true)
         info?.setEnabled(true)
         info?.setClickable(false)
-        info?.setBoundsInScreen(Rect(920, 32, 1_024, 120))
+        info?.setBoundsInScreen(topRightBounds(width = 104, height = 88, rightMargin = 56, top = 32))
     }
 }
 
@@ -519,4 +527,15 @@ private class SearchClearButton(
         info?.setClickable(true)
         info?.setBoundsInScreen(Rect(916, 48, 1012, 144))
     }
+}
+
+private fun topRightBounds(
+    width: Int,
+    height: Int,
+    rightMargin: Int,
+    top: Int
+): Rect {
+    val screenWidth = Resources.getSystem().displayMetrics.widthPixels.coerceAtLeast(1)
+    val right = (screenWidth - rightMargin).coerceAtLeast(width)
+    return Rect(right - width, top, right, top + height)
 }

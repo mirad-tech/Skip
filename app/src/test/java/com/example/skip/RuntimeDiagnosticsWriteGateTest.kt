@@ -29,7 +29,7 @@ class RuntimeDiagnosticsWriteGateTest {
     }
 
     @Test
-    fun forcedTerminalFailureFlushesPendingActivityAndReason() {
+    fun forcedFailurePersistsReasonWithoutBypassingPendingActivityThrottle() {
         val gate = RuntimeDiagnosticsWriteGate(minPersistIntervalMs = 30_000L)
         gate.initialize(persistedServiceActiveAt = 10_000L, persistedFailureReason = "")
         assertNull(gate.recordServiceActive(10_100L))
@@ -40,7 +40,30 @@ class RuntimeDiagnosticsWriteGateTest {
             force = true
         )
 
-        assertEquals(10_100L, update?.serviceActiveAt)
+        assertNull(update?.serviceActiveAt)
         assertEquals("candidate_lost_before_click", update?.lastFailureReason)
+
+        val flushUpdate = gate.flush(10_300L)
+        assertEquals(10_100L, flushUpdate?.serviceActiveAt)
+        assertNull(flushUpdate?.lastFailureReason)
+    }
+
+    @Test
+    fun repeatedForcedReasonDoesNotPersistThrottledActivity() {
+        val gate = RuntimeDiagnosticsWriteGate(minPersistIntervalMs = 30_000L)
+        gate.initialize(persistedServiceActiveAt = 10_000L, persistedFailureReason = "")
+
+        assertNull(gate.recordServiceActive(10_100L))
+        assertEquals(
+            "automation_paused",
+            gate.recordFailureReason("automation_paused", 10_200L, force = true)?.lastFailureReason
+        )
+
+        assertNull(gate.recordServiceActive(10_300L))
+        assertNull(gate.recordFailureReason("automation_paused", 10_400L, force = true))
+
+        val flushUpdate = gate.flush(10_500L)
+        assertEquals(10_300L, flushUpdate?.serviceActiveAt)
+        assertNull(flushUpdate?.lastFailureReason)
     }
 }

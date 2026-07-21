@@ -115,16 +115,14 @@ fun AppDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "自定义规则：${rules.size} · 命中：${status.hitCount} · 成功：${status.successCount}",
+                        text = "自定义规则：${rules.size} · 事件：${status.eventCount} · 成功：${status.successCount}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = if (logs.firstOrNull { it.planScope.isNotBlank() }?.planScope == "precise_takeover") {
-                            "当前执行模式：精确规则接管"
-                        } else {
-                            "当前执行模式：通用规则回退"
-                        },
+                        text = recentExecutionModeLabel(
+                            logs.firstOrNull { it.planScope.isNotBlank() }?.planScope
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -241,7 +239,7 @@ fun AppDetailScreen(
                 }
             }
 
-            SectionTitle("最近命中日志")
+            SectionTitle("最近执行日志")
             if (logs.isEmpty()) {
                 InfoCard("暂无数据")
             } else {
@@ -302,6 +300,14 @@ fun AppDetailScreen(
                 onImportJsonRule(packageName)
             }
         )
+    }
+}
+
+internal fun recentExecutionModeLabel(planScope: String?): String {
+    return when (planScope) {
+        "precise_takeover" -> "最近执行模式：精确规则接管"
+        null -> "最近执行模式：暂无记录"
+        else -> "最近执行模式：通用规则"
     }
 }
 

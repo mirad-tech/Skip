@@ -73,7 +73,7 @@ fun StatsScreen(onBack: () -> Unit) {
             }
             add(StatsListEntry.Header("按规则"))
             if (stats.ruleStats.isEmpty()) {
-                add(StatsListEntry.Empty("暂无数据", "规则命中后会在这里汇总。"))
+                add(StatsListEntry.Empty("暂无数据", "规则相关事件会在这里汇总。"))
             } else {
                 stats.ruleStats.forEach { add(StatsListEntry.RuleEntry(it)) }
             }
@@ -93,7 +93,7 @@ fun StatsScreen(onBack: () -> Unit) {
     )
 
     LazyScreenScaffold(
-        title = "命中统计",
+        title = "事件统计",
         onBack = onBack,
         listState = listState
     ) {
@@ -192,7 +192,7 @@ private sealed interface StatsListEntry {
 private fun AppStatCard(stat: AppHitStats) {
     StatSummaryCard(
         title = stat.appName.ifBlank { stat.packageName },
-        body = "${stat.packageName}\n命中 ${stat.totalCount} · 成功 ${stat.successCount} · 失败 ${stat.failureCount}\n安全阻止 ${stat.safetyBlockedCount} · 坐标兜底 ${stat.coordinateFallbackCount}\n最近 ${formatTime(stat.lastHitTimeMillis)}"
+        body = "${stat.packageName}\n事件 ${stat.totalCount} · 成功 ${stat.successCount} · 失败 ${stat.failureCount}\n安全阻止 ${stat.safetyBlockedCount} · 坐标兜底 ${stat.coordinateFallbackCount}\n最近 ${formatTime(stat.lastHitTimeMillis)}"
     )
 }
 
@@ -200,7 +200,7 @@ private fun AppStatCard(stat: AppHitStats) {
 private fun RuleStatCard(stat: RuleHitStats) {
     StatSummaryCard(
         title = stat.ruleName,
-        body = "${stat.packageName}\n命中 ${stat.totalCount} · 成功 ${stat.successCount} · 失败 ${stat.failureCount}\n安全阻止 ${stat.safetyBlockedCount} · 坐标兜底 ${stat.coordinateFallbackCount}\n最近 ${formatTime(stat.lastHitTimeMillis)}"
+        body = "${stat.packageName}\n事件 ${stat.totalCount} · 成功 ${stat.successCount} · 失败 ${stat.failureCount}\n安全阻止 ${stat.safetyBlockedCount} · 坐标兜底 ${stat.coordinateFallbackCount}\n最近 ${formatTime(stat.lastHitTimeMillis)}"
     )
 }
 

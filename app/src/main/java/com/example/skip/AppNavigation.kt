@@ -54,6 +54,47 @@ internal fun appDetailOrHub(
     } ?: AppScreen.AppHub
 }
 
+internal data class EnableAutomationDecision(
+    val enableMaster: Boolean,
+    val nextScreen: AppScreen
+)
+
+internal fun enableAutomationDecision(
+    releaseDisclosureAccepted: Boolean,
+    serviceEnabled: Boolean
+): EnableAutomationDecision {
+    return when {
+        !releaseDisclosureAccepted -> EnableAutomationDecision(
+            enableMaster = false,
+            nextScreen = AppScreen.Onboarding()
+        )
+
+        serviceEnabled -> EnableAutomationDecision(
+            enableMaster = true,
+            nextScreen = AppScreen.Home
+        )
+
+        else -> EnableAutomationDecision(
+            enableMaster = false,
+            nextScreen = AppScreen.AccessibilityPurpose()
+        )
+    }
+}
+
+internal data class AccessibilitySettingsDecision(
+    val enableMaster: Boolean,
+    val returnScreen: AppScreen
+)
+
+internal fun accessibilitySettingsDecision(
+    returnScreen: AppScreen
+): AccessibilitySettingsDecision {
+    return AccessibilitySettingsDecision(
+        enableMaster = returnScreen == AppScreen.Home,
+        returnScreen = returnScreen
+    )
+}
+
 internal sealed interface AppScreen {
     data object Home : AppScreen
     data class Onboarding(
