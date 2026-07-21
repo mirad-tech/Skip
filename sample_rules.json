@@ -1,43 +1,36 @@
 {
-  "schemaVersion": 2,
-  "name": "Skip 本地低风险示例规则包",
+  "schemaVersion": 3,
+  "name": "Skip 安全精确规则示例",
   "version": 1,
   "author": "local",
-  "updateTime": "2026-05-14",
-  "description": "示例仅用于开屏页面助手场景，不包含高风险按钮，不启用坐标兜底。",
-  "appPolicies": [
-    {
-      "packageName": "com.example.app",
-      "defaultRuleEnabled": true,
-      "customRulesEnabled": true
-    }
-  ],
+  "updateTime": "2026-07-21",
+  "description": "仅演示已有稳定 Activity 与完整 View ID 证据的精确规则。",
   "apps": [
     {
-      "packageName": "com.example.app",
-      "appName": "示例 App",
+      "packageName": "com.duowan.kiwi",
+      "appName": "虎牙直播",
       "rules": [
         {
-          "id": "sample_opening_page_skip",
-          "name": "开屏页面跳过控件",
-          "activityName": "*",
-          "matchTexts": ["跳过", "关闭", "以后再说"],
-          "matchContentDescriptions": ["跳过", "关闭"],
-          "matchViewIds": ["com.example.app:id/ad_skip", "com.example.app:id/splash_close"],
-          "textMatchMode": "contains",
-          "contentDescriptionMatchMode": "contains",
-          "viewIdMatchMode": "contains",
+          "id": "sample_precise_com.duowan.kiwi_second_splash",
+          "kind": "precise",
+          "name": "虎牙第二开屏跳过示例",
+          "activityName": "com.duowan.kiwi.adsplash.view.SecondAdSplashActivity",
+          "matchTexts": ["跳过"],
+          "matchContentDescriptions": [],
+          "matchViewIds": ["com.duowan.kiwi:id/skip_time"],
+          "textMatchMode": "exact",
+          "contentDescriptionMatchMode": "exact",
+          "viewIdMatchMode": "exact",
           "area": "top_right",
           "action": "click",
-          "priority": 10,
-          "cooldownMs": 1200,
-          "validDurationMs": 8000,
-          "minScore": 72,
+          "priority": 300,
+          "cooldownMs": 1500,
+          "validDurationMs": 15000,
+          "minScore": 70,
           "coordinateFallback": {
             "enabled": false,
             "xRatio": 0.9,
-            "yRatio": 0.12,
-            "anchorTexts": ["开屏提示"]
+            "yRatio": 0.12
           }
         }
       ]

@@ -3,6 +3,7 @@ package com.example.skip.model
 data class SkipRule(
     val id: String,
     val source: RuleSource,
+    val kind: RuleKind = RuleKind.Standard,
     val name: String,
     val packageName: String,
     val appName: String,
@@ -24,6 +25,15 @@ data class SkipRule(
     val packageId: String = "local",
     val createdAt: Long = System.currentTimeMillis()
 )
+
+enum class RuleKind(val value: String, val label: String) {
+    Standard("standard", "普通规则"),
+    Precise("precise", "精确规则");
+
+    companion object {
+        fun fromValue(value: String): RuleKind? = entries.firstOrNull { it.value == value }
+    }
+}
 
 enum class RuleSource(val value: String, val label: String) {
     UserSimple("user_simple", "普通创建"),

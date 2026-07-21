@@ -5,10 +5,12 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.example.skip.model.MatchMode
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleSource
+import com.example.skip.model.RuleKind
 import com.example.skip.model.SkipRule
 import java.util.Locale
 
 object ScoreEvaluator {
+    const val GENERIC_CLOSE_BLOCKED_REASON = "generic_close_without_ad_context"
     private const val MAX_SKIP_TEXT_LENGTH = 32
     private const val TRUSTED_GENERIC_CLOSE_BONUS = 15
     private const val MAX_TRUSTED_GENERIC_CLOSE_AREA_RATIO = 0.02f
@@ -42,6 +44,25 @@ object ScoreEvaluator {
     )
 
     private val trustedGenericClosePackages = emptySet<String>()
+
+    internal fun hasPotentialRuleMatch(
+        signals: RuleCandidateSignals,
+        rule: SkipRule
+    ): Boolean {
+        return matchedTextRule(
+            values = listOf(signals.text),
+            keywords = rule.matchTexts,
+            mode = rule.textMatchMode
+        ) != null || matchedTextRule(
+            values = listOf(signals.contentDescription),
+            keywords = rule.matchContentDescriptions,
+            mode = rule.contentDescriptionMatchMode
+        ) != null || matchedIdRule(
+            viewId = signals.viewId,
+            keywords = rule.matchViewIds,
+            mode = rule.viewIdMatchMode
+        ) != null
+    }
 
     internal fun evaluate(
         node: AccessibilityNodeInfo,
@@ -101,6 +122,24 @@ object ScoreEvaluator {
         var score = 0
         val area = areaInScreen(candidate.bounds)
         val matchedKeyword = textRule ?: descriptionRule ?: idRule ?: rule.name
+        PreciseRulePolicy.candidateEvidenceError(
+            rule = rule,
+            matchedViewIdRule = idRule,
+            matchedTextRule = textRule,
+            matchedDescriptionRule = descriptionRule,
+            candidateArea = area
+        )?.let { reason ->
+            return ScoreEvaluation(
+                rule = rule,
+                score = 0,
+                minScore = rule.minScore,
+                matchedKeyword = matchedKeyword,
+                area = area,
+                passesMinScore = false,
+                failureReason = reason,
+                clickSelection = resolution.strictSelection
+            )
+        }
         if (isDangerousButtonText(textValue, descriptionValue)) {
             return ScoreEvaluation(
                 rule,
@@ -120,7 +159,33 @@ object ScoreEvaluator {
         var clickSelection = resolution.strictSelection
         var standaloneSkipAllowed = false
         if (textKeywordIsStandaloneSkip) {
-            if (!defaultRule) {
+            if (rule.kind == RuleKind.Precise && PreciseRulePolicy.isValid(rule)) {
+                val preciseSelection = resolution.relaxedSelection
+                val pathDecision = ClickActionPathSafetyPolicy.evaluate(
+                    ClickActionPathSafetyContext(
+                        candidate = candidate,
+                        actionPath = resolution.actionPathFor(preciseSelection),
+                        ancestorSafetyTexts = resolution.ancestorSafetyTexts
+                    )
+                )
+                if (!pathDecision.allowed) {
+                    return ScoreEvaluation(
+                        rule = rule,
+                        score = 0,
+                        minScore = rule.minScore,
+                        matchedKeyword = matchedKeyword,
+                        area = area,
+                        passesMinScore = false,
+                        failureReason = pathDecision.reason,
+                        textKeywordIsStandaloneSkip = true,
+                        candidateAreaRatio = areaRatio,
+                        isLargeCandidateBounds = largeCandidate,
+                        clickSelection = preciseSelection
+                    )
+                }
+                clickSelection = preciseSelection
+                standaloneSkipAllowed = true
+            } else if (!defaultRule) {
                 return ScoreEvaluation(
                     rule,
                     score = 0,
@@ -135,36 +200,37 @@ object ScoreEvaluator {
                     isLargeCandidateBounds = largeCandidate,
                     clickSelection = clickSelection
                 )
-            }
-            val standaloneDecision = DefaultStandaloneSkipPolicy.evaluate(
-                DefaultStandaloneSkipContext(
-                    ruleSource = rule.source,
-                    appElapsedMs = appElapsedMs,
-                    area = area,
-                    candidateAreaRatio = areaRatio,
-                    candidate = candidate,
-                    actionPath = resolution.actionPathFor(resolution.relaxedSelection),
-                    ancestorSafetyTexts = resolution.ancestorSafetyTexts
+            } else {
+                val standaloneDecision = DefaultStandaloneSkipPolicy.evaluate(
+                    DefaultStandaloneSkipContext(
+                        ruleSource = rule.source,
+                        appElapsedMs = appElapsedMs,
+                        area = area,
+                        candidateAreaRatio = areaRatio,
+                        candidate = candidate,
+                        actionPath = resolution.actionPathFor(resolution.relaxedSelection),
+                        ancestorSafetyTexts = resolution.ancestorSafetyTexts
+                    )
                 )
-            )
-            if (!standaloneDecision.allowed) {
-                return ScoreEvaluation(
-                    rule,
-                    score = 0,
-                    minScore = rule.minScore,
-                    matchedKeyword = matchedKeyword,
-                    area = area,
-                    passesMinScore = false,
-                    failureReason = standaloneDecision.reason,
-                    defaultRuleAreaAllowed = defaultAreaAllowed,
-                    textKeywordIsStandaloneSkip = true,
-                    candidateAreaRatio = areaRatio,
-                    isLargeCandidateBounds = largeCandidate,
-                    clickSelection = clickSelection
-                )
+                if (!standaloneDecision.allowed) {
+                    return ScoreEvaluation(
+                        rule,
+                        score = 0,
+                        minScore = rule.minScore,
+                        matchedKeyword = matchedKeyword,
+                        area = area,
+                        passesMinScore = false,
+                        failureReason = standaloneDecision.reason,
+                        defaultRuleAreaAllowed = defaultAreaAllowed,
+                        textKeywordIsStandaloneSkip = true,
+                        candidateAreaRatio = areaRatio,
+                        isLargeCandidateBounds = largeCandidate,
+                        clickSelection = clickSelection
+                    )
+                }
+                clickSelection = resolution.relaxedSelection
+                standaloneSkipAllowed = true
             }
-            clickSelection = resolution.relaxedSelection
-            standaloneSkipAllowed = true
         }
         if (!standaloneSkipAllowed &&
             idRule == null &&
@@ -183,7 +249,7 @@ object ScoreEvaluator {
             )
         }
 
-        if (defaultRule && largeCandidate) {
+        if ((defaultRule || rule.kind == RuleKind.Precise) && largeCandidate) {
             return ScoreEvaluation(
                 rule,
                 score = 0,
@@ -198,7 +264,7 @@ object ScoreEvaluator {
                 isLargeCandidateBounds = true
             )
         }
-        if (defaultRule && clickSelection == null) {
+        if ((defaultRule || rule.kind == RuleKind.Precise) && clickSelection == null) {
             return ScoreEvaluation(
                 rule,
                 score = 0,
@@ -251,7 +317,11 @@ object ScoreEvaluator {
             matchedKeyword = matchedKeyword,
             area = area,
             passesMinScore = score >= minScore,
-            failureReason = if (score >= minScore) "" else "score_below_min_score",
+            failureReason = when {
+                score >= minScore -> ""
+                onlyGenericClose -> GENERIC_CLOSE_BLOCKED_REASON
+                else -> "score_below_min_score"
+            },
             defaultRuleAreaAllowed = if (defaultRule) defaultAreaAllowed else null,
             textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
             candidateAreaRatio = areaRatio,
@@ -261,13 +331,19 @@ object ScoreEvaluator {
         )
     }
 
-    private fun matchedTextRule(values: List<String>, keywords: List<String>, mode: MatchMode): String? {
+    internal fun matchedTextRule(values: List<String>, keywords: List<String>, mode: MatchMode): String? {
         return values.firstNotNullOfOrNull { value ->
             val normalized = value.trim()
             if (normalized.isEmpty() || normalized.length > MAX_SKIP_TEXT_LENGTH) return@firstNotNullOfOrNull null
             val lower = normalized.lowercase(Locale.ROOT)
             if (blockedTextFragments.any { lower.contains(it) }) return@firstNotNullOfOrNull null
-            keywords.firstOrNull { keyword -> lower.matchesRuleKeyword(keyword, mode) }
+            val matches = keywords.filter { keyword -> lower.matchesRuleKeyword(keyword, mode) }
+            if (mode != MatchMode.Contains) return@firstNotNullOfOrNull matches.firstOrNull()
+            matches.maxWithOrNull(
+                compareBy<String> { keyword ->
+                    lower == keyword.trim().lowercase(Locale.ROOT)
+                }.thenBy { keyword -> keyword.trim().length }
+            )
         }
     }
 

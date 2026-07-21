@@ -20,6 +20,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import com.example.skip.data.DiagnosticReportRepository
 import com.example.skip.data.JsonExportWriter
 import com.example.skip.data.LogRepository
+import com.example.skip.data.LogStorageState
 import com.example.skip.data.SettingsRepository
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickLogStage
@@ -57,6 +59,7 @@ fun ClickLogScreen(
     val context = LocalContext.current
     val appContext = context.applicationContext
     val coroutineScope = rememberCoroutineScope()
+    val storageState by LogRepository.storageState.collectAsState()
     val listState = rememberLazyListState()
     val versionName = remember {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
@@ -72,11 +75,16 @@ fun ClickLogScreen(
 
     LaunchedEffect(context) {
         loading = true
-        val loaded = withContext(Dispatchers.IO) {
+        val loaded = runCatching { withContext(Dispatchers.IO) {
             LogRepository.getClickLogs(context) to LogRepository.getRuleLogs(context)
+        } }
+        loaded.onSuccess { value ->
+            logs = value.first
+            ruleLogs = value.second
+        }.onFailure {
+            logs = LogRepository.getCachedClickLogs()
+            message = "日志读取失败，可稍后重试"
         }
-        logs = loaded.first
-        ruleLogs = loaded.second
         loading = false
     }
 
@@ -147,6 +155,29 @@ fun ClickLogScreen(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
+                if (!showRuleLogs && storageState is LogStorageState.Degraded) {
+                    Text(
+                        text = "日志存储暂时不可用，当前显示进程缓存；自动跳过功能不受影响。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Button(onClick = {
+                        LogRepository.retryStorageNow(appContext)
+                        coroutineScope.launch {
+                            loading = true
+                            logs = withContext(Dispatchers.IO) { LogRepository.getClickLogs(appContext) }
+                            loading = false
+                        }
+                    }) { Text("重试日志存储") }
+                } else if (!showRuleLogs &&
+                    (storageState as? LogStorageState.Ready)?.legacyDataQuarantined == true
+                ) {
+                    Text(
+                        text = "检测到部分损坏的旧日志，已在本机隔离，其余功能可正常使用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -159,8 +190,16 @@ fun ClickLogScreen(
                                 LogRepository.clearRuleLogs(context)
                                 ruleLogs = emptyList()
                             } else {
-                                LogRepository.clearClickLogs(context)
-                                logs = emptyList()
+                                coroutineScope.launch {
+                                    val cleared = runCatching { withContext(Dispatchers.IO) {
+                                        LogRepository.clearClickLogs(appContext)
+                                    } }
+                                    if (cleared.isSuccess) {
+                                        logs = emptyList()
+                                    } else {
+                                        message = "清空失败，请在日志存储恢复后重试"
+                                    }
+                                }
                             }
                         }
                     ) {

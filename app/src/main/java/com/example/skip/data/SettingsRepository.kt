@@ -25,6 +25,8 @@ object SettingsRepository {
     private const val KEY_LAST_FAILURE_REASON = "last_failure_reason"
     private const val KEY_SAFETY_MODE_ENABLED = "safety_mode_enabled"
     private const val KEY_RELEASE_DISCLOSURE_ACCEPTED = "release_disclosure_accepted_v1"
+    private val runtimeDiagnosticsLock = Any()
+    private val runtimeDiagnosticsWriteGate = RuntimeDiagnosticsWriteGate()
 
     data class DiagnosticSnapshot(
         val masterEnabled: Boolean,
@@ -267,10 +269,15 @@ object SettingsRepository {
     }
 
     fun markServiceActive(context: Context, timeMillis: Long = System.currentTimeMillis()) {
-        prefs(context).edit { putLong(KEY_SERVICE_ACTIVE_AT, timeMillis) }
+        val update = synchronized(runtimeDiagnosticsLock) {
+            ensureRuntimeDiagnosticsInitialized(context)
+            runtimeDiagnosticsWriteGate.recordServiceActive(timeMillis)
+        }
+        persistRuntimeDiagnostics(context, update)
     }
 
     fun markServiceInterrupted(context: Context, timeMillis: Long = System.currentTimeMillis()) {
+        flushRuntimeDiagnostics(context, timeMillis)
         prefs(context).edit { putLong(KEY_SERVICE_INTERRUPTED_AT, timeMillis) }
     }
 
@@ -278,8 +285,28 @@ object SettingsRepository {
         prefs(context).edit { putLong(KEY_LAST_CLICK_AT, timeMillis) }
     }
 
-    fun setLastFailureReason(context: Context, reason: String) {
-        prefs(context).edit { putString(KEY_LAST_FAILURE_REASON, reason) }
+    fun setLastFailureReason(
+        context: Context,
+        reason: String,
+        forcePersist: Boolean = false,
+        timeMillis: Long = System.currentTimeMillis()
+    ) {
+        val update = synchronized(runtimeDiagnosticsLock) {
+            ensureRuntimeDiagnosticsInitialized(context)
+            runtimeDiagnosticsWriteGate.recordFailureReason(reason, timeMillis, forcePersist)
+        }
+        persistRuntimeDiagnostics(context, update)
+    }
+
+    fun flushRuntimeDiagnostics(
+        context: Context,
+        timeMillis: Long = System.currentTimeMillis()
+    ) {
+        val update = synchronized(runtimeDiagnosticsLock) {
+            ensureRuntimeDiagnosticsInitialized(context)
+            runtimeDiagnosticsWriteGate.flush(timeMillis)
+        }
+        persistRuntimeDiagnostics(context, update)
     }
 
     fun getServiceConnectedAt(context: Context): Long {
@@ -303,6 +330,7 @@ object SettingsRepository {
     }
 
     fun getDiagnosticSnapshot(context: Context): DiagnosticSnapshot {
+        flushRuntimeDiagnostics(context)
         return DiagnosticSnapshot(
             masterEnabled = isMasterEnabled(context),
             safetyModeEnabled = isSafetyModeEnabled(context),
@@ -321,6 +349,25 @@ object SettingsRepository {
 
     internal fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun ensureRuntimeDiagnosticsInitialized(context: Context) {
+        val preferences = prefs(context)
+        runtimeDiagnosticsWriteGate.initialize(
+            persistedServiceActiveAt = preferences.getLong(KEY_SERVICE_ACTIVE_AT, 0L),
+            persistedFailureReason = preferences.getString(KEY_LAST_FAILURE_REASON, "").orEmpty()
+        )
+    }
+
+    private fun persistRuntimeDiagnostics(
+        context: Context,
+        update: RuntimeDiagnosticsUpdate?
+    ) {
+        if (update == null || update.isEmpty) return
+        prefs(context).edit {
+            update.serviceActiveAt?.let { putLong(KEY_SERVICE_ACTIVE_AT, it) }
+            update.lastFailureReason?.let { putString(KEY_LAST_FAILURE_REASON, it) }
+        }
+    }
 
     private fun iconPrefs(context: Context) =
         context.applicationContext.getSharedPreferences(ICON_PREFS_NAME, Context.MODE_PRIVATE)

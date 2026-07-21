@@ -9,20 +9,33 @@ import com.example.skip.model.RuleAction
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleImportResult
 import com.example.skip.model.RulePackage
+import com.example.skip.model.RuleKind
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
+import com.example.skip.engine.BuiltInPreciseRuleCatalog
+import com.example.skip.engine.PreciseRulePolicy
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
 object RuleRepository {
+    data class RuleImportSaveResult(
+        val success: Boolean,
+        val savedCount: Int = 0,
+        val errorMessage: String = ""
+    )
+
+    internal data class RuleMergeResult(
+        val rule: SkipRule? = null,
+        val errorMessage: String = ""
+    )
     const val DEFAULT_RULE_WINDOW_MS = 8_000L
     const val MAX_COORDINATE_FALLBACK_WINDOW_MS = 6_000L
     const val DEFAULT_RULE_MIN_SCORE = 70
     const val DEFAULT_RULE_COOLDOWN_MS = 1_500L
     const val MIN_DEFAULT_RULE_COOLDOWN_MS = 800L
 
-    val defaultRuleDurationOptionsMs = listOf(6_000L, DEFAULT_RULE_WINDOW_MS, 10_000L)
+    val defaultRuleDurationOptionsMs = listOf(DEFAULT_RULE_WINDOW_MS)
 
     private const val KEY_KEYWORDS = "keywords"
     private const val KEY_VIEW_ID_KEYWORDS = "view_id_keywords"
@@ -234,7 +247,11 @@ object RuleRepository {
         return createBuiltInRuleForPackage(context, packageName)
     }
 
+    fun getBuiltInPreciseRulesForPackage(packageName: String): List<SkipRule> =
+        BuiltInPreciseRuleCatalog.forPackage(packageName)
+
     fun upsertRule(context: Context, rule: SkipRule) {
+        PreciseRulePolicy.validationError(rule)?.let { throw IllegalArgumentException(it) }
         val updated = getRules(context)
             .filterNot { it.id == rule.id }
             .plus(rule)
@@ -271,8 +288,9 @@ object RuleRepository {
         context: Context,
         result: RuleImportResult,
         strategy: DuplicateStrategy
-    ): Int {
-        val packageInfo = result.rulePackage ?: return 0
+    ): RuleImportSaveResult {
+        val packageInfo = result.rulePackage
+            ?: return RuleImportSaveResult(false, errorMessage = "规则包信息缺失")
         val existingRules = getRules(context).toMutableList()
         val existingIds = existingRules.map { it.id }.toSet()
         var savedCount = 0
@@ -286,7 +304,14 @@ object RuleRepository {
                     savedCount++
                 }
                 index >= 0 && strategy == DuplicateStrategy.Merge -> {
-                    existingRules[index] = existingRules[index].mergeWith(rule)
+                    val mergeResult = mergeRuleForImport(existingRules[index], rule)
+                    mergeResult.errorMessage.takeIf(String::isNotBlank)?.let { error ->
+                        return RuleImportSaveResult(
+                            success = false,
+                            errorMessage = "规则 ${rule.id} 合并失败：$error"
+                        )
+                    }
+                    existingRules[index] = requireNotNull(mergeResult.rule)
                     savedCount++
                 }
                 rule.id !in existingIds -> {
@@ -305,7 +330,7 @@ object RuleRepository {
         } else {
             cleanupRulePackages(context, existingRules)
         }
-        return savedCount
+        return RuleImportSaveResult(success = true, savedCount = savedCount)
     }
 
     fun getRulePackages(context: Context): List<RulePackage> {
@@ -337,7 +362,7 @@ object RuleRepository {
 
     fun exportRulesAsJson(context: Context): String {
         val packageJson = JSONObject()
-            .put("schemaVersion", 2)
+            .put("schemaVersion", 3)
             .put("name", "Skip 本地规则导出")
             .put("version", 1)
             .put("author", "local")
@@ -406,7 +431,7 @@ object RuleRepository {
             area = defaultRuleConfig.area,
             priority = 1,
             cooldownMs = defaultRuleConfig.cooldownMs,
-            validDurationMs = defaultRuleConfig.validDurationMs,
+            validDurationMs = DEFAULT_RULE_WINDOW_MS,
             minScore = defaultRuleConfig.minScore,
             packageId = "built_in"
         )
@@ -415,10 +440,18 @@ object RuleRepository {
     internal fun normalizeRuleWindowForStorage(rule: SkipRule): SkipRule {
         val validDurationMs = if (rule.coordinateFallback?.enabled == true) {
             canonicalCoordinateFallbackWindowMs(rule.validDurationMs)
+        } else if (rule.kind == RuleKind.Precise) {
+            PreciseRulePolicy.canonicalWindowMs(rule.validDurationMs)
         } else {
             DEFAULT_RULE_WINDOW_MS
         }
         return rule.copy(validDurationMs = validDurationMs)
+    }
+
+    internal fun mergeRuleForImport(existing: SkipRule, incoming: SkipRule): RuleMergeResult {
+        val merged = normalizeRuleWindowForStorage(existing.mergeWith(incoming))
+        val error = PreciseRulePolicy.validationError(merged)
+        return if (error == null) RuleMergeResult(rule = merged) else RuleMergeResult(errorMessage = error)
     }
 
     fun canonicalCoordinateFallbackWindowMs(requestedWindowMs: Long): Long {
@@ -464,6 +497,8 @@ object RuleRepository {
 
     private fun SkipRule.mergeWith(other: SkipRule): SkipRule {
         return copy(
+            kind = other.kind,
+            activityName = if (other.kind == RuleKind.Precise) other.activityName.trim() else "*",
             name = other.name.ifBlank { name },
             appName = other.appName.ifBlank { appName },
             enabled = other.enabled,
@@ -489,6 +524,7 @@ object RuleRepository {
         return JSONObject().apply {
             put("id", id)
             put("source", source.value)
+            put("kind", kind.value)
             put("name", name)
             if (includePackage) put("packageName", packageName)
             if (includePackage) put("appName", appName)
@@ -516,10 +552,12 @@ object RuleRepository {
         val action = RuleAction.fromValue(optString("action", RuleAction.Click.value)) ?: return null
         val area = RuleArea.fromValue(optString("area", RuleArea.TopRight.value)) ?: return null
         val source = RuleSource.fromValue(optString("source", RuleSource.UserSimple.value))
+        val kind = RuleKind.fromValue(optString("kind", RuleKind.Standard.value)) ?: return null
         val coordinateFallback = optJSONObject("coordinateFallback")?.toCoordinateFallback()
         return SkipRule(
             id = optString("id").ifBlank { "rule_${UUID.randomUUID()}" },
             source = source,
+            kind = kind,
             name = optString("name", "开屏跳过"),
             packageName = optString("packageName"),
             appName = optString("appName"),

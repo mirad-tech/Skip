@@ -14,13 +14,15 @@ import com.example.skip.util.RomUtils
 import java.time.Instant
 
 object DiagnosticReportRepository {
-    const val SCHEMA_VERSION = 2
+    const val SCHEMA_VERSION = 4
 
-    fun exportDiagnosticReportAsJson(
+    suspend fun exportDiagnosticReportAsJson(
         context: Context,
         versionName: String,
         exportTimeMillis: Long = System.currentTimeMillis()
     ): String {
+        val clickLogs = LogRepository.getClickLogs(context)
+        val throttleSummary = LogRepository.getClickLogThrottleSummary(context)
         return buildReportJson(
             versionName = versionName,
             exportTimeMillis = exportTimeMillis,
@@ -28,12 +30,14 @@ object DiagnosticReportRepository {
             runtimeState = SettingsRepository.getDiagnosticSnapshot(context),
             rules = RuleRepository.getRules(context),
             rulePackages = RuleRepository.getRulePackages(context),
-            clickLogs = LogRepository.getClickLogs(context),
+            clickLogs = clickLogs,
             ruleLogs = LogRepository.getRuleLogs(context),
             keywords = RuleRepository.getKeywords(context),
             viewIdKeywords = RuleRepository.getViewIdKeywords(context),
             defaultRuleConfig = RuleRepository.getDefaultRuleConfig(context),
-            logThrottleCounts = LogRepository.getClickLogThrottleCounts(context)
+            logThrottleCounts = throttleSummary.counts,
+            logThrottleRangeStartMillis = throttleSummary.rangeStartMillis,
+            logThrottleRangeEndMillis = throttleSummary.rangeEndMillis
         )
     }
 
@@ -49,7 +53,10 @@ object DiagnosticReportRepository {
         keywords: List<String>,
         viewIdKeywords: List<String>,
         defaultRuleConfig: RuleRepository.DefaultRuleConfig = RuleRepository.defaultDefaultRuleConfig(),
-        logThrottleCounts: Map<String, Int> = emptyMap()
+        logThrottleCounts: Map<String, Int> = emptyMap(),
+        logThrottleRangeStartMillis: Long? = null,
+        logThrottleRangeEndMillis: Long? = null,
+        logStorage: LogStorageDiagnosticSnapshot = LogRepository.getStorageDiagnosticSnapshot()
     ): String {
         val sanitizedClickLogs = clickLogs.map(::sanitizeClickLog)
         return jsonObject(
@@ -59,6 +66,7 @@ object DiagnosticReportRepository {
             "privacy" to privacyJson(),
             "device" to deviceJson(deviceInfo),
             "runtimeState" to runtimeJson(runtimeState),
+            "logStorage" to logStorageJson(logStorage),
             "rulesSnapshot" to rulesSnapshotJson(
                 rules = rules,
                 rulePackages = rulePackages,
@@ -74,7 +82,9 @@ object DiagnosticReportRepository {
                 ruleLogs = ruleLogs,
                 now = exportTimeMillis,
                 otherAccessibilityServices = runtimeState.otherAccessibilityServices,
-                logThrottleCounts = logThrottleCounts
+                logThrottleCounts = logThrottleCounts,
+                logThrottleRangeStartMillis = logThrottleRangeStartMillis,
+                logThrottleRangeEndMillis = logThrottleRangeEndMillis
             )
         ).toJsonString()
     }
@@ -89,6 +99,15 @@ object DiagnosticReportRepository {
             "redactionScope" to "text_only",
             "metadataNotice" to "诊断报告会脱敏文本内容，但仍保留包名、Activity 和 View ID 等规则/日志元数据。",
             "screenContentIncluded" to false
+        )
+    }
+
+    private fun logStorageJson(snapshot: LogStorageDiagnosticSnapshot): JsonObjectValue {
+        return jsonObject(
+            "state" to snapshot.state,
+            "pendingWriteCount" to snapshot.pendingWriteCount,
+            "droppedPendingWriteCount" to snapshot.droppedPendingWriteCount,
+            "lastErrorCode" to snapshot.lastErrorCode
         )
     }
 
@@ -195,6 +214,7 @@ object DiagnosticReportRepository {
             "id" to rule.id,
             "source" to rule.source.value,
             "name" to PrivacySanitizer.sanitizeText(rule.name),
+            "kind" to rule.kind.value,
             "packageName" to rule.packageName,
             "appName" to PrivacySanitizer.sanitizeText(rule.appName),
             "enabled" to rule.enabled,
@@ -259,7 +279,9 @@ object DiagnosticReportRepository {
         ruleLogs: List<RuleLog>,
         now: Long,
         otherAccessibilityServices: List<String>,
-        logThrottleCounts: Map<String, Int>
+        logThrottleCounts: Map<String, Int>,
+        logThrottleRangeStartMillis: Long?,
+        logThrottleRangeEndMillis: Long?
     ): JsonObjectValue {
         val stageCounts = clickLogs.groupingBy { it.stage.value }.eachCount()
         val reasonCounts = clickLogs
@@ -267,7 +289,7 @@ object DiagnosticReportRepository {
             .groupingBy { it }
             .eachCount()
         val blockedReasonCounts = clickLogs
-            .mapNotNull { PrivacySanitizer.sanitizeText(it.blockedReason).takeIf(String::isNotBlank) }
+            .mapNotNull { LogRepository.sanitizeDiagnosticReason(it.blockedReason).takeIf(String::isNotBlank) }
             .groupingBy { it }
             .eachCount()
         val packageCounts = clickLogs
@@ -292,10 +314,100 @@ object DiagnosticReportRepository {
             "recentWindows" to recentWindowsJson(clickLogs, now),
             "rawSignalCounts" to rawSignalCountsJson(clickLogs),
             "categoryCounts" to categoryCountsJson(clickLogs),
+            "callbackTiming" to callbackTimingJson(clickLogs),
+            "rescanRecovery" to rescanRecoveryJson(clickLogs),
             "otherAccessibilityServices" to componentStringsJson(otherAccessibilityServices),
-            "logThrottleCounts" to countsJson(logThrottleCounts)
+            "logThrottleCounts" to countsJson(logThrottleCounts),
+            "logThrottleCountRange" to jsonObject(
+                "startMillis" to (logThrottleRangeStartMillis ?: JsonNullValue),
+                "endMillis" to (logThrottleRangeEndMillis ?: JsonNullValue),
+                "startTime" to (logThrottleRangeStartMillis?.let { Instant.ofEpochMilli(it).toString() }
+                    ?: JsonNullValue),
+                "endTime" to (logThrottleRangeEndMillis?.let { Instant.ofEpochMilli(it).toString() }
+                    ?: JsonNullValue)
+            )
         )
     }
+
+    private fun callbackTimingJson(logs: List<ClickLog>): JsonObjectValue {
+        val callbackSamples = logs
+            .filter { it.actualClickDelayMs != null || it.callbackQueueDelayMs != null }
+            .distinctBy { it.callbackTimingKey() }
+        val scanSamples = logs.filter { it.isScanSample() }
+        val delays = callbackSamples.mapNotNull { it.callbackQueueDelayMs }.sorted()
+        val actualDelays = callbackSamples.mapNotNull { it.actualClickDelayMs }.sorted()
+        val scanDurations = scanSamples.mapNotNull { it.scanDurationMs }.sorted()
+        return jsonObject(
+            "sampleCount" to delays.size,
+            "p95Ms" to (percentile95(delays) ?: JsonNullValue),
+            "maxMs" to (delays.maxOrNull() ?: JsonNullValue),
+            "over500MsCount" to delays.count { it > 500L },
+            "over1000MsCount" to delays.count { it > 1_000L },
+            "actualDelaySampleCount" to actualDelays.size,
+            "actualDelayP95Ms" to (percentile95(actualDelays) ?: JsonNullValue),
+            "actualDelayMaxMs" to (actualDelays.maxOrNull() ?: JsonNullValue),
+            "scanDurationSampleCount" to scanDurations.size,
+            "scanDurationP95Ms" to (percentile95(scanDurations) ?: JsonNullValue),
+            "scanDurationMaxMs" to (scanDurations.maxOrNull() ?: JsonNullValue)
+        )
+    }
+
+    private fun percentile95(sortedValues: List<Long>): Long? {
+        if (sortedValues.isEmpty()) return null
+        val index = ((sortedValues.size * 95 + 99) / 100 - 1).coerceIn(sortedValues.indices)
+        return sortedValues[index]
+    }
+
+    private fun rescanRecoveryJson(logs: List<ClickLog>): JsonObjectValue {
+        val rescans = logs.filter { it.isRecoverySample() }
+        return jsonObject(
+            "attemptCount" to rescans.size,
+            "successCount" to rescans.count { it.stage == ClickLogStage.RuleMatched },
+            "reasonCounts" to countsJson(
+                rescans.groupingBy { LogRepository.sanitizeDiagnosticReason(it.rescanReason) }.eachCount()
+            )
+        )
+    }
+
+    private fun ClickLog.isScanSample(): Boolean {
+        if (scanDurationMs == null) return false
+        return stage == ClickLogStage.RuleMatched ||
+            stage == ClickLogStage.RootWindowNull ||
+            stage == ClickLogStage.NoCandidateFound ||
+            stage == ClickLogStage.SkippedByLowScore ||
+            stage == ClickLogStage.SkippedBySafety
+    }
+
+    private fun ClickLog.isRecoverySample(): Boolean {
+        if (rescanReason.isBlank()) return false
+        return stage == ClickLogStage.RuleMatched ||
+            stage == ClickLogStage.RootWindowNull ||
+            stage == ClickLogStage.NoCandidateFound ||
+            stage == ClickLogStage.SkippedByLowScore ||
+            stage == ClickLogStage.SkippedBySafety
+    }
+
+    private fun ClickLog.callbackTimingKey(): CallbackTimingKey {
+        return CallbackTimingKey(
+            foregroundStartTimeMillis = foregroundStartTimeMillis,
+            packageName = packageName,
+            ruleId = ruleId,
+            retryCount = retryCount,
+            plannedDelayMs = delayBeforeClickMs,
+            actualDelayMs = actualClickDelayMs,
+            queueDelayMs = callbackQueueDelayMs
+        )
+    }
+
+    private data class CallbackTimingKey(
+        val foregroundStartTimeMillis: Long?,
+        val packageName: String,
+        val ruleId: String,
+        val retryCount: Int,
+        val plannedDelayMs: Long?,
+        val actualDelayMs: Long?,
+        val queueDelayMs: Long?
+    )
 
     private fun recentWindowsJson(logs: List<ClickLog>, now: Long): JsonObjectValue {
         val oneDayMs = 24L * 60L * 60L * 1000L
@@ -374,7 +486,7 @@ object DiagnosticReportRepository {
     }
 
     private fun ClickLog.diagnosticReason(): String {
-        return PrivacySanitizer.sanitizeText(failureReason.ifBlank { reason })
+        return LogRepository.sanitizeDiagnosticReason(failureReason.ifBlank { reason })
     }
 
     private fun ClickLog.ruleKey(): String {
@@ -387,15 +499,16 @@ object DiagnosticReportRepository {
         return log.copy(
             appName = PrivacySanitizer.sanitizeText(log.appName),
             ruleName = PrivacySanitizer.sanitizeText(log.ruleName),
-            reason = PrivacySanitizer.sanitizeText(log.reason),
-            failureReason = PrivacySanitizer.sanitizeText(log.failureReason),
+            reason = LogRepository.sanitizeDiagnosticReason(log.reason),
+            failureReason = LogRepository.sanitizeDiagnosticReason(log.failureReason),
             detail = PrivacySanitizer.sanitizeText(log.detail),
             matchedKeyword = PrivacySanitizer.sanitizeText(log.matchedKeyword),
             nodeText = PrivacySanitizer.sanitizeText(log.nodeText),
             contentDescription = PrivacySanitizer.sanitizeText(log.contentDescription),
             clickedNodeText = PrivacySanitizer.sanitizeText(log.clickedNodeText),
-            effectConfirmReason = PrivacySanitizer.sanitizeText(log.effectConfirmReason),
-            blockedReason = PrivacySanitizer.sanitizeText(log.blockedReason)
+            effectConfirmReason = LogRepository.sanitizeDiagnosticReason(log.effectConfirmReason),
+            blockedReason = LogRepository.sanitizeDiagnosticReason(log.blockedReason),
+            rescanReason = LogRepository.sanitizeDiagnosticReason(log.rescanReason)
         )
     }
 

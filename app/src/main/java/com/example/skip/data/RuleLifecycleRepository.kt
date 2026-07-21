@@ -9,8 +9,10 @@ import com.example.skip.model.SkipRule
 
 object RuleLifecycleRepository {
     data class MutationResult(
+        val success: Boolean = true,
         val savedCount: Int = 0,
-        val log: RuleLog? = null
+        val log: RuleLog? = null,
+        val errorMessage: String = ""
     )
 
     fun parseJsonImport(
@@ -32,10 +34,19 @@ object RuleLifecycleRepository {
         strategy: DuplicateStrategy,
         now: Long = System.currentTimeMillis()
     ): MutationResult {
-        val savedCount = RuleRepository.saveImportResult(context, result, strategy)
-        val log = jsonImportSavedLog(result, savedCount, now)
+        val saveResult = RuleRepository.saveImportResult(context, result, strategy)
+        if (!saveResult.success) {
+            val log = jsonImportFailedLog(saveResult.errorMessage, now)
+            LogRepository.addRuleLog(context, log)
+            return MutationResult(
+                success = false,
+                errorMessage = saveResult.errorMessage,
+                log = log
+            )
+        }
+        val log = jsonImportSavedLog(result, saveResult.savedCount, now)
         log?.let { LogRepository.addRuleLog(context, it) }
-        return MutationResult(savedCount = savedCount, log = log)
+        return MutationResult(savedCount = saveResult.savedCount, log = log)
     }
 
     fun saveLocalRule(

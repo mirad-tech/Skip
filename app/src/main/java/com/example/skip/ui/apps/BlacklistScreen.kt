@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.InstalledAppRepository
 import com.example.skip.data.InstalledAppStatus
+import com.example.skip.data.LogRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.ui.common.AppIconView
 import com.example.skip.ui.common.AutoLoadMoreEffect
@@ -57,6 +58,7 @@ fun BlacklistScreen(
     LaunchedEffect(context, refreshKey) {
         loading = true
         val loaded = withContext(Dispatchers.IO) {
+            LogRepository.getClickLogs(context)
             val blacklistPackages = SettingsRepository.getBlacklistPackages(context)
             blacklistPackages to blacklistPackages.map {
                 InstalledAppRepository.resolve(context, it)

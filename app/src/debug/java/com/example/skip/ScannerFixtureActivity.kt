@@ -18,6 +18,7 @@ class ScannerFixtureActivity : Activity() {
         ChromeLocationBarAttachmentAdd,
         BilibiliDanmakuClose,
         BilibiliCountdownSkip,
+        GenericCloseOnly,
         BilibiliSearchClearButton,
         FocusedTopSearchField,
         StandaloneSkipInsideClickableParent,
@@ -55,6 +56,10 @@ class ScannerFixtureActivity : Activity() {
                     Scenario.BilibiliCountdownSkip -> addView(
                         BilibiliCountdownSkipButton(context),
                         FrameLayout.LayoutParams(356, 178)
+                    )
+                    Scenario.GenericCloseOnly -> addView(
+                        GenericCloseOnlyButton(context),
+                        FrameLayout.LayoutParams(120, 80)
                     )
                     Scenario.BilibiliSearchClearButton -> addView(
                         BilibiliSearchContainer(context),
@@ -196,6 +201,26 @@ private class BilibiliCountdownSkipButton(
         info?.setEnabled(true)
         info?.setClickable(true)
         info?.setBoundsInScreen(Rect(1020, 2911, 1376, 3089))
+    }
+}
+
+private class GenericCloseOnlyButton(
+    context: android.content.Context
+) : ImageView(context) {
+    init {
+        contentDescription = "×"
+        isEnabled = true
+        isClickable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.contentDescription = "×"
+        info?.setVisibleToUser(true)
+        info?.setEnabled(true)
+        info?.setClickable(true)
+        info?.setBoundsInScreen(Rect(920, 40, 1_040, 120))
     }
 }
 

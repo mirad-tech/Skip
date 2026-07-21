@@ -1,16 +1,23 @@
 package com.example.skip.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ComponentName
+import android.content.Context
+import android.database.ContentObserver
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -40,6 +47,8 @@ import com.example.skip.model.ScanReport
 import com.example.skip.model.SkipRule
 import com.example.skip.util.InstalledAppUtils
 import com.example.skip.util.RomUtils
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class SkipAccessibilityService : AccessibilityService() {
     private var foregroundState = ForegroundWindowState()
@@ -48,24 +57,40 @@ class SkipAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingClick: PendingClick? = null
     private var openingAdRescanKey: String? = null
+    private var openingAdRetryGeneration = 0L
+    private var openingAdRetryScheduled = false
+    private var openingAdRetryCount = 0
+    private var openingAdRetrySessionKey: String? = null
+    private var openingAdTerminalSessionKey: String? = null
     private var lastWindowStateChangedAt = 0L
     private var currentActivityName: String = ""
     private var currentActivityIdentityKnown = false
     private val lastToastAt = mutableMapOf<String, Long>()
     private val lastCoordinateFallbackBlockedAt = mutableMapOf<String, Long>()
     private var popupView: View? = null
+    private var enabledInputMethodPackages: Set<String> = emptySet()
+    private var lastInputMethodRefreshElapsedMillis = 0L
+    private var inputMethodSettingsObserver: ContentObserver? = null
 
     private val foregroundPackage: String?
         get() = foregroundState.currentForegroundPackage
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        refreshEnabledInputMethodPackages()
+        registerInputMethodSettingsObserver()
         SettingsRepository.markServiceConnected(this)
         RuleRepository.disableRulesForPackage(this, packageName)
+        LogRepository.start(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || !event.isSupportedEvent()) return
+
+        processAccessibilityEvent(event)
+    }
+
+    private fun processAccessibilityEvent(event: AccessibilityEvent) {
 
         val now = System.currentTimeMillis()
         val windowStateChanged = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
@@ -77,7 +102,9 @@ class SkipAccessibilityService : AccessibilityService() {
         if (!SettingsRepository.isMasterEnabled(this)) {
             currentActivityName = ""
             currentActivityIdentityKnown = false
-            SettingsRepository.setLastFailureReason(this, "automation_paused")
+            pendingClick = null
+            terminateOpeningAdRecovery()
+            SettingsRepository.setLastFailureReason(this, "automation_paused", forcePersist = true)
             return
         }
 
@@ -90,6 +117,29 @@ class SkipAccessibilityService : AccessibilityService() {
             rootPackageName = rootPackageName
         )
         val currentPackage = packageResolution.resolvedPackageName
+        if (isInputMethodWindow(event, root, currentPackage)) {
+            val inputMethodContext = buildEventContext(
+                eventType = event.eventType,
+                eventPackageName = eventPackageName,
+                packageName = currentPackage,
+                activityName = currentActivityName,
+                windowId = event.windowId,
+                root = root,
+                now = now,
+                defaultRuleWindowMs = RuleRepository.DEFAULT_RULE_WINDOW_MS
+            )
+            logEvent(
+                stage = ClickLogStage.SkippedBySafety,
+                eventContext = inputMethodContext,
+                ruleType = "safety",
+                failureReason = InputMethodWindowPolicy.BLOCKED_REASON,
+                blockedReason = InputMethodWindowPolicy.BLOCKED_REASON
+            )
+            SettingsRepository.setLastFailureReason(this, InputMethodWindowPolicy.BLOCKED_REASON)
+            pendingClick = null
+            terminateOpeningAdRecovery()
+            return
+        }
         updateForegroundWindow(currentPackage, now, windowStateChanged)
 
         val observedActivityName = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
@@ -106,6 +156,22 @@ class SkipAccessibilityService : AccessibilityService() {
             currentActivityName = observedActivityName
         }
         val activityName = currentActivityName
+
+        pendingClick?.let { pending ->
+            val pendingEventContext = buildEventContext(
+                eventType = event.eventType,
+                eventPackageName = eventPackageName,
+                packageName = currentPackage,
+                activityName = activityName,
+                windowId = event.windowId,
+                root = root,
+                now = now,
+                defaultRuleWindowMs = pending.eventContext.defaultRuleWindowMs
+            )
+            handlePendingEventFastPath(pending, pendingEventContext)
+            return
+        }
+
         var eventContext = buildEventContext(
             eventType = event.eventType,
             eventPackageName = eventPackageName,
@@ -160,6 +226,7 @@ class SkipAccessibilityService : AccessibilityService() {
             )
             SettingsRepository.setLastFailureReason(this, "safety_guard_blocked")
             showDebugToast("已跳过自动点击：安全保护应用", "safety:$currentPackage")
+            terminateOpeningAdRecovery()
             return
         }
 
@@ -168,12 +235,14 @@ class SkipAccessibilityService : AccessibilityService() {
             selfPackageName = packageName,
             policy = SettingsRepository.getAppPolicy(this, currentPackage),
             customRules = RuleRepository.getEnabledCustomRulesForPackage(this, currentPackage),
-            builtInRule = RuleRepository.getBuiltInRuleForPackage(this, currentPackage)
+            builtInRule = RuleRepository.getBuiltInRuleForPackage(this, currentPackage),
+            currentActivity = activityName.takeIf { currentActivityIdentityKnown }.orEmpty(),
+            builtInPreciseRules = RuleRepository.getBuiltInPreciseRulesForPackage(currentPackage)
         )
         val customRules = rulePlan.customRules
         val rules = rulePlan.rules
         val windowExpiredScope = rulePlan.scope
-        val ruleWindowMs = rules.maxOfOrNull { it.validDurationMs } ?: eventContext.defaultRuleWindowMs
+        val ruleWindowMs = rulePlan.effectiveWindowMs
         if (eventContext.defaultRuleWindowMs != ruleWindowMs) {
             eventContext = buildEventContext(
                 eventType = event.eventType,
@@ -195,6 +264,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 failureReason = rulePlan.failureReason
             )
             SettingsRepository.setLastFailureReason(this, rulePlan.failureReason)
+            terminateOpeningAdRecovery()
             return
         }
 
@@ -213,6 +283,29 @@ class SkipAccessibilityService : AccessibilityService() {
                 ruleScope = windowExpiredScope
             )
             SettingsRepository.setLastFailureReason(this, failureReason)
+            terminateOpeningAdRecovery()
+            return
+        }
+
+        if (rules.isEmpty()) {
+            SettingsRepository.setLastFailureReason(this, "no_enabled_rules")
+            terminateOpeningAdRecovery()
+            return
+        }
+
+        val activeRules = rules.filter { rule ->
+            val last = lastRuleClickAt[rule.id] ?: 0L
+            now - last >= rule.cooldownMs
+        }
+        if (activeRules.isEmpty()) {
+            logEvent(
+                stage = ClickLogStage.SkippedByCooldown,
+                eventContext = eventContext,
+                failureReason = "cooldown_active",
+                ruleScope = windowExpiredScope
+            )
+            SettingsRepository.setLastFailureReason(this, "cooldown_active")
+            terminateOpeningAdRecovery()
             return
         }
 
@@ -223,6 +316,19 @@ class SkipAccessibilityService : AccessibilityService() {
                 failureReason = "root_window_null"
             )
             SettingsRepository.setLastFailureReason(this, "root_window_null")
+            scheduleOpeningAdRescans(
+                packageName = currentPackage,
+                activeRules = activeRules,
+                baseEventContext = eventContext,
+                stage = ClickLogStage.RootWindowNull
+            )
+            scheduleOpeningAdRetry(
+                packageName = currentPackage,
+                activeRules = activeRules,
+                baseEventContext = eventContext,
+                reason = "root_window_null",
+                retriesPerformed = 0
+            )
             return
         }
 
@@ -246,38 +352,16 @@ class SkipAccessibilityService : AccessibilityService() {
             } else {
                 SettingsRepository.setLastFailureReason(this, "active_text_input")
             }
-            return
-        }
-
-        pendingClick?.let { pending ->
-            cancelPendingClickForActivityScope(pending, eventContext)
-            return
-        }
-
-        if (rules.isEmpty()) {
-            SettingsRepository.setLastFailureReason(this, "no_enabled_rules")
-            return
-        }
-
-        val activeRules = rules.filter { rule ->
-            val last = lastRuleClickAt[rule.id] ?: 0L
-            now - last >= rule.cooldownMs
-        }
-        if (activeRules.isEmpty()) {
-            logEvent(
-                stage = ClickLogStage.SkippedByCooldown,
-                eventContext = eventContext,
-                failureReason = "cooldown_active",
-                ruleScope = windowExpiredScope
-            )
-            SettingsRepository.setLastFailureReason(this, "cooldown_active")
+            terminateOpeningAdRecovery()
             return
         }
 
         val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
         val activeActivityScopedRules = NodeScanner.filterRulesForActivity(activeRules, eventContext.activityName)
+        val scanStartedAt = SystemClock.elapsedRealtime()
         val scan = NodeScanner.scan(root, activeRules, appElapsedMs, eventContext.activityName)
-        logScan(scan, eventContext)
+        val scanDurationMs = (SystemClock.elapsedRealtime() - scanStartedAt).coerceAtLeast(0L)
+        logScan(scan, eventContext, scanDurationMs = scanDurationMs)
         val match = scan.bestMatch
         if (match == null) {
             when (
@@ -302,7 +386,8 @@ class SkipAccessibilityService : AccessibilityService() {
                         activeRules = activeActivityScopedRules,
                         signature = signature,
                         eventContext = eventContext,
-                        scan = scan
+                        scan = scan,
+                        scanDurationMs = scanDurationMs
                     )
                     return
                 }
@@ -312,24 +397,12 @@ class SkipAccessibilityService : AccessibilityService() {
                         result = coordinateResult,
                         scan = scan
                     )
-                    scheduleOpeningAdRescans(
-                        packageName = currentPackage,
-                        activeRules = activeRules,
-                        baseEventContext = eventContext,
-                        stage = ClickLogStage.SkippedBySafety
-                    )
+                    terminateOpeningAdRecovery()
                     return
                 }
                 CoordinateFallbackMatchResult.NotApplicable -> Unit
             }
-            val stage = when {
-                scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON -> ClickLogStage.SkippedBySafety
-                scan.failureReason == "text_input_clear_button" -> ClickLogStage.SkippedBySafety
-                scan.candidateCount == 0 -> ClickLogStage.NoCandidateFound
-                scan.failureReason == "score_below_min_score" ||
-                    scan.failureReason == "candidate_below_threshold" -> ClickLogStage.SkippedByLowScore
-                else -> ClickLogStage.ClickFailed
-            }
+            val stage = scanMissStage(scan)
             logEvent(
                 stage = stage,
                 eventContext = eventContext,
@@ -344,33 +417,60 @@ class SkipAccessibilityService : AccessibilityService() {
                 failureReason = scan.failureReason,
                 reason = scan.failureReason,
                 detail = scan.bestCandidateMatchedKeyword,
-                blockedReason = if (scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON) {
-                    HighRiskClickPolicy.BLOCKED_REASON
-                } else {
-                    ""
-                }
+                scanDurationMs = scanDurationMs,
+                blockedReason = if (stage == ClickLogStage.SkippedBySafety) scan.failureReason else ""
             )
-            SettingsRepository.setLastFailureReason(this, scan.failureReason)
+            SettingsRepository.setLastFailureReason(
+                this,
+                scan.failureReason,
+                forcePersist = stage == ClickLogStage.SkippedBySafety
+            )
+            if (stage == ClickLogStage.SkippedBySafety) {
+                terminateOpeningAdRecovery()
+                return
+            }
             scheduleOpeningAdRescans(
                 packageName = currentPackage,
                 activeRules = activeRules,
                 baseEventContext = eventContext,
                 stage = stage
             )
+            scheduleOpeningAdRetry(
+                packageName = currentPackage,
+                activeRules = activeRules,
+                baseEventContext = eventContext,
+                reason = scan.failureReason,
+                retriesPerformed = 0
+            )
             return
         }
 
-        startClickFromMatch(currentPackage, match, activeRules, eventContext, scan)
+        startClickFromMatch(
+            currentPackage = currentPackage,
+            match = match,
+            activeRules = activeRules,
+            eventContext = eventContext,
+            scan = scan,
+            scanDurationMs = scanDurationMs
+        )
     }
 
     override fun onInterrupt() {
         mainHandler.removeCallbacksAndMessages(null)
+        pendingClick = null
+        cancelOpeningAdRecovery(resetRetrySession = true)
+        LogRepository.flushPendingWritesAsync(applicationContext)
         SettingsRepository.markServiceInterrupted(this)
         hidePopup()
     }
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
+        pendingClick = null
+        cancelOpeningAdRecovery(resetRetrySession = true)
+        unregisterInputMethodSettingsObserver()
+        SettingsRepository.flushRuntimeDiagnostics(this)
+        LogRepository.flushPendingWritesAsync(applicationContext)
         hidePopup()
         super.onDestroy()
     }
@@ -386,7 +486,7 @@ class SkipAccessibilityService : AccessibilityService() {
         )
         if (foregroundState != previous) {
             lastClickSignature = null
-            openingAdRescanKey = null
+            cancelOpeningAdRecovery(resetRetrySession = true)
             currentActivityName = ""
             currentActivityIdentityKnown = false
         }
@@ -497,11 +597,32 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
         val key = "$packageName:${foregroundState.foregroundStartTimeMillis}"
+        if (!OpeningAdRecoveryGate.canRun(
+                masterEnabled = SettingsRepository.isMasterEnabled(this),
+                sessionKey = key,
+                terminalSessionKey = openingAdTerminalSessionKey
+            )
+        ) return
         if (openingAdRescanKey == key) return
+        val foregroundStartTimeMillis = baseEventContext.foregroundStartTimeMillis ?: return
+        val delaysMs = OpeningAdRescanPolicy.remainingDelaysMs(
+            foregroundStartTimeMillis = foregroundStartTimeMillis,
+            nowMillis = System.currentTimeMillis(),
+            ruleWindowMs = baseEventContext.defaultRuleWindowMs
+        )
+        if (delaysMs.isEmpty()) return
         openingAdRescanKey = key
-        OpeningAdRescanPolicy.delaysMs.forEach { delayMs ->
+        val expectedActivityName = baseEventContext.activityName
+        delaysMs.forEach { delayMs ->
             mainHandler.postDelayed(
-                { runOpeningAdRescan(key, packageName, baseEventContext.defaultRuleWindowMs) },
+                {
+                    runOpeningAdRescan(
+                        key = key,
+                        packageName = packageName,
+                        defaultRuleWindowMs = baseEventContext.defaultRuleWindowMs,
+                        expectedActivityName = expectedActivityName
+                    )
+                },
                 delayMs
             )
         }
@@ -510,11 +631,62 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun runOpeningAdRescan(
         key: String,
         packageName: String,
-        defaultRuleWindowMs: Long
+        defaultRuleWindowMs: Long,
+        expectedActivityName: String
     ) {
+        if (!OpeningAdRecoveryGate.canRun(
+                masterEnabled = SettingsRepository.isMasterEnabled(this),
+                sessionKey = key,
+                terminalSessionKey = openingAdTerminalSessionKey
+            )
+        ) {
+            terminateOpeningAdRecovery()
+            return
+        }
         if (openingAdRescanKey != key || pendingClick != null) return
+        if (!isSameOpeningAdSession(key, packageName) || hasActivityChanged(expectedActivityName)) {
+            terminateOpeningAdRecovery(key)
+            return
+        }
+
+        val now = System.currentTimeMillis()
         val rootSelection = selectRootForPackage(packageName)
-        val root = rootSelection.root ?: return
+        val root = rootSelection.root
+        if (root == null) {
+            val eventContext = buildEventContext(
+                eventType = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+                eventPackageName = packageName,
+                packageName = packageName,
+                activityName = currentActivityName.ifBlank { expectedActivityName },
+                windowId = -1,
+                root = null,
+                now = now,
+                defaultRuleWindowMs = defaultRuleWindowMs
+            )
+            if (!eventContext.isWithinDefaultRuleWindow) {
+                terminateOpeningAdRecovery()
+                return
+            }
+            logEvent(
+                stage = ClickLogStage.RootWindowNull,
+                eventContext = eventContext,
+                failureReason = "root_window_null",
+                retryCount = openingAdRetryCount,
+                rescanReason = ABSOLUTE_RESCAN_REASON,
+                detail = rootSelection.detail
+            )
+            val rulePlan = currentRulePlan(packageName)
+            if (rulePlan.skipStage == null && rulePlan.rules.isNotEmpty()) {
+                scheduleOpeningAdRetry(
+                    packageName = packageName,
+                    activeRules = rulePlan.rules,
+                    baseEventContext = eventContext,
+                    reason = "root_window_null",
+                    retriesPerformed = openingAdRetryCount
+                )
+            }
+            return
+        }
         val rootPackageName = root.packageName?.toString().orEmpty()
         val packageResolution = EventWindowTracker.resolveTrustedPackage(
             eventPackageName = packageName,
@@ -526,44 +698,489 @@ class SkipAccessibilityService : AccessibilityService() {
             SafetyGuard.isSelfPackage(this, currentPackage) ||
             SafetyGuard.isProtectedPackage(currentPackage)
         ) {
+            terminateOpeningAdRecovery(key)
             return
         }
 
-        val now = System.currentTimeMillis()
         updateForegroundWindow(currentPackage, now, windowStateChanged = false)
-        val rulePlan = RulePlanProvider.plan(
-            packageName = currentPackage,
-            selfPackageName = this.packageName,
-            policy = SettingsRepository.getAppPolicy(this, currentPackage),
-            customRules = RuleRepository.getEnabledCustomRulesForPackage(this, currentPackage),
-            builtInRule = RuleRepository.getBuiltInRuleForPackage(this, currentPackage)
-        )
-        if (rulePlan.skipStage != null || rulePlan.rules.isEmpty()) return
-        val ruleWindowMs = rulePlan.rules.maxOfOrNull { it.validDurationMs } ?: defaultRuleWindowMs
+        val rulePlan = currentRulePlan(currentPackage)
+        if (rulePlan.skipStage != null || rulePlan.rules.isEmpty()) {
+            terminateOpeningAdRecovery()
+            return
+        }
+        val ruleWindowMs = rulePlan.effectiveWindowMs
         val eventContext = buildEventContext(
             eventType = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             eventPackageName = packageName,
             packageName = currentPackage,
-            activityName = currentActivityName.ifBlank { "opening_ad_rescan" },
+            activityName = currentActivityName,
             windowId = root.windowId,
             root = root,
             now = now,
             defaultRuleWindowMs = ruleWindowMs
         )
-        if (!eventContext.isWithinDefaultRuleWindow) return
+        if (!eventContext.isWithinDefaultRuleWindow) {
+            terminateOpeningAdRecovery()
+            return
+        }
 
         val activeRules = rulePlan.rules.filter { rule ->
             val last = lastRuleClickAt[rule.id] ?: 0L
             now - last >= rule.cooldownMs
         }
-        if (activeRules.isEmpty()) return
+        if (activeRules.isEmpty()) {
+            terminateOpeningAdRecovery(key)
+            return
+        }
+
+        if (ActiveTextInputGuard.hasFocusedEditableInput(root)) {
+            SettingsRepository.setLastFailureReason(this, "active_text_input", forcePersist = true)
+            logEvent(
+                stage = ClickLogStage.SkippedBySafety,
+                eventContext = eventContext,
+                failureReason = "active_text_input",
+                blockedReason = "active_text_input",
+                retryCount = openingAdRetryCount,
+                rescanReason = ABSOLUTE_RESCAN_REASON
+            )
+            terminateOpeningAdRecovery()
+            return
+        }
 
         val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
-        val activityScopedRules = NodeScanner.filterRulesForActivity(activeRules, eventContext.activityName)
+        val scanStartedAt = SystemClock.elapsedRealtime()
         val scan = NodeScanner.scan(root, activeRules, appElapsedMs, eventContext.activityName)
-        logScan(scan, eventContext)
-        val match = scan.bestMatch ?: return
-        startClickFromMatch(currentPackage, match, activityScopedRules, eventContext, scan)
+        val scanDurationMs = (SystemClock.elapsedRealtime() - scanStartedAt).coerceAtLeast(0L)
+        logScan(
+            scan = scan,
+            eventContext = eventContext,
+            scanDurationMs = scanDurationMs,
+            retryCount = openingAdRetryCount,
+            rescanReason = ABSOLUTE_RESCAN_REASON
+        )
+        val match = scan.bestMatch
+        if (match != null) {
+            startClickFromMatch(
+                currentPackage = currentPackage,
+                match = match,
+                activeRules = activeRules,
+                eventContext = eventContext,
+                scan = scan,
+                retryCount = openingAdRetryCount,
+                scanDurationMs = scanDurationMs,
+                rescanReason = ABSOLUTE_RESCAN_REASON
+            )
+            return
+        }
+
+        logScanMiss(
+            scan = scan,
+            eventContext = eventContext,
+            scanDurationMs = scanDurationMs,
+            retryCount = openingAdRetryCount,
+            rescanReason = ABSOLUTE_RESCAN_REASON
+        )
+        if (scanMissStage(scan) == ClickLogStage.SkippedBySafety) {
+            terminateOpeningAdRecovery()
+            return
+        }
+        val retryScheduled = scheduleOpeningAdRetry(
+            packageName = currentPackage,
+            activeRules = activeRules,
+            baseEventContext = eventContext,
+            reason = scan.failureReason,
+            retriesPerformed = openingAdRetryCount
+        ) != null
+        if (!retryScheduled) cancelScheduledOpeningAdRetry()
+    }
+
+    private fun currentRulePlan(packageName: String) = RulePlanProvider.plan(
+        packageName = packageName,
+        selfPackageName = this.packageName,
+        policy = SettingsRepository.getAppPolicy(this, packageName),
+        customRules = RuleRepository.getEnabledCustomRulesForPackage(this, packageName),
+        builtInRule = RuleRepository.getBuiltInRuleForPackage(this, packageName),
+        currentActivity = currentActivityName.takeIf { currentActivityIdentityKnown }.orEmpty(),
+        builtInPreciseRules = RuleRepository.getBuiltInPreciseRulesForPackage(packageName)
+    )
+
+    private fun refreshEnabledInputMethodPackages() {
+        val refreshed = runCatching {
+            val manager = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            buildSet {
+                manager?.enabledInputMethodList
+                    ?.mapNotNull { it.packageName.trim().takeIf(String::isNotBlank) }
+                    ?.let(::addAll)
+                Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+                    ?.let(ComponentName::unflattenFromString)
+                    ?.packageName
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+                    ?.let(::add)
+            }
+        }.getOrNull()
+        if (refreshed != null) {
+            enabledInputMethodPackages = refreshed
+            lastInputMethodRefreshElapsedMillis = SystemClock.elapsedRealtime()
+        }
+    }
+
+    private fun registerInputMethodSettingsObserver() {
+        if (inputMethodSettingsObserver != null) return
+        val observer = object : ContentObserver(mainHandler) {
+            override fun onChange(selfChange: Boolean) {
+                refreshEnabledInputMethodPackages()
+            }
+        }
+        inputMethodSettingsObserver = observer
+        runCatching {
+            contentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ENABLED_INPUT_METHODS),
+                false,
+                observer
+            )
+            contentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD),
+                false,
+                observer
+            )
+        }.onFailure {
+            runCatching { contentResolver.unregisterContentObserver(observer) }
+            inputMethodSettingsObserver = null
+        }
+    }
+
+    private fun unregisterInputMethodSettingsObserver() {
+        val observer = inputMethodSettingsObserver ?: return
+        inputMethodSettingsObserver = null
+        runCatching { contentResolver.unregisterContentObserver(observer) }
+    }
+
+    private fun refreshInputMethodsIfStale(eventType: Int) {
+        if (eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        ) return
+        if (SystemClock.elapsedRealtime() - lastInputMethodRefreshElapsedMillis >= INPUT_METHOD_REFRESH_INTERVAL_MS) {
+            refreshEnabledInputMethodPackages()
+        }
+    }
+
+    private fun isInputMethodWindow(
+        event: AccessibilityEvent,
+        root: AccessibilityNodeInfo?,
+        packageName: String
+    ): Boolean {
+        refreshInputMethodsIfStale(event.eventType)
+        val isInputMethodWindowType = runCatching {
+            windows.firstOrNull { it.id == event.windowId }?.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD
+        }.getOrDefault(false)
+        if (InputMethodWindowPolicy.shouldBlock(
+                packageName = packageName,
+                eventClassName = event.className?.toString().orEmpty(),
+                rootClassName = root?.className?.toString().orEmpty(),
+                enabledInputMethodPackages = enabledInputMethodPackages,
+                isInputMethodWindowType = isInputMethodWindowType
+            )) {
+            return true
+        }
+        return false
+    }
+
+    private fun scheduleOpeningAdRetry(
+        packageName: String,
+        activeRules: List<SkipRule>,
+        baseEventContext: EventContext,
+        reason: String,
+        retriesPerformed: Int
+    ): Int? {
+        if (activeRules.isEmpty() || pendingClick != null || openingAdRetryScheduled) return null
+        val foregroundStartTimeMillis = baseEventContext.foregroundStartTimeMillis ?: return null
+        val sessionKey = "$packageName:$foregroundStartTimeMillis"
+        if (!OpeningAdRecoveryGate.canRun(
+                masterEnabled = SettingsRepository.isMasterEnabled(this),
+                sessionKey = sessionKey,
+                terminalSessionKey = openingAdTerminalSessionKey
+            )
+        ) {
+            return null
+        }
+        if (!isSameOpeningAdSession(sessionKey, packageName) ||
+            hasActivityChanged(baseEventContext.activityName)
+        ) {
+            return null
+        }
+        if (openingAdRetrySessionKey != sessionKey) {
+            cancelScheduledOpeningAdRetry()
+            openingAdRetrySessionKey = sessionKey
+            openingAdRetryCount = 0
+        }
+
+        val performedCount = maxOf(retriesPerformed, openingAdRetryCount)
+        if (!OpeningAdRetryPolicy.shouldRetry(
+                reason = reason,
+                retriesPerformed = performedCount,
+                isWithinRuleWindow = baseEventContext.isWithinDefaultRuleWindow
+            )
+        ) {
+            return null
+        }
+        val delayMs = OpeningAdRetryPolicy.nextDelayMs(performedCount) ?: return null
+        val now = System.currentTimeMillis()
+        val windowEndAt = foregroundStartTimeMillis + baseEventContext.defaultRuleWindowMs
+        if (now + delayMs > windowEndAt) return null
+
+        val nextRetryCount = performedCount + 1
+        val generation = ++openingAdRetryGeneration
+        openingAdRetryScheduled = true
+        val request = OpeningAdRetryRequest(
+            sessionKey = sessionKey,
+            packageName = packageName,
+            expectedActivityName = baseEventContext.activityName,
+            activeRules = activeRules,
+            defaultRuleWindowMs = baseEventContext.defaultRuleWindowMs,
+            retryCount = nextRetryCount,
+            reason = reason
+        )
+        mainHandler.postDelayed(
+            {
+                if (generation != openingAdRetryGeneration) return@postDelayed
+                openingAdRetryScheduled = false
+                openingAdRetryCount = maxOf(openingAdRetryCount, nextRetryCount)
+                runOpeningAdRetry(request)
+            },
+            delayMs
+        )
+        return nextRetryCount
+    }
+
+    private fun runOpeningAdRetry(request: OpeningAdRetryRequest) {
+        if (!OpeningAdRecoveryGate.canRun(
+                masterEnabled = SettingsRepository.isMasterEnabled(this),
+                sessionKey = request.sessionKey,
+                terminalSessionKey = openingAdTerminalSessionKey
+            )
+        ) {
+            terminateOpeningAdRecovery()
+            return
+        }
+        if (pendingClick != null) {
+            cancelScheduledOpeningAdRetry()
+            return
+        }
+        if (!isSameOpeningAdSession(request.sessionKey, request.packageName) ||
+            hasActivityChanged(request.expectedActivityName)
+        ) {
+            terminateOpeningAdRecovery(request.sessionKey)
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        val rootSelection = selectRootForPackage(request.packageName)
+        val root = rootSelection.root
+        val rootPackageName = root?.packageName?.toString().orEmpty()
+        val currentPackage = EventWindowTracker.resolveTrustedPackage(
+            eventPackageName = request.packageName,
+            rootPackageName = rootPackageName
+        ).resolvedPackageName
+        if (currentPackage != request.packageName ||
+            currentPackage.isBlank() ||
+            SafetyGuard.isSelfPackage(this, currentPackage) ||
+            SafetyGuard.isProtectedPackage(currentPackage)
+        ) {
+            terminateOpeningAdRecovery(request.sessionKey)
+            return
+        }
+
+        val eventContext = buildEventContext(
+            eventType = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            eventPackageName = request.packageName,
+            packageName = currentPackage,
+            activityName = currentActivityName.ifBlank { request.expectedActivityName },
+            windowId = root?.windowId ?: -1,
+            root = root,
+            now = now,
+            defaultRuleWindowMs = request.defaultRuleWindowMs
+        )
+        if (!eventContext.isWithinDefaultRuleWindow) {
+            terminateOpeningAdRecovery()
+            return
+        }
+
+        if (root == null) {
+            logEvent(
+                stage = ClickLogStage.RootWindowNull,
+                eventContext = eventContext,
+                failureReason = "root_window_null",
+                retryCount = request.retryCount,
+                rescanReason = request.reason,
+                detail = rootSelection.detail
+            )
+            scheduleOpeningAdRetry(
+                packageName = request.packageName,
+                activeRules = request.activeRules,
+                baseEventContext = eventContext,
+                reason = "root_window_null",
+                retriesPerformed = request.retryCount
+            )
+            return
+        }
+
+        if (ActiveTextInputGuard.hasFocusedEditableInput(root)) {
+            SettingsRepository.setLastFailureReason(this, "active_text_input", forcePersist = true)
+            logEvent(
+                stage = ClickLogStage.SkippedBySafety,
+                eventContext = eventContext,
+                failureReason = "active_text_input",
+                blockedReason = "active_text_input",
+                retryCount = request.retryCount,
+                rescanReason = request.reason
+            )
+            terminateOpeningAdRecovery()
+            return
+        }
+
+        val activityScopedRules = NodeScanner.filterRulesForActivity(
+            request.activeRules,
+            eventContext.activityName
+        )
+        if (activityScopedRules.isEmpty()) {
+            terminateOpeningAdRecovery()
+            return
+        }
+        val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
+        val scanStartedAt = SystemClock.elapsedRealtime()
+        val scan = NodeScanner.scan(
+            root = root,
+            rules = request.activeRules,
+            appElapsedMs = appElapsedMs,
+            currentActivityName = eventContext.activityName
+        )
+        val scanDurationMs = (SystemClock.elapsedRealtime() - scanStartedAt).coerceAtLeast(0L)
+        logScan(
+            scan = scan,
+            eventContext = eventContext,
+            scanDurationMs = scanDurationMs,
+            retryCount = request.retryCount,
+            rescanReason = request.reason
+        )
+        val match = scan.bestMatch
+        if (match != null) {
+            startClickFromMatch(
+                currentPackage = currentPackage,
+                match = match,
+                activeRules = request.activeRules,
+                eventContext = eventContext,
+                scan = scan,
+                retryCount = request.retryCount,
+                scanDurationMs = scanDurationMs,
+                rescanReason = request.reason
+            )
+            return
+        }
+
+        when (
+            val coordinateResult = CoordinateFallbackMatcher.findResult(
+                root = root,
+                rules = activityScopedRules,
+                packageName = currentPackage,
+                selfPackageName = packageName,
+                elapsedSinceForegroundMs = appElapsedMs,
+                screenWidth = resources.displayMetrics.widthPixels,
+                screenHeight = resources.displayMetrics.heightPixels
+            )
+        ) {
+            is CoordinateFallbackMatchResult.Matched -> {
+                val fallback = coordinateResult.match
+                val signature = "$currentPackage:${fallback.rule.id}:coordinate:${fallback.x}:${fallback.y}"
+                startStableCoordinateFallback(
+                    packageName = currentPackage,
+                    fallback = fallback,
+                    activeRules = activityScopedRules,
+                    signature = signature,
+                    eventContext = eventContext,
+                    scan = scan,
+                    retryCount = request.retryCount,
+                    scanDurationMs = scanDurationMs,
+                    rescanReason = request.reason
+                )
+                return
+            }
+
+            is CoordinateFallbackMatchResult.Blocked -> {
+                logCoordinateFallbackBlocked(eventContext, coordinateResult, scan)
+                terminateOpeningAdRecovery()
+                return
+            }
+
+            CoordinateFallbackMatchResult.NotApplicable -> Unit
+        }
+
+        logScanMiss(
+            scan = scan,
+            eventContext = eventContext,
+            scanDurationMs = scanDurationMs,
+            retryCount = request.retryCount,
+            rescanReason = request.reason
+        )
+        if (scanMissStage(scan) == ClickLogStage.SkippedBySafety) {
+            terminateOpeningAdRecovery()
+            return
+        }
+        val nextScheduled = scheduleOpeningAdRetry(
+            packageName = request.packageName,
+            activeRules = request.activeRules,
+            baseEventContext = eventContext,
+            reason = scan.failureReason,
+            retriesPerformed = request.retryCount
+        ) != null
+        if (!nextScheduled) cancelScheduledOpeningAdRetry()
+    }
+
+    private fun isSameOpeningAdSession(key: String, packageName: String): Boolean {
+        return foregroundState.currentForegroundPackage == packageName &&
+            key == "$packageName:${foregroundState.foregroundStartTimeMillis}"
+    }
+
+    private fun currentOpeningAdSessionKey(): String? {
+        val packageName = foregroundState.currentForegroundPackage.orEmpty()
+        val startedAt = foregroundState.foregroundStartTimeMillis
+        if (packageName.isBlank() || startedAt <= 0L) return null
+        return "$packageName:$startedAt"
+    }
+
+    private fun pendingSessionKey(pending: PendingClick): String? {
+        return pending.eventContext.foregroundStartTimeMillis
+            ?.takeIf { it > 0L }
+            ?.let { startedAt -> "${pending.packageName}:$startedAt" }
+    }
+
+    private fun hasActivityChanged(expectedActivityName: String): Boolean {
+        val expected = expectedActivityName.trim()
+        val current = currentActivityName.trim()
+        return expected.isNotBlank() &&
+            currentActivityIdentityKnown &&
+            current.isNotBlank() &&
+            !expected.equals(current, ignoreCase = true)
+    }
+
+    private fun cancelScheduledOpeningAdRetry() {
+        openingAdRetryGeneration++
+        openingAdRetryScheduled = false
+    }
+
+    private fun cancelOpeningAdRecovery(resetRetrySession: Boolean = false) {
+        openingAdRescanKey = null
+        cancelScheduledOpeningAdRetry()
+        if (resetRetrySession) {
+            openingAdRetrySessionKey = null
+            openingAdRetryCount = 0
+            openingAdTerminalSessionKey = null
+        }
+    }
+
+    private fun terminateOpeningAdRecovery(sessionKey: String? = currentOpeningAdSessionKey()) {
+        openingAdTerminalSessionKey = sessionKey
+        cancelOpeningAdRecovery()
     }
 
     private fun startClickFromMatch(
@@ -571,7 +1188,10 @@ class SkipAccessibilityService : AccessibilityService() {
         match: MatchResult,
         activeRules: List<SkipRule>,
         eventContext: EventContext,
-        scan: ScanReport
+        scan: ScanReport,
+        retryCount: Int = 0,
+        scanDurationMs: Long? = null,
+        rescanReason: String = ""
     ): Boolean {
         val signature = "$currentPackage:${match.ruleId}:${match.target.boundsString()}"
         val lastAnyRuleClick = lastRuleClickAt.values.maxOrNull() ?: 0L
@@ -585,7 +1205,10 @@ class SkipAccessibilityService : AccessibilityService() {
             packageName = currentPackage,
             appName = displayAppName(currentPackage, match.appName),
             match = ClickMatchSnapshot.from(match),
-            eventContext = eventContext
+            eventContext = eventContext,
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason
         )
         val highRiskDecision = highRiskDecisionForPending(pendingMatch)
         if (!highRiskDecision.allowed) {
@@ -595,10 +1218,18 @@ class SkipAccessibilityService : AccessibilityService() {
                 decision = highRiskDecision,
                 scan = scan
             )
+            terminateOpeningAdRecovery(pendingSessionKey(pendingMatch))
             return true
         }
 
-        logMatch(match, eventContext, scan)
+        logMatch(
+            match = match,
+            eventContext = eventContext,
+            scan = scan,
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason
+        )
         if (SettingsRepository.isSafetyModeEnabled(this)) {
             logEvent(
                 stage = ClickLogStage.ClickSkippedBySafetyMode,
@@ -612,11 +1243,25 @@ class SkipAccessibilityService : AccessibilityService() {
                 reason = "click_skipped_by_safety_mode",
                 clickSkippedBySafetyMode = true
             )
-            SettingsRepository.setLastFailureReason(this, "click_skipped_by_safety_mode")
+            SettingsRepository.setLastFailureReason(
+                this,
+                "click_skipped_by_safety_mode",
+                forcePersist = true
+            )
+            terminateOpeningAdRecovery(pendingSessionKey(pendingMatch))
             return true
         }
 
-        startStableClick(currentPackage, match, activeRules, signature, eventContext)
+        startStableClick(
+            packageName = currentPackage,
+            match = match,
+            activeRules = activeRules,
+            signature = signature,
+            eventContext = eventContext,
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason
+        )
         return true
     }
 
@@ -666,7 +1311,10 @@ class SkipAccessibilityService : AccessibilityService() {
         match: MatchResult,
         activeRules: List<SkipRule>,
         signature: String,
-        eventContext: EventContext
+        eventContext: EventContext,
+        retryCount: Int = 0,
+        scanDurationMs: Long? = null,
+        rescanReason: String = ""
     ) {
         val delayMs = StableClickDelayPolicy.delayMs(
             ruleSource = match.ruleSource,
@@ -687,8 +1335,12 @@ class SkipAccessibilityService : AccessibilityService() {
             activeRules = activeRules,
             signature = signature,
             eventContext = eventContext,
-            delayBeforeClickMs = delayMs
+            delayBeforeClickMs = delayMs,
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason
         )
+        cancelScheduledOpeningAdRetry()
         pendingClick = pending
         mainHandler.postDelayed({ relocateAndClick(pending) }, delayMs)
     }
@@ -699,7 +1351,10 @@ class SkipAccessibilityService : AccessibilityService() {
         activeRules: List<SkipRule>,
         signature: String,
         eventContext: EventContext,
-        scan: ScanReport
+        scan: ScanReport,
+        retryCount: Int = 0,
+        scanDurationMs: Long? = null,
+        rescanReason: String = ""
     ) {
         val rule = fallback.rule
         val pending = ClickFlowStateMachine.startCoordinateFallback(
@@ -709,7 +1364,10 @@ class SkipAccessibilityService : AccessibilityService() {
             activeRules = activeRules,
             signature = signature,
             delayBeforeClickMs = STABLE_CLICK_DELAY_MS,
-            eventContext = eventContext
+            eventContext = eventContext,
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason
         )
 
         val highRiskDecision = highRiskDecisionForPending(pending)
@@ -721,6 +1379,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 scan = scan,
                 clickTargetSource = ClickTargetSourceLog.CoordinateFallback
             )
+            terminateOpeningAdRecovery(pendingSessionKey(pending))
             return
         }
 
@@ -750,10 +1409,16 @@ class SkipAccessibilityService : AccessibilityService() {
                 clickSkippedBySafetyMode = true,
                 clickTargetSource = ClickTargetSourceLog.CoordinateFallback
             )
-            SettingsRepository.setLastFailureReason(this, "click_skipped_by_safety_mode")
+            SettingsRepository.setLastFailureReason(
+                this,
+                "click_skipped_by_safety_mode",
+                forcePersist = true
+            )
+            terminateOpeningAdRecovery(pendingSessionKey(pending))
             return
         }
 
+        cancelScheduledOpeningAdRetry()
         pendingClick = pending
         mainHandler.postDelayed({ runCoordinateFallback(pending) }, STABLE_CLICK_DELAY_MS)
     }
@@ -763,7 +1428,7 @@ class SkipAccessibilityService : AccessibilityService() {
         result: CoordinateFallbackMatchResult.Blocked,
         scan: ScanReport? = null
     ) {
-        SettingsRepository.setLastFailureReason(this, result.reason)
+        SettingsRepository.setLastFailureReason(this, result.reason, forcePersist = true)
         val key = "${eventContext.packageName}:${result.rule.id}:${result.reason}"
         val now = System.currentTimeMillis()
         val previous = lastCoordinateFallbackBlockedAt[key] ?: 0L
@@ -788,12 +1453,23 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun relocateAndClick(pending: PendingClick) {
+        if (abortPendingIfAutomationPaused(pending)) return
         if (pendingClick !== pending) return
+        val callbackPending = ClickFlowStateMachine.recordCallbackTiming(pending)
+        pendingClick = callbackPending
         val root = rootInActiveWindow
-        if (cancelIfUnsafeDelayedClickWindow(pending, root)) return
+        if (root == null && retryPendingClick(
+                pending = callbackPending,
+                reason = "root_window_null",
+                attempt = null
+            )
+        ) {
+            return
+        }
+        if (cancelIfUnsafeDelayedClickWindow(callbackPending, root)) return
 
-        val currentRule = pending.activeRules.firstOrNull { rule ->
-            rule.id == pending.ruleId && rule.packageName == pending.packageName
+        val currentRule = callbackPending.activeRules.firstOrNull { rule ->
+            rule.id == callbackPending.ruleId && rule.packageName == callbackPending.packageName
         }
         val activityDecision = PendingActivityScopePolicy.evaluate(
             rule = currentRule,
@@ -802,7 +1478,7 @@ class SkipAccessibilityService : AccessibilityService() {
         )
         if (!activityDecision.allowed) {
             finishPendingClick(
-                pending = pending,
+                pending = callbackPending,
                 stage = ClickLogStage.SkippedBySafety,
                 success = false,
                 reason = activityDecision.reason,
@@ -811,41 +1487,72 @@ class SkipAccessibilityService : AccessibilityService() {
             )
             return
         }
-        val rule = currentRule ?: return
+        val rule = currentRule ?: run {
+            finishPendingClick(
+                pending = callbackPending,
+                stage = ClickLogStage.SkippedBySafety,
+                success = false,
+                reason = "pending_rule_missing",
+                attempt = null,
+                blockedReason = "pending_rule_missing"
+            )
+            return
+        }
         val elapsed = (System.currentTimeMillis() - foregroundState.foregroundStartTimeMillis).coerceAtLeast(0L)
         val currentRules = NodeScanner.filterRulesForActivity(
             rules = listOf(rule),
             currentActivityName = currentActivityName
         )
+        val scanStartedAt = SystemClock.elapsedRealtime()
         val scan = NodeScanner.scan(root ?: return, currentRules, elapsed, currentActivityName)
+        val scanDurationMs = (SystemClock.elapsedRealtime() - scanStartedAt).coerceAtLeast(0L)
         val match = scan.bestMatch
         if (match == null) {
-            finishPendingClick(
-                pending = pending.copy(retryCount = pending.retryCount + 1),
-                stage = ClickLogStage.ClickFailed,
-                success = false,
-                reason = "candidate_lost_before_click",
-                attempt = null,
-                scan = scan
-            )
+            val retryPending = callbackPending.copy(scanDurationMs = scanDurationMs)
+            if (!retryPendingClick(
+                    pending = retryPending,
+                    reason = "candidate_lost_before_click",
+                    attempt = null,
+                    scan = scan
+                )
+            ) {
+                finishPendingClick(
+                    pending = retryPending,
+                    stage = ClickLogStage.NoCandidateFound,
+                    success = false,
+                    reason = "candidate_lost_before_click",
+                    attempt = null,
+                    scan = scan
+                )
+            }
             return
         }
 
         val matchSnapshot = ClickMatchSnapshot.from(match)
-        val relocationDecision = PendingClickRelocationPolicy.evaluate(pending, matchSnapshot)
+        val relocationDecision = PendingClickRelocationPolicy.evaluate(callbackPending, matchSnapshot)
         if (!relocationDecision.allowed) {
-            finishPendingClick(
-                pending = pending.copy(retryCount = pending.retryCount + 1),
-                stage = ClickLogStage.ClickFailed,
-                success = false,
-                reason = relocationDecision.reason,
-                attempt = null,
-                scan = scan
-            )
+            val retryPending = callbackPending.copy(scanDurationMs = scanDurationMs)
+            if (!retryPendingClick(
+                    pending = retryPending,
+                    reason = relocationDecision.reason,
+                    attempt = null,
+                    scan = scan
+                )
+            ) {
+                finishPendingClick(
+                    pending = retryPending,
+                    stage = ClickLogStage.NoCandidateFound,
+                    success = false,
+                    reason = relocationDecision.reason,
+                    attempt = null,
+                    scan = scan
+                )
+            }
             return
         }
 
-        val updated = ClickFlowStateMachine.relocateToMatch(pending, matchSnapshot)
+        val updated = ClickFlowStateMachine.relocateToMatch(callbackPending, matchSnapshot)
+            .copy(scanDurationMs = scanDurationMs)
         pendingClick = updated
         val highRiskDecision = highRiskDecisionForPending(updated)
         if (!highRiskDecision.allowed) {
@@ -859,7 +1566,7 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
         lastRuleClickAt[match.ruleId] = System.currentTimeMillis()
-        lastClickSignature = pending.signature
+        lastClickSignature = updated.signature
 
         logEvent(
             stage = ClickLogStage.ClickAttempted,
@@ -871,17 +1578,19 @@ class SkipAccessibilityService : AccessibilityService() {
 
         val attempt = ClickExecutor.click(match.clickNode)
         if (attempt.accepted) {
+            val dispatched = updated.copy(firstAttempt = attempt, clickDispatched = true)
+            pendingClick = dispatched
             logEvent(
                 stage = ClickLogStage.ClickActionSuccess,
-                eventContext = updated.eventContext,
-                pending = updated,
+                eventContext = dispatched.eventContext,
+                pending = dispatched,
                 clickMethod = attempt.method,
                 actionReturnValue = true,
                 clickResult = true,
-                delayBeforeClickMs = updated.delayBeforeClickMs
+                delayBeforeClickMs = dispatched.delayBeforeClickMs
             )
             mainHandler.postDelayed(
-                { verifyActionClick(updated.copy(firstAttempt = attempt)) },
+                { verifyActionClick(dispatched) },
                 CLICK_VERIFY_DELAY_MS
             )
         } else {
@@ -890,16 +1599,19 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun runCoordinateFallback(pending: PendingClick) {
+        if (abortPendingIfAutomationPaused(pending)) return
         if (pendingClick !== pending) return
+        val callbackPending = ClickFlowStateMachine.recordCallbackTiming(pending)
+        pendingClick = callbackPending
         val root = rootInActiveWindow
-        val x = pending.coordinateX ?: pending.candidate.bounds.centerX()
-        val y = pending.coordinateY ?: pending.candidate.bounds.centerY()
-        val rule = pending.activeRules.firstOrNull { candidate ->
-            candidate.id == pending.ruleId && candidate.coordinateFallback?.enabled == true
+        val x = callbackPending.coordinateX ?: callbackPending.candidate.bounds.centerX()
+        val y = callbackPending.coordinateY ?: callbackPending.candidate.bounds.centerY()
+        val rule = callbackPending.activeRules.firstOrNull { candidate ->
+            candidate.id == callbackPending.ruleId && candidate.coordinateFallback?.enabled == true
         }
         if (rule == null) {
             finishPendingClick(
-                pending = pending,
+                pending = callbackPending,
                 stage = ClickLogStage.SkippedBySafety,
                 success = false,
                 reason = "coordinate_rule_missing",
@@ -918,42 +1630,58 @@ class SkipAccessibilityService : AccessibilityService() {
         val revalidation = CoordinateFallbackMatcher.revalidateAtPoint(
             root = root,
             rule = rule,
-            expectedPackageName = pending.packageName,
+            expectedPackageName = callbackPending.packageName,
             currentPackageName = currentPackageName,
             selfPackageName = packageName,
             elapsedSinceForegroundMs = elapsedSinceForegroundMs,
             x = x,
             y = y,
-            originalTarget = pending.candidate,
+            originalTarget = callbackPending.candidate,
             activeTextInput = ActiveTextInputGuard.hasFocusedEditableInput(root)
         )
         if (!revalidation.allowed || revalidation.reason != "coordinate_target_revalidated") {
-            finishPendingClick(
-                pending = pending,
-                stage = ClickLogStage.SkippedBySafety,
-                success = false,
-                reason = revalidation.reason,
-                attempt = null,
-                blockedReason = revalidation.reason,
-                detail = "coordinate_revalidation=${revalidation.reason}",
-                clickTargetSource = ClickTargetSourceLog.CoordinateFallback
-            )
+            if (!retryPendingClick(
+                    pending = callbackPending,
+                    reason = revalidation.reason,
+                    attempt = null,
+                    clickTargetSource = ClickTargetSourceLog.CoordinateFallback,
+                    detail = "coordinate_revalidation=${revalidation.reason}"
+                )
+            ) {
+                finishPendingClick(
+                    pending = callbackPending,
+                    stage = ClickLogStage.SkippedBySafety,
+                    success = false,
+                    reason = revalidation.reason,
+                    attempt = null,
+                    blockedReason = revalidation.reason,
+                    detail = "coordinate_revalidation=${revalidation.reason}",
+                    clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+                )
+            }
             return
         }
-        if (cancelIfUnsafeDelayedClickWindow(pending, root)) return
+        if (cancelIfUnsafeDelayedClickWindow(callbackPending, root)) return
         val target = revalidation.target ?: run {
-            finishPendingClick(
-                pending = pending,
-                stage = ClickLogStage.SkippedBySafety,
-                success = false,
-                reason = "coordinate_target_missing",
-                attempt = null,
-                blockedReason = "coordinate_target_missing",
-                clickTargetSource = ClickTargetSourceLog.CoordinateFallback
-            )
+            if (!retryPendingClick(
+                    pending = callbackPending,
+                    reason = "coordinate_target_missing",
+                    attempt = null,
+                    clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+                )
+            ) {
+                finishPendingClick(
+                    pending = callbackPending,
+                    stage = ClickLogStage.NoCandidateFound,
+                    success = false,
+                    reason = "coordinate_target_missing",
+                    attempt = null,
+                    clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+                )
+            }
             return
         }
-        val updatedPending = pending.copy(target = target, candidate = target)
+        val updatedPending = callbackPending.copy(target = target, candidate = target)
         pendingClick = updatedPending
         lastRuleClickAt[updatedPending.ruleId] = System.currentTimeMillis()
         lastClickSignature = updatedPending.signature
@@ -967,20 +1695,29 @@ class SkipAccessibilityService : AccessibilityService() {
             clickTargetSource = ClickTargetSourceLog.CoordinateFallback
         )
 
-        ClickExecutor.gestureClickPoint(this, target, x, y) { attempt ->
+        val gestureQueued = ClickExecutor.gestureClickPoint(this, target, x, y) { attempt ->
             if (pendingClick?.signature != updatedPending.signature) return@gestureClickPoint
             if (!attempt.accepted) {
-                finishPendingClick(
-                    pending = updatedPending.copy(firstAttempt = attempt),
-                    stage = ClickLogStage.ClickFailed,
-                    success = false,
-                    reason = attempt.reason,
-                    attempt = attempt,
-                    clickTargetSource = ClickTargetSourceLog.CoordinateFallback
-                )
+                val failedPending = updatedPending.copy(firstAttempt = attempt)
+                if (!retryPendingClick(
+                        pending = failedPending,
+                        reason = attempt.reason,
+                        attempt = attempt,
+                        clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+                    )
+                ) {
+                    finishPendingClick(
+                        pending = failedPending,
+                        stage = ClickLogStage.ClickFailed,
+                        success = false,
+                        reason = attempt.reason,
+                        attempt = attempt,
+                        clickTargetSource = ClickTargetSourceLog.CoordinateFallback
+                    )
+                }
                 return@gestureClickPoint
             }
-            val updated = updatedPending.copy(firstAttempt = attempt)
+            val updated = updatedPending.copy(firstAttempt = attempt, clickDispatched = true)
             pendingClick = updated
             logEvent(
                 stage = ClickLogStage.ClickActionSuccess,
@@ -1010,6 +1747,9 @@ class SkipAccessibilityService : AccessibilityService() {
                 GESTURE_VERIFY_DELAY_MS
             )
         }
+        if (gestureQueued && pendingClick?.signature == updatedPending.signature) {
+            pendingClick = updatedPending.copy(clickDispatched = true)
+        }
     }
 
     private fun verifyActionClick(pending: PendingClick) {
@@ -1030,8 +1770,17 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun runGestureFallback(pending: PendingClick) {
+        if (abortPendingIfAutomationPaused(pending)) return
         if (pendingClick?.signature != pending.signature) return
         val root = rootInActiveWindow
+        if (root == null && retryPendingClick(
+                pending = pending,
+                reason = "current_target_root_missing",
+                attempt = pending.firstAttempt
+            )
+        ) {
+            return
+        }
         if (cancelIfUnsafeDelayedClickWindow(pending, root)) return
         val currentRule = pending.activeRules.firstOrNull { rule ->
             rule.id == pending.ruleId && rule.packageName == pending.packageName
@@ -1085,16 +1834,24 @@ class SkipAccessibilityService : AccessibilityService() {
         )
         val revalidatedSnapshot = revalidation.snapshot
         if (!revalidation.allowed || revalidatedSnapshot == null) {
-            finishPendingClick(
-                pending = pending,
-                stage = ClickLogStage.SkippedBySafety,
-                success = false,
-                reason = revalidation.reason,
-                attempt = pending.firstAttempt,
-                effectConfirmReason = revalidation.reason,
-                blockedReason = revalidation.reason,
-                detail = "gesture_revalidation=${revalidation.reason}"
-            )
+            if (!retryPendingClick(
+                    pending = pending,
+                    reason = revalidation.reason,
+                    attempt = pending.firstAttempt,
+                    detail = "gesture_revalidation=${revalidation.reason}"
+                )
+            ) {
+                finishPendingClick(
+                    pending = pending,
+                    stage = ClickLogStage.SkippedBySafety,
+                    success = false,
+                    reason = revalidation.reason,
+                    attempt = pending.firstAttempt,
+                    effectConfirmReason = revalidation.reason,
+                    blockedReason = revalidation.reason,
+                    detail = "gesture_revalidation=${revalidation.reason}"
+                )
+            }
             return
         }
         val revalidatedCandidate = revalidatedSnapshot.target
@@ -1105,6 +1862,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 ).coerceAtLeast(0L)
             val standaloneDecision = StandaloneSkipGestureRevalidationPolicy.evaluate(
                 ruleSource = pending.ruleSource,
+                ruleKind = pending.ruleKind,
                 appElapsedMs = currentAppElapsedMs,
                 area = ScoreEvaluator.areaInScreen(revalidatedCandidate.bounds),
                 candidateAreaRatio = revalidatedCandidateAreaRatio,
@@ -1131,38 +1889,53 @@ class SkipAccessibilityService : AccessibilityService() {
             isLargeCandidateBounds = ClickExecutor.isLargeDefaultCandidate(revalidatedCandidate.bounds)
         )
         pendingClick = updated
-        ClickExecutor.gestureClick(this, updated.candidate, allowLargeBounds = false) { gestureAttempt ->
+        val gestureQueued = ClickExecutor.gestureClick(
+            this,
+            updated.candidate,
+            allowLargeBounds = false
+        ) { gestureAttempt ->
             if (pendingClick?.signature != updated.signature) return@gestureClick
             if (!gestureAttempt.accepted) {
                 val firstReason = updated.firstAttempt?.reason.orEmpty()
-                finishPendingClick(
-                    pending = updated,
-                    stage = ClickLogStage.ClickFailed,
-                    success = false,
-                    reason = listOf(firstReason, gestureAttempt.reason)
-                        .filter { it.isNotBlank() }
-                        .joinToString(";")
-                        .ifBlank { "click_failed" },
-                    attempt = gestureAttempt
-                )
+                val combinedReason = listOf(firstReason, gestureAttempt.reason)
+                    .filter { it.isNotBlank() }
+                    .joinToString(";")
+                    .ifBlank { "click_failed" }
+                if (!retryPendingClick(
+                        pending = updated,
+                        reason = gestureAttempt.reason,
+                        attempt = gestureAttempt,
+                        detail = combinedReason
+                    )
+                ) {
+                    finishPendingClick(
+                        pending = updated,
+                        stage = ClickLogStage.ClickFailed,
+                        success = false,
+                        reason = combinedReason,
+                        attempt = gestureAttempt
+                    )
+                }
                 return@gestureClick
             }
+            val dispatched = updated.copy(firstAttempt = gestureAttempt, clickDispatched = true)
+            pendingClick = dispatched
             logEvent(
                 stage = ClickLogStage.ClickActionSuccess,
-                eventContext = updated.eventContext,
-                pending = updated,
+                eventContext = dispatched.eventContext,
+                pending = dispatched,
                 clickMethod = gestureAttempt.method,
                 actionReturnValue = true,
                 clickResult = true,
-                delayBeforeClickMs = updated.delayBeforeClickMs,
+                delayBeforeClickMs = dispatched.delayBeforeClickMs,
                 clickTargetSource = ClickTargetSourceLog.GestureOnNodeCenter
             )
             mainHandler.postDelayed(
                 {
-                    if (pendingClick?.signature == updated.signature) {
-                        val result = verifyClickEffect(updated)
+                    if (pendingClick?.signature == dispatched.signature) {
+                        val result = verifyClickEffect(dispatched)
                         finishPendingClick(
-                            pending = updated,
+                            pending = dispatched,
                             stage = result.stage,
                             success = result.success,
                             reason = result.reason,
@@ -1174,6 +1947,9 @@ class SkipAccessibilityService : AccessibilityService() {
                 },
                 GESTURE_VERIFY_DELAY_MS
             )
+        }
+        if (gestureQueued && pendingClick?.signature == updated.signature) {
+            pendingClick = updated.copy(clickDispatched = true)
         }
     }
 
@@ -1187,6 +1963,161 @@ class SkipAccessibilityService : AccessibilityService() {
             rootWindowNull = root == null,
             targetStillPresent = root?.let { ClickExecutor.isTargetPresent(it, pending.candidate) } ?: false
         )
+    }
+
+    private fun handlePendingEventFastPath(
+        pending: PendingClick,
+        eventContext: EventContext
+    ) {
+        val currentPackage = eventContext.packageName.trim()
+        when (PendingEventFastPathPolicy.evaluate(
+            clickDispatched = pending.clickDispatched,
+            currentPackageKnown = currentPackage.isNotBlank(),
+            samePackage = currentPackage == pending.packageName,
+            isWithinRuleWindow = eventContext.isWithinDefaultRuleWindow,
+            activityChanged = hasActivityChanged(pending.eventContext.activityName)
+        )) {
+            PendingEventFastPathDecision.AwaitClickVerification,
+            PendingEventFastPathDecision.WaitForKnownPackage -> return
+            PendingEventFastPathDecision.CancelPackageChanged -> {
+                finishPendingClick(
+                    pending = pending,
+                    stage = ClickLogStage.ClickCancelledPackageChanged,
+                    success = false,
+                    reason = "package_changed_before_click",
+                    attempt = pending.firstAttempt,
+                    effectConfirmReason = "package_changed_before_click",
+                    eventContext = eventContext
+                )
+                return
+            }
+            PendingEventFastPathDecision.CancelTimeWindowExpired -> {
+                finishPendingClick(
+                    pending = pending,
+                    stage = ClickLogStage.ClickCancelledTimeWindowExpired,
+                    success = false,
+                    reason = "click_cancelled_time_window_expired",
+                    attempt = pending.firstAttempt,
+                    effectConfirmReason = "click_cancelled_time_window_expired",
+                    eventContext = eventContext
+                )
+                return
+            }
+            PendingEventFastPathDecision.CancelActivityChanged -> {
+                finishPendingClick(
+                    pending = pending,
+                    stage = ClickLogStage.SkippedBySafety,
+                    success = false,
+                    reason = "activity_changed_before_click",
+                    attempt = pending.firstAttempt,
+                    effectConfirmReason = "activity_changed_before_click",
+                    blockedReason = "activity_changed_before_click",
+                    eventContext = eventContext
+                )
+                return
+            }
+            PendingEventFastPathDecision.Continue -> Unit
+        }
+        cancelPendingClickForActivityScope(pending, eventContext)
+    }
+
+    private fun abortPendingIfAutomationPaused(pending: PendingClick): Boolean {
+        if (SettingsRepository.isMasterEnabled(this)) return false
+        if (pendingClick?.signature == pending.signature) {
+            pendingClick = null
+        }
+        terminateOpeningAdRecovery(pendingSessionKey(pending))
+        SettingsRepository.setLastFailureReason(this, "automation_paused", forcePersist = true)
+        return true
+    }
+
+    private fun retryPendingClick(
+        pending: PendingClick,
+        reason: String,
+        attempt: ClickAttempt?,
+        scan: ScanReport? = null,
+        clickTargetSource: ClickTargetSourceLog = pending.clickTargetSource,
+        detail: String = ""
+    ): Boolean {
+        if (pendingClick?.signature != pending.signature) return false
+        val root = rootInActiveWindow
+        val rootPackageName = root?.packageName?.toString().orEmpty()
+        val samePackage = foregroundPackage == pending.packageName &&
+            (rootPackageName.isBlank() || rootPackageName == pending.packageName)
+        val sameActivity = !hasActivityChanged(pending.eventContext.activityName)
+        val activeTextInput = root != null && ActiveTextInputGuard.hasFocusedEditableInput(root)
+        val now = System.currentTimeMillis()
+        val retryEventContext = buildEventContext(
+            eventType = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            eventPackageName = pending.packageName,
+            packageName = pending.packageName,
+            activityName = currentActivityName.ifBlank { pending.eventContext.activityName },
+            windowId = root?.windowId ?: pending.eventContext.windowId,
+            root = root,
+            now = now,
+            defaultRuleWindowMs = pending.eventContext.defaultRuleWindowMs
+        )
+        if (!OpeningAdRetryPolicy.shouldRetry(
+                reason = reason,
+                retriesPerformed = pending.retryCount,
+                isWithinRuleWindow = retryEventContext.isWithinDefaultRuleWindow,
+                samePackage = samePackage,
+                sameActivity = sameActivity,
+                activeTextInput = activeTextInput
+            )
+        ) {
+            return false
+        }
+
+        pendingClick = null
+        val nextRetryCount = scheduleOpeningAdRetry(
+            packageName = pending.packageName,
+            activeRules = pending.activeRules,
+            baseEventContext = retryEventContext,
+            reason = reason,
+            retriesPerformed = pending.retryCount
+        )
+        if (nextRetryCount == null) {
+            pendingClick = pending
+            return false
+        }
+
+        lastClickSignature = null
+        lastRuleClickAt.remove(pending.ruleId)
+        SettingsRepository.setLastFailureReason(this, reason)
+        logEvent(
+            stage = retryStageForReason(reason),
+            eventContext = retryEventContext,
+            pending = pending,
+            success = false,
+            failureReason = reason,
+            reason = reason,
+            detail = detail,
+            clickMethod = attempt?.method ?: ClickMethodLog.None,
+            actionReturnValue = attempt?.accepted,
+            clickResult = false,
+            candidateCount = scan?.candidateCount,
+            bestCandidateScore = scan?.bestCandidateScore,
+            bestCandidateBounds = scan?.bestCandidateBounds.orEmpty(),
+            minScore = scan?.bestCandidateMinScore ?: pending.minScore,
+            retryCount = pending.retryCount,
+            rescanReason = reason,
+            clickTargetSource = clickTargetSource
+        )
+        return true
+    }
+
+    private fun retryStageForReason(reason: String): ClickLogStage {
+        return when (reason) {
+            "root_window_null", "root_window_null_before_click", "current_target_root_missing",
+            "coordinate_root_missing" -> ClickLogStage.RootWindowNull
+            "score_below_min_score", "candidate_below_threshold" -> ClickLogStage.SkippedByLowScore
+            "gesture_cancelled", "gesture_dispatch_returned_false",
+            "coordinate_fallback_cancelled", "coordinate_fallback_dispatch_returned_false" -> {
+                ClickLogStage.ClickFailed
+            }
+            else -> ClickLogStage.NoCandidateFound
+        }
     }
 
     private fun finishPendingClick(
@@ -1204,12 +2135,14 @@ class SkipAccessibilityService : AccessibilityService() {
     ) {
         if (pendingClick?.signature != pending.signature) return
         pendingClick = null
+        terminateOpeningAdRecovery(pendingSessionKey(pending))
         val now = System.currentTimeMillis()
         if (success) {
+            SettingsRepository.flushRuntimeDiagnostics(this, now)
             SettingsRepository.markLastClick(this, now)
             showSuccessToast("已跳过：${pending.appName}", "success:${pending.packageName}")
         } else {
-            SettingsRepository.setLastFailureReason(this, reason)
+            SettingsRepository.setLastFailureReason(this, reason, forcePersist = true)
             showDebugToast("命中规则但点击失败，已记录日志", "fail:${pending.packageName}:${pending.ruleId}")
         }
         logEvent(
@@ -1304,7 +2237,13 @@ class SkipAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun logScan(scan: ScanReport, eventContext: EventContext) {
+    private fun logScan(
+        scan: ScanReport,
+        eventContext: EventContext,
+        scanDurationMs: Long? = null,
+        retryCount: Int = 0,
+        rescanReason: String = ""
+    ) {
         if (scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON) return
         if (scan.candidateCount > 0) {
             logEvent(
@@ -1319,6 +2258,9 @@ class SkipAccessibilityService : AccessibilityService() {
                 minScore = scan.bestCandidateMinScore,
                 matchedKeyword = scan.bestCandidateMatchedKeyword,
                 failureReason = scan.failureReason,
+                retryCount = retryCount,
+                scanDurationMs = scanDurationMs,
+                rescanReason = rescanReason,
                 defaultRuleAreaAllowed = scan.defaultRuleAreaAllowed,
                 textKeywordIsStandaloneSkip = scan.textKeywordIsStandaloneSkip,
                 candidateAreaRatio = scan.candidateAreaRatio,
@@ -1328,7 +2270,61 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun logMatch(match: MatchResult, eventContext: EventContext, scan: ScanReport) {
+    private fun logScanMiss(
+        scan: ScanReport,
+        eventContext: EventContext,
+        scanDurationMs: Long?,
+        retryCount: Int,
+        rescanReason: String
+    ) {
+        val stage = scanMissStage(scan)
+        logEvent(
+            stage = stage,
+            eventContext = eventContext,
+            ruleType = scan.bestCandidateRuleSource?.toClickLogType().orEmpty(),
+            ruleName = scan.bestCandidateRuleName,
+            ruleId = scan.bestCandidateRuleId,
+            candidateCount = scan.candidateCount,
+            bestCandidateScore = scan.bestCandidateScore,
+            bestCandidateBounds = scan.bestCandidateBounds,
+            minScore = scan.bestCandidateMinScore,
+            matchedKeyword = scan.bestCandidateMatchedKeyword,
+            failureReason = scan.failureReason,
+            reason = scan.failureReason,
+            detail = scan.bestCandidateMatchedKeyword,
+            blockedReason = if (stage == ClickLogStage.SkippedBySafety) scan.failureReason else "",
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason
+        )
+        SettingsRepository.setLastFailureReason(
+            this,
+            scan.failureReason,
+            forcePersist = stage == ClickLogStage.SkippedBySafety
+        )
+    }
+
+    private fun scanMissStage(scan: ScanReport): ClickLogStage {
+        return when {
+            scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON -> ClickLogStage.SkippedBySafety
+            scan.failureReason == "text_input_clear_button" -> ClickLogStage.SkippedBySafety
+            scan.failureReason == "activity_scope_mismatch" -> ClickLogStage.SkippedBySafety
+            scan.failureReason == ScoreEvaluator.GENERIC_CLOSE_BLOCKED_REASON -> ClickLogStage.SkippedBySafety
+            scan.candidateCount == 0 -> ClickLogStage.NoCandidateFound
+            scan.failureReason == "score_below_min_score" ||
+                scan.failureReason == "candidate_below_threshold" -> ClickLogStage.SkippedByLowScore
+            else -> ClickLogStage.SkippedBySafety
+        }
+    }
+
+    private fun logMatch(
+        match: MatchResult,
+        eventContext: EventContext,
+        scan: ScanReport,
+        retryCount: Int = 0,
+        scanDurationMs: Long? = null,
+        rescanReason: String = ""
+    ) {
         logEvent(
             stage = ClickLogStage.RuleMatched,
             eventContext = eventContext,
@@ -1336,7 +2332,10 @@ class SkipAccessibilityService : AccessibilityService() {
                 packageName = eventContext.packageName,
                 appName = match.appName,
                 match = ClickMatchSnapshot.from(match),
-                eventContext = eventContext
+                eventContext = eventContext,
+                retryCount = retryCount,
+                scanDurationMs = scanDurationMs,
+                rescanReason = rescanReason
             ),
             candidateCount = scan.candidateCount,
             bestCandidateScore = scan.bestCandidateScore,
@@ -1371,7 +2370,11 @@ class SkipAccessibilityService : AccessibilityService() {
         if (clearPending && pendingClick?.signature == pending.signature) {
             pendingClick = null
         }
-        SettingsRepository.setLastFailureReason(this, HighRiskClickPolicy.BLOCKED_REASON)
+        SettingsRepository.setLastFailureReason(
+            this,
+            HighRiskClickPolicy.BLOCKED_REASON,
+            forcePersist = true
+        )
         showDebugToast("安全策略已阻止高风险点击，已记录日志", "safety:${pending.packageName}:${pending.ruleId}")
         logEvent(
             stage = ClickLogStage.SkippedBySafety,
@@ -1388,6 +2391,7 @@ class SkipAccessibilityService : AccessibilityService() {
             blockedReason = HighRiskClickPolicy.BLOCKED_REASON,
             clickTargetSource = clickTargetSource
         )
+        terminateOpeningAdRecovery(pendingSessionKey(pending))
     }
 
     private fun logEvent(
@@ -1409,8 +2413,12 @@ class SkipAccessibilityService : AccessibilityService() {
         actionReturnValue: Boolean? = null,
         clickResult: Boolean? = null,
         effectConfirmed: Boolean? = null,
-        delayBeforeClickMs: Long? = null,
-        retryCount: Int = 0,
+        delayBeforeClickMs: Long? = pending?.delayBeforeClickMs,
+        retryCount: Int = pending?.retryCount ?: 0,
+        actualClickDelayMs: Long? = pending?.actualClickDelayMs,
+        callbackQueueDelayMs: Long? = pending?.callbackQueueDelayMs,
+        scanDurationMs: Long? = pending?.scanDurationMs,
+        rescanReason: String = pending?.rescanReason.orEmpty(),
         detail: String = "",
         blockedReason: String = "",
         defaultRuleAreaAllowed: Boolean? = pending?.defaultRuleAreaAllowed,
@@ -1456,6 +2464,10 @@ class SkipAccessibilityService : AccessibilityService() {
                 effectConfirmed = effectConfirmed,
                 delayBeforeClickMs = delayBeforeClickMs,
                 retryCount = retryCount,
+                actualClickDelayMs = actualClickDelayMs,
+                callbackQueueDelayMs = callbackQueueDelayMs,
+                scanDurationMs = scanDurationMs,
+                rescanReason = rescanReason,
                 detail = detail,
                 blockedReason = blockedReason,
                 defaultRuleAreaAllowed = defaultRuleAreaAllowed,
@@ -1580,13 +2592,25 @@ class SkipAccessibilityService : AccessibilityService() {
     companion object {
         private const val REPEAT_CLICK_GUARD_MS = 3000L
         internal const val STABLE_CLICK_DELAY_MS = 100L
+        private const val ABSOLUTE_RESCAN_REASON = "opening_ad_absolute_rescan"
         private const val CLICK_VERIFY_DELAY_MS = 360L
         private const val GESTURE_VERIFY_DELAY_MS = 460L
+        private const val INPUT_METHOD_REFRESH_INTERVAL_MS = 5_000L
         private const val COORDINATE_BLOCKED_LOG_INTERVAL_MS = 2_000L
         private const val TOAST_COOLDOWN_MS = 60_000L
         private const val POPUP_DURATION_MS = 1600L
     }
 }
+
+private data class OpeningAdRetryRequest(
+    val sessionKey: String,
+    val packageName: String,
+    val expectedActivityName: String,
+    val activeRules: List<SkipRule>,
+    val defaultRuleWindowMs: Long,
+    val retryCount: Int,
+    val reason: String
+)
 
 private data class RootSelection(
     val root: AccessibilityNodeInfo?,
@@ -1603,6 +2627,32 @@ internal data class ClickVerification(
     val success: Boolean,
     val reason: String
 )
+
+internal enum class PendingEventFastPathDecision {
+    AwaitClickVerification,
+    WaitForKnownPackage,
+    CancelPackageChanged,
+    CancelTimeWindowExpired,
+    CancelActivityChanged,
+    Continue
+}
+
+internal object PendingEventFastPathPolicy {
+    fun evaluate(
+        clickDispatched: Boolean,
+        currentPackageKnown: Boolean,
+        samePackage: Boolean,
+        isWithinRuleWindow: Boolean,
+        activityChanged: Boolean
+    ): PendingEventFastPathDecision {
+        if (clickDispatched) return PendingEventFastPathDecision.AwaitClickVerification
+        if (!currentPackageKnown) return PendingEventFastPathDecision.WaitForKnownPackage
+        if (!samePackage) return PendingEventFastPathDecision.CancelPackageChanged
+        if (!isWithinRuleWindow) return PendingEventFastPathDecision.CancelTimeWindowExpired
+        if (activityChanged) return PendingEventFastPathDecision.CancelActivityChanged
+        return PendingEventFastPathDecision.Continue
+    }
+}
 
 internal object ClickEffectVerifier {
     fun evaluate(

@@ -35,7 +35,7 @@ fun RuleFormatScreen(onBack: () -> Unit) {
 
             InfoCard(
                 title = "主要字段",
-                body = "schemaVersion、name、version、author、appPolicies、apps、packageName、rules、id、matchTexts、matchContentDescriptions、matchViewIds、textMatchMode、contentDescriptionMatchMode、viewIdMatchMode、area、action、cooldownMs、validDurationMs、minScore、coordinateFallback。"
+                body = "schemaVersion、name、version、author、appPolicies、apps、packageName、rules、id、kind、activityName、matchTexts、matchContentDescriptions、matchViewIds、textMatchMode、contentDescriptionMatchMode、viewIdMatchMode、area、action、cooldownMs、validDurationMs、minScore、coordinateFallback。"
             )
             InfoCard(
                 title = "按应用策略",

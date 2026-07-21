@@ -6,6 +6,7 @@ import com.example.skip.engine.ClickTargetInfo
 import com.example.skip.engine.CoordinateFallbackMatch
 import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.MatchResult
+import com.example.skip.model.RuleKind
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import java.util.Locale
@@ -46,7 +47,8 @@ internal data class ClickMatchSnapshot(
     val defaultRuleAreaAllowed: Boolean?,
     val textKeywordIsStandaloneSkip: Boolean,
     val standaloneSkipAllowed: Boolean = false,
-    val clickTargetSource: ClickTargetSourceLog
+    val clickTargetSource: ClickTargetSourceLog,
+    val ruleKind: RuleKind = RuleKind.Standard
 ) {
     companion object {
         fun from(match: MatchResult): ClickMatchSnapshot {
@@ -67,7 +69,8 @@ internal data class ClickMatchSnapshot(
                 defaultRuleAreaAllowed = match.defaultRuleAreaAllowed,
                 textKeywordIsStandaloneSkip = match.textKeywordIsStandaloneSkip,
                 standaloneSkipAllowed = match.standaloneSkipAllowed,
-                clickTargetSource = match.clickTargetSource
+                clickTargetSource = match.clickTargetSource,
+                ruleKind = match.ruleKind
             )
         }
     }
@@ -99,9 +102,17 @@ internal data class PendingClick(
     val signature: String = "",
     val delayBeforeClickMs: Long? = null,
     val retryCount: Int = 0,
+    val actualClickDelayMs: Long? = null,
+    val callbackQueueDelayMs: Long? = null,
+    val scanDurationMs: Long? = null,
+    val rescanReason: String = "",
+    val clickDispatched: Boolean = false,
     val firstAttempt: ClickAttempt? = null,
     val coordinateX: Int? = null,
-    val coordinateY: Int? = null
+    val coordinateY: Int? = null,
+    val ruleKind: RuleKind = RuleKind.Standard,
+    val candidateRelocated: Boolean = false,
+    val relocationMethod: String = ""
 )
 
 internal object ClickFlowStateMachine {
@@ -110,6 +121,9 @@ internal object ClickFlowStateMachine {
         appName: String,
         match: ClickMatchSnapshot,
         eventContext: EventContext,
+        retryCount: Int = 0,
+        scanDurationMs: Long? = null,
+        rescanReason: String = "",
         startedAt: Long = System.currentTimeMillis()
     ): PendingClick {
         return basePending(
@@ -118,6 +132,10 @@ internal object ClickFlowStateMachine {
             match = match,
             eventContext = eventContext,
             startedAt = startedAt
+        ).copy(
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason
         )
     }
 
@@ -129,6 +147,9 @@ internal object ClickFlowStateMachine {
         signature: String,
         eventContext: EventContext,
         delayBeforeClickMs: Long?,
+        retryCount: Int = 0,
+        scanDurationMs: Long? = null,
+        rescanReason: String = "",
         startedAt: Long = System.currentTimeMillis()
     ): PendingClick {
         return basePending(
@@ -140,7 +161,10 @@ internal object ClickFlowStateMachine {
         ).copy(
             activeRules = activeRules,
             signature = signature,
-            delayBeforeClickMs = delayBeforeClickMs
+            delayBeforeClickMs = delayBeforeClickMs,
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason
         )
     }
 
@@ -152,6 +176,9 @@ internal object ClickFlowStateMachine {
         signature: String,
         eventContext: EventContext,
         delayBeforeClickMs: Long?,
+        retryCount: Int = 0,
+        scanDurationMs: Long? = null,
+        rescanReason: String = "",
         startedAt: Long = System.currentTimeMillis()
     ): PendingClick {
         val rule = fallback.rule
@@ -180,8 +207,12 @@ internal object ClickFlowStateMachine {
             activeRules = activeRules,
             signature = signature,
             delayBeforeClickMs = delayBeforeClickMs,
+            retryCount = retryCount,
+            scanDurationMs = scanDurationMs,
+            rescanReason = rescanReason,
             coordinateX = fallback.x,
-            coordinateY = fallback.y
+            coordinateY = fallback.y,
+            ruleKind = rule.kind
         )
     }
 
@@ -190,6 +221,7 @@ internal object ClickFlowStateMachine {
             ruleId = match.ruleId,
             ruleName = match.ruleName,
             ruleSource = match.ruleSource,
+            ruleKind = match.ruleKind,
             ruleScope = match.ruleSource.toRuleScope(),
             score = match.score,
             minScore = match.minScore,
@@ -203,7 +235,23 @@ internal object ClickFlowStateMachine {
             defaultRuleAreaAllowed = match.defaultRuleAreaAllowed,
             textKeywordIsStandaloneSkip = match.textKeywordIsStandaloneSkip,
             standaloneSkipAllowed = match.standaloneSkipAllowed,
-            clickTargetSource = match.clickTargetSource
+            clickTargetSource = match.clickTargetSource,
+            candidateRelocated = true,
+            relocationMethod = if (match.target.viewId.isNotBlank()) "view_id" else "exact_identity"
+        )
+    }
+
+    fun recordCallbackTiming(
+        pending: PendingClick,
+        callbackAtMillis: Long = System.currentTimeMillis()
+    ): PendingClick {
+        val actualDelayMs = (callbackAtMillis - pending.startedAt).coerceAtLeast(0L)
+        val queueDelayMs = pending.delayBeforeClickMs?.let { plannedDelayMs ->
+            (actualDelayMs - plannedDelayMs).coerceAtLeast(0L)
+        }
+        return pending.copy(
+            actualClickDelayMs = actualDelayMs,
+            callbackQueueDelayMs = queueDelayMs
         )
     }
 
@@ -220,6 +268,7 @@ internal object ClickFlowStateMachine {
             ruleId = match.ruleId,
             ruleName = match.ruleName,
             ruleSource = match.ruleSource,
+            ruleKind = match.ruleKind,
             ruleScope = match.ruleSource.toRuleScope(),
             score = match.score,
             minScore = match.minScore,
@@ -248,6 +297,23 @@ internal object PendingClickRelocationPolicy {
         pending: PendingClick,
         match: ClickMatchSnapshot
     ): PendingClickRelocationDecision {
+        if (pending.ruleKind == RuleKind.Precise) {
+            if (match.ruleKind != RuleKind.Precise || pending.ruleId != match.ruleId) return blocked()
+            val originalViewId = pending.target.viewId
+            if (originalViewId.isNotBlank()) {
+                val sameViewIdentity = originalViewId == match.target.viewId &&
+                    pending.target.className == match.target.className &&
+                    pending.matchedKeyword == match.matchedKeyword &&
+                    pending.target.bounds.isNearRelocation(match.target.bounds)
+                return if (sameViewIdentity) {
+                    PendingClickRelocationDecision.Allowed
+                } else blocked()
+            }
+            val sameIdentity = pending.target.className == match.target.className &&
+                pending.matchedKeyword == match.matchedKeyword &&
+                pending.target.bounds.isNearRelocation(match.target.bounds)
+            return if (sameIdentity) PendingClickRelocationDecision.Allowed else blocked()
+        }
         if (pending.ruleSource != RuleSource.BuiltIn) return PendingClickRelocationDecision.Allowed
         if (match.ruleSource != RuleSource.BuiltIn) return blocked()
         if (pending.ruleId != match.ruleId) return blocked()

@@ -39,3 +39,4 @@ local.properties
 *.aab
 /downloads/
 logs/
+skip_diagnostic_*.json
