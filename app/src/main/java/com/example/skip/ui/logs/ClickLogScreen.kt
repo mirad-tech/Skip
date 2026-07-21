@@ -60,6 +60,7 @@ fun ClickLogScreen(
     val appContext = context.applicationContext
     val coroutineScope = rememberCoroutineScope()
     val storageState by LogRepository.storageState.collectAsState()
+    val storageDiagnostic by LogRepository.storageDiagnosticState.collectAsState()
     val listState = rememberLazyListState()
     val versionName = remember {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
@@ -207,12 +208,12 @@ fun ClickLogScreen(
                     }
                     if (!showRuleLogs) {
                         Button(
-                            enabled = logs.isNotEmpty(),
+                            enabled = filteredLogs.isNotEmpty(),
                             onClick = {
                                 exportLauncher.launch("skip_click_logs_${formatFileTime()}.json")
                             }
                         ) {
-                            Text("导出日志")
+                            Text("导出当前筛选结果")
                         }
                         Button(
                             onClick = {
@@ -230,6 +231,30 @@ fun ClickLogScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                if (!showRuleLogs) {
+                    Text(
+                        text = "日志保留最近 7 天，最多 1000 条；导出当前筛选结果。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (storageDiagnostic.pendingWriteCount > 0 ||
+                        storageDiagnostic.droppedPendingWriteCount > 0
+                    ) {
+                        Text(
+                            text = buildString {
+                                if (storageDiagnostic.pendingWriteCount > 0) {
+                                    append("待写入 ${storageDiagnostic.pendingWriteCount} 条")
+                                }
+                                if (storageDiagnostic.droppedPendingWriteCount > 0) {
+                                    if (isNotEmpty()) append("；")
+                                    append("已丢弃 ${storageDiagnostic.droppedPendingWriteCount} 条待写入日志")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }
@@ -313,7 +338,7 @@ fun ClickLogScreen(
             } else {
                 item {
                     Text(
-                        text = "当前显示 ${visibleCount}/${filteredLogs.size} 条，导出保留完整记录",
+                        text = "当前显示 ${visibleCount}/${filteredLogs.size} 条",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

@@ -35,6 +35,7 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     val skipEnabled = serviceEnabled && masterEnabled
+    val actionLabel = homeAutomationActionLabel(skipEnabled, safetyModeEnabled)
     val iconScheme = remember(context) { IconManager.currentScheme(context) }
     val iconRes = IconManager.homeImageRes
     val icon = remember(context, iconRes) {
@@ -73,7 +74,7 @@ fun HomeScreen(
                         contentColor = Color.White
                     )
                 ) {
-                    Text(if (skipEnabled) "暂停自动化" else "开启自动化")
+                    Text(actionLabel)
                 }
             }
 
@@ -84,6 +85,15 @@ fun HomeScreen(
                 Text("更多")
             }
         }
+    }
+}
+
+internal fun homeAutomationActionLabel(skipEnabled: Boolean, safetyModeEnabled: Boolean): String {
+    return when {
+        skipEnabled && safetyModeEnabled -> "暂停观察"
+        skipEnabled -> "暂停自动化"
+        safetyModeEnabled -> "开启观察"
+        else -> "开启自动化"
     }
 }
 

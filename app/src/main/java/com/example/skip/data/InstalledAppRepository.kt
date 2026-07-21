@@ -36,7 +36,7 @@ object InstalledAppRepository {
             customRuleCount = customRules.size,
             isProtected = protected,
             isSelfPackage = selfPackage,
-            hitCount = stats?.totalCount ?: 0,
+            eventCount = stats?.totalCount ?: 0,
             successCount = stats?.successCount ?: 0
         )
     }
@@ -52,6 +52,6 @@ data class InstalledAppStatus(
     val customRulesEnabled: Boolean = true,
     val isProtected: Boolean,
     val isSelfPackage: Boolean = false,
-    val hitCount: Int = 0,
+    val eventCount: Int = 0,
     val successCount: Int = 0
 )

@@ -12,7 +12,8 @@ internal class RuntimeDiagnosticsWriteGate(
     private val minPersistIntervalMs: Long = 30_000L
 ) {
     private var initialized = false
-    private var lastPersistAt = 0L
+    private var lastServiceActivePersistAt = 0L
+    private var lastFailureReasonPersistAt = 0L
     private var lastKnownFailureReason = ""
     private var pendingServiceActiveAt = 0L
     private var pendingFailureReason: String? = null
@@ -23,13 +24,14 @@ internal class RuntimeDiagnosticsWriteGate(
     ) {
         if (initialized) return
         initialized = true
-        lastPersistAt = persistedServiceActiveAt
+        lastServiceActivePersistAt = persistedServiceActiveAt
+        lastFailureReasonPersistAt = persistedServiceActiveAt
         lastKnownFailureReason = persistedFailureReason
     }
 
     fun recordServiceActive(timeMillis: Long): RuntimeDiagnosticsUpdate? {
         pendingServiceActiveAt = maxOf(pendingServiceActiveAt, timeMillis)
-        return drain(timeMillis, force = false)
+        return drain(timeMillis)
     }
 
     fun recordFailureReason(
@@ -42,25 +44,45 @@ internal class RuntimeDiagnosticsWriteGate(
             lastKnownFailureReason = cleanReason
             pendingFailureReason = cleanReason
         }
-        return drain(timeMillis, force)
+        return drain(timeMillis, forceFailureReason = force)
     }
 
     fun flush(timeMillis: Long): RuntimeDiagnosticsUpdate? {
-        return drain(timeMillis, force = true)
+        return drain(
+            timeMillis = timeMillis,
+            forceServiceActive = true,
+            forceFailureReason = true
+        )
     }
 
-    private fun drain(timeMillis: Long, force: Boolean): RuntimeDiagnosticsUpdate? {
-        if (!force && lastPersistAt > 0L && timeMillis - lastPersistAt < minPersistIntervalMs) {
-            return null
-        }
+    private fun drain(
+        timeMillis: Long,
+        forceServiceActive: Boolean = false,
+        forceFailureReason: Boolean = false
+    ): RuntimeDiagnosticsUpdate? {
+        val persistServiceActive = pendingServiceActiveAt > 0L && (
+            forceServiceActive ||
+                lastServiceActivePersistAt == 0L ||
+                timeMillis - lastServiceActivePersistAt >= minPersistIntervalMs
+            )
+        val persistFailureReason = pendingFailureReason != null && (
+            forceFailureReason ||
+                lastFailureReasonPersistAt == 0L ||
+                timeMillis - lastFailureReasonPersistAt >= minPersistIntervalMs
+            )
         val update = RuntimeDiagnosticsUpdate(
-            serviceActiveAt = pendingServiceActiveAt.takeIf { it > 0L },
-            lastFailureReason = pendingFailureReason
+            serviceActiveAt = pendingServiceActiveAt.takeIf { persistServiceActive },
+            lastFailureReason = pendingFailureReason.takeIf { persistFailureReason }
         )
         if (update.isEmpty) return null
-        pendingServiceActiveAt = 0L
-        pendingFailureReason = null
-        lastPersistAt = timeMillis
+        if (persistServiceActive) {
+            pendingServiceActiveAt = 0L
+            lastServiceActivePersistAt = timeMillis
+        }
+        if (persistFailureReason) {
+            pendingFailureReason = null
+            lastFailureReasonPersistAt = timeMillis
+        }
         return update
     }
 }

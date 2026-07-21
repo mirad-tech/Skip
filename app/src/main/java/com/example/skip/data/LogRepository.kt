@@ -23,8 +23,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
@@ -82,6 +85,11 @@ private data class PendingClickLogWrite(
     val generation: Long
 )
 
+private data class PendingWriteDiagnostic(
+    val pendingWriteCount: Int = 0,
+    val droppedPendingWriteCount: Long = 0L
+)
+
 private class QuarantineWriteException : IllegalStateException("quarantine_write_failed")
 
 object LogRepository {
@@ -126,6 +134,17 @@ object LogRepository {
     private var migrationRetryJob: Job? = null
     private val mutableStorageState = MutableStateFlow<LogStorageState>(LogStorageState.Initializing)
     internal val storageState: StateFlow<LogStorageState> = mutableStorageState.asStateFlow()
+    private val mutablePendingWriteDiagnostic = MutableStateFlow(PendingWriteDiagnostic())
+    internal val storageDiagnosticState: StateFlow<LogStorageDiagnosticSnapshot> = combine(
+        storageState,
+        mutablePendingWriteDiagnostic
+    ) { state, pending ->
+        state.toDiagnosticSnapshot(pending)
+    }.stateIn(
+        scope = writeScope,
+        started = SharingStarted.Eagerly,
+        initialValue = LogStorageState.Initializing.toDiagnosticSnapshot(PendingWriteDiagnostic())
+    )
     private var throttleFlushJob: Job? = null
     private var throttleGeneration = 0L
     private val pendingClickWrites = ArrayDeque<PendingClickLogWrite>()
@@ -161,15 +180,11 @@ object LogRepository {
     internal fun getStorageDiagnosticSnapshot(): LogStorageDiagnosticSnapshot {
         val state = storageState.value
         return synchronized(lock) {
-            LogStorageDiagnosticSnapshot(
-                state = when (state) {
-                    LogStorageState.Initializing -> "initializing"
-                    is LogStorageState.Ready -> "ready"
-                    is LogStorageState.Degraded -> "degraded"
-                },
-                pendingWriteCount = pendingClickWrites.size,
-                droppedPendingWriteCount = droppedPendingWriteCount,
-                lastErrorCode = (state as? LogStorageState.Degraded)?.errorCode?.value.orEmpty()
+            state.toDiagnosticSnapshot(
+                PendingWriteDiagnostic(
+                    pendingWriteCount = pendingClickWrites.size,
+                    droppedPendingWriteCount = droppedPendingWriteCount
+                )
             )
         }
     }
@@ -197,6 +212,7 @@ object LogRepository {
             throttleGeneration += 1L
             droppedPendingWriteCount = 0L
             rateLimiter.reset()
+            publishPendingWriteDiagnosticLocked()
         }
     }
 
@@ -235,6 +251,7 @@ object LogRepository {
                         generation = pendingWriteGeneration
                     )
                 )
+                publishPendingWriteDiagnosticLocked()
                 shouldDrain = true
             } else {
                 val bucket = ThrottleBucketKey(dayStartMillis(now), rateLimit.throttleAggregateKey)
@@ -350,6 +367,7 @@ object LogRepository {
             pendingClickWrites.clear()
             pendingThrottleCounts.clear()
             rateLimiter.reset()
+            publishPendingWriteDiagnosticLocked()
             val staleThrottleJob = throttleFlushJob.also { throttleFlushJob = null }
             val staleDrainJob = pendingDrainJob.also { pendingDrainJob = null }
             clearResult = persistenceQueue.enqueueCatching {
@@ -993,6 +1011,7 @@ object LogRepository {
                 val head = pendingClickWrites.firstOrNull()
                 if (head?.entity?.storageKey == pending.entity.storageKey) {
                     pendingClickWrites.removeFirst()
+                    publishPendingWriteDiagnosticLocked()
                 }
             }
         }
@@ -1013,6 +1032,28 @@ object LogRepository {
                 mutableStorageState.value = LogStorageState.Ready(legacyDataQuarantined)
             }
         }
+    }
+
+    private fun publishPendingWriteDiagnosticLocked() {
+        mutablePendingWriteDiagnostic.value = PendingWriteDiagnostic(
+            pendingWriteCount = pendingClickWrites.size,
+            droppedPendingWriteCount = droppedPendingWriteCount
+        )
+    }
+
+    private fun LogStorageState.toDiagnosticSnapshot(
+        pending: PendingWriteDiagnostic
+    ): LogStorageDiagnosticSnapshot {
+        return LogStorageDiagnosticSnapshot(
+            state = when (this) {
+                LogStorageState.Initializing -> "initializing"
+                is LogStorageState.Ready -> "ready"
+                is LogStorageState.Degraded -> "degraded"
+            },
+            pendingWriteCount = pending.pendingWriteCount,
+            droppedPendingWriteCount = pending.droppedPendingWriteCount,
+            lastErrorCode = (this as? LogStorageState.Degraded)?.errorCode?.value.orEmpty()
+        )
     }
 
     private fun scheduleThrottleFlush(context: Context, generation: Long) {

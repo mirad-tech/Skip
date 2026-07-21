@@ -42,7 +42,8 @@ enum class MoreHubType(val title: String) {
 fun MoreHubScreen(
     type: MoreHubType,
     onBack: () -> Unit,
-    onOpenDestination: (MoreDestination) -> Unit
+    onOpenDestination: (MoreDestination) -> Unit,
+    onSafetyModeChanged: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val items = when (type) {
@@ -63,7 +64,7 @@ fun MoreHubScreen(
         )
 
         MoreHubType.Data -> listOf(
-            HubItem("命中统计", "按应用和规则汇总", MoreDestination.Stats),
+            HubItem("事件统计", "按应用和规则汇总事件", MoreDestination.Stats),
             HubItem("点击日志", "结果记录", MoreDestination.Logs),
             HubItem("规则日志", "创建和导入", MoreDestination.RuleLogs),
             HubItem("安全保护", "敏感 App 默认避开", MoreDestination.Safety),
@@ -102,6 +103,7 @@ fun MoreHubScreen(
                         onCheckedChange = { enabled ->
                             safetyModeEnabled = enabled
                             SettingsRepository.setSafetyModeEnabled(context, enabled)
+                            onSafetyModeChanged(enabled)
                         }
                     )
                     Text(

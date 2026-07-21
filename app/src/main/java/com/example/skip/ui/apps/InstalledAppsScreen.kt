@@ -232,7 +232,7 @@ private fun InstalledAppStatus.statusText(): String {
         if (isBlacklisted) add("默认规则关闭")
         if (!customRulesEnabled) add("自定义规则关闭")
         if (hasCustomRules) add("自定义规则 $customRuleCount")
-        if (hitCount > 0) add("命中 $hitCount / 成功 $successCount")
+        if (eventCount > 0) add("事件 $eventCount / 成功 $successCount")
     }.joinToString(" · ")
 }
 

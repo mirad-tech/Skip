@@ -92,7 +92,9 @@ class MainActivity : ComponentActivity() {
 
                     is AppScreen.AccessibilityPurpose -> AccessibilityPurposeScreen(
                         onBack = { currentScreen = screen.returnScreen },
-                        onOpenSettings = { openAccessibilitySettingsAfterPurpose() },
+                        onOpenSettings = {
+                            openAccessibilitySettingsAfterPurpose(screen.returnScreen)
+                        },
                         onOpenPermissions = {
                             currentScreen = AppScreen.Permissions(returnScreen = screen)
                         }
@@ -180,7 +182,8 @@ class MainActivity : ComponentActivity() {
                     AppScreen.AppHub -> MoreHubScreen(
                         type = MoreHubType.Apps,
                         onBack = { currentScreen = AppScreen.More },
-                        onOpenDestination = { destination -> openMoreDestination(destination) }
+                        onOpenDestination = { destination -> openMoreDestination(destination) },
+                        onSafetyModeChanged = { enabled -> safetyModeEnabled = enabled }
                     )
 
                     AppScreen.SystemHub -> MoreHubScreen(
@@ -290,24 +293,32 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestEnableSkipService() {
-        currentScreen = if (releaseDisclosureAccepted) {
-            AppScreen.AccessibilityPurpose()
-        } else {
-            AppScreen.Onboarding()
+        val decision = enableAutomationDecision(
+            releaseDisclosureAccepted = releaseDisclosureAccepted,
+            serviceEnabled = serviceEnabled
+        )
+        if (decision.enableMaster) {
+            SettingsRepository.setMasterEnabled(this, true)
+            masterEnabled = true
         }
+        currentScreen = decision.nextScreen
     }
 
-    private fun openAccessibilitySettingsAfterPurpose() {
+    private fun openAccessibilitySettingsAfterPurpose(returnScreen: AppScreen) {
         if (!releaseDisclosureAccepted) {
-            currentScreen = AppScreen.Onboarding()
+            currentScreen = AppScreen.Onboarding(
+                nextAfterAccept = AppScreen.AccessibilityPurpose(returnScreen),
+                declineTarget = returnScreen
+            )
             return
         }
-        SettingsRepository.setMasterEnabled(this, true)
-        masterEnabled = true
-        if (!serviceEnabled) {
-            startActivity(SettingsIntentUtils.accessibilityIntent())
+        val decision = accessibilitySettingsDecision(returnScreen)
+        if (decision.enableMaster) {
+            SettingsRepository.setMasterEnabled(this, true)
+            masterEnabled = true
         }
-        currentScreen = AppScreen.Home
+        currentScreen = decision.returnScreen
+        startActivity(SettingsIntentUtils.accessibilityIntent())
     }
 
     private fun disableSkipService() {
