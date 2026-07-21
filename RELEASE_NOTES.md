@@ -23,7 +23,11 @@
 
 - `versionCode`：19
 - `versionName`：`1.0.11`
-- 本次仅推送源码与版本信息，未创建 GitHub Release，也未上传或伪造 release APK/SHA256。
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.11-release.apk`
+- SHA256：`80F8C9D88517DB378DC0E3C59186FB27F2C2D0B35E8E78442387EBB21C6A7D76`
 
 ### 验证摘要
 
