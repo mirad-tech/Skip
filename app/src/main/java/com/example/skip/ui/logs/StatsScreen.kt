@@ -11,11 +11,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +28,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.StatsRepository
+import com.example.skip.data.LogRepository
+import com.example.skip.data.LogStorageState
 import com.example.skip.model.AppHitStats
 import com.example.skip.model.HitStats
 import com.example.skip.model.RuleHitStats
@@ -45,6 +49,7 @@ private const val STATS_BATCH_SIZE = 30
 @Composable
 fun StatsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val storageState by LogRepository.storageState.collectAsState()
     val listState = rememberLazyListState()
     var window by remember { mutableStateOf(StatsWindow.All) }
     var loading by remember { mutableStateOf(true) }
@@ -52,9 +57,9 @@ fun StatsScreen(onBack: () -> Unit) {
 
     LaunchedEffect(context, window) {
         loading = true
-        stats = withContext(Dispatchers.IO) {
-            StatsRepository.getStats(context, window)
-        }
+        runCatching { withContext(Dispatchers.IO) {
+            StatsRepository.loadStats(context, window)
+        } }.onSuccess { stats = it }
         loading = false
     }
 
@@ -103,6 +108,21 @@ fun StatsScreen(onBack: () -> Unit) {
                         onClick = { window = item },
                         label = { Text(item.label) }
                     )
+                }
+            }
+        }
+
+        item {
+            if (storageState is LogStorageState.Degraded) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "日志存储暂时不可用，统计仅包含当前可读取的数据。",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Button(onClick = { LogRepository.retryStorageNow(context.applicationContext) }) {
+                        Text("重试日志存储")
+                    }
                 }
             }
         }

@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.InstalledAppRepository
 import com.example.skip.data.InstalledAppStatus
+import com.example.skip.data.LogRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.ui.common.AppIconView
 import com.example.skip.ui.common.AutoLoadMoreEffect
@@ -58,6 +59,7 @@ fun InstalledAppsScreen(
     LaunchedEffect(context, refreshKey) {
         loading = true
         apps = withContext(Dispatchers.IO) {
+            LogRepository.getClickLogs(context)
             InstalledAppRepository.loadApps(context)
         }
         loading = false

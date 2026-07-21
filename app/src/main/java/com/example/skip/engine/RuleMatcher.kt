@@ -11,7 +11,18 @@ object RuleMatcher {
         rule: SkipRule,
         appElapsedMs: Long
     ): CandidateEvaluation? {
-        val resolution = ClickExecutor.resolveCandidate(node)
+        val signals = ClickExecutor.describeRuleCandidateSignals(node)
+        if (!ScoreEvaluator.hasPotentialRuleMatch(signals, rule)) return null
+        val resolution = ClickExecutor.resolveCandidate(node, signals)
+        return evaluateResolved(node, rule, appElapsedMs, resolution)
+    }
+
+    internal fun evaluateResolved(
+        node: AccessibilityNodeInfo,
+        rule: SkipRule,
+        appElapsedMs: Long,
+        resolution: ClickCandidateResolution
+    ): CandidateEvaluation? {
         val scoredRule = ScoreEvaluator.evaluate(node, rule, appElapsedMs, resolution) ?: return null
         val candidate = resolution.candidate
         val clickSelection = scoredRule.clickSelection
@@ -50,7 +61,8 @@ object RuleMatcher {
                 defaultRuleAreaAllowed = scoredRule.defaultRuleAreaAllowed,
                 textKeywordIsStandaloneSkip = scoredRule.textKeywordIsStandaloneSkip,
                 standaloneSkipAllowed = scoredRule.standaloneSkipAllowed,
-                clickTargetSource = clickSelection.source
+                clickTargetSource = clickSelection.source,
+                ruleKind = rule.kind
             )
         } else {
             null

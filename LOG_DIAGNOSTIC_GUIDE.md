@@ -17,7 +17,7 @@
 - `device`：品牌、厂商、型号、Android 版本、SDK、ROM 类型。
 - `runtimeState`：总开关、安全模式、调试日志、披露同意、无障碍服务状态、服务连接/活跃/中断时间、最近失败原因。
 - `rulesSnapshot`：当前规则、规则包、应用策略、默认规则模板、默认关键词、View ID 关键词、坐标兜底状态。
-- `clickLogs`：脱敏后的点击日志，包含阶段、失败原因、候选数量、分数、时间窗、坐标兜底、阻止原因等字段。
+- `clickLogs`：脱敏后的点击日志，包含阶段、失败原因、候选数量、分数、时间窗、坐标兜底、阻止原因，以及 `ruleKind`、`planScope`、`effectiveRuleWindowMs`、`candidateRelocated`、`relocationMethod` 等字段。
 - `ruleLogs`：规则创建、导入、失败记录。
 - `diagnosticSummary`：本地聚合后的常见原因计数。
 

@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.skip.data.IconManager
 import com.example.skip.data.IconScheme
+import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.ui.about.AboutScreen
@@ -80,7 +81,7 @@ class MainActivity : ComponentActivity() {
 
                     is AppScreen.Onboarding -> OnboardingDisclosureScreen(
                         onAccept = {
-                            SettingsRepository.setReleaseDisclosureAccepted(this, true)
+                            SettingsRepository.setReleaseDisclosureAccepted(this@MainActivity, true)
                             releaseDisclosureAccepted = true
                             currentScreen = screen.nextAfterAccept
                         },
@@ -130,6 +131,19 @@ class MainActivity : ComponentActivity() {
                                 ruleId = null,
                                 packageName = packageName,
                                 returnTarget = screen.returnTarget
+                            )
+                        },
+                        onAddPreciseRule = { packageName, activityName, text, description, viewId, area ->
+                            currentScreen = AppScreen.CreateRule(
+                                ruleId = null,
+                                packageName = packageName,
+                                returnTarget = screen.returnTarget,
+                                precise = true,
+                                initialActivityName = activityName,
+                                initialText = text,
+                                initialDescription = description,
+                                initialViewId = viewId,
+                                initialArea = area
                             )
                         },
                         onImportJsonRule = { packageName ->
@@ -198,6 +212,12 @@ class MainActivity : ComponentActivity() {
                     is AppScreen.CreateRule -> SimpleRuleScreen(
                         editingRuleId = screen.ruleId,
                         initialPackageName = screen.packageName,
+                        createPrecise = screen.precise,
+                        initialActivityName = screen.initialActivityName,
+                        initialText = screen.initialText,
+                        initialDescription = screen.initialDescription,
+                        initialViewId = screen.initialViewId,
+                        initialArea = screen.initialArea,
                         onBack = {
                             currentScreen = appDetailOrHub(screen.packageName, screen.returnTarget)
                         }
@@ -254,6 +274,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        LogRepository.start(applicationContext)
     }
 
     override fun onResume() {

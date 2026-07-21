@@ -7,11 +7,13 @@ import com.example.skip.model.MatchMode
 import com.example.skip.model.RuleAction
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleImportResult
+import com.example.skip.model.RuleKind
 import com.example.skip.model.RulePackage
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
 import com.example.skip.engine.CoordinateFallbackMatcher
 import com.example.skip.engine.HighRiskClickPolicy
+import com.example.skip.engine.PreciseRulePolicy
 import com.example.skip.engine.SafeRegexMatcher
 import com.example.skip.util.SimpleJson
 import com.example.skip.util.SimpleJsonArray
@@ -70,8 +72,8 @@ object RuleImportManager {
         val rules = mutableListOf<SkipRule>()
         val appPolicies = mutableListOf<AppPolicy>()
         val schemaVersion = root.optInt("schemaVersion", 1)
-        if (schemaVersion > 2) {
-            warnings += "schemaVersion=$schemaVersion 高于当前支持版本，未知字段会被忽略。"
+        if (schemaVersion > 3) {
+            return RuleImportResult(false, "schemaVersion=$schemaVersion 高于当前支持版本 3")
         }
         val policyArray = root.optJSONArray("appPolicies")
         if (policyArray != null) {
@@ -211,7 +213,9 @@ object RuleImportManager {
         validDurationMs: Long,
         minScore: Int,
         coordinateFallback: CoordinateFallback?,
-        selfPackageName: String = ""
+        selfPackageName: String = "",
+        kind: RuleKind = RuleKind.Standard,
+        activityName: String = "*"
     ): RuleImportResult {
         val cleanTexts = texts.cleanItems()
         val cleanDescriptions = contentDescriptions.cleanItems()
@@ -240,6 +244,8 @@ object RuleImportManager {
         }
         val effectiveWindowMs = if (coordinateFallback?.enabled == true) {
             RuleRepository.canonicalCoordinateFallbackWindowMs(validDurationMs)
+        } else if (kind == RuleKind.Precise) {
+            PreciseRulePolicy.canonicalWindowMs(validDurationMs)
         } else {
             RuleRepository.DEFAULT_RULE_WINDOW_MS
         }
@@ -248,7 +254,7 @@ object RuleImportManager {
             if (area == RuleArea.Any) add("位置选为“不确定”会提高误触风险，已自动提高匹配分数要求。")
             if (coordinateFallback?.enabled == true && validDurationMs != effectiveWindowMs) {
                 add("坐标兜底时间窗已收紧为最多 ${coordinateFallbackWindowSeconds()} 秒。")
-            } else if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
+            } else if (kind == RuleKind.Standard && validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
                 add("为减少误触，自定义规则已统一收紧为应用前台后的 ${defaultWindowSeconds()} 秒内生效。")
             }
             if (coordinateFallback?.enabled == true) {
@@ -258,13 +264,18 @@ object RuleImportManager {
         val rule = SkipRule(
             id = "user_rule_${UUID.randomUUID()}",
             source = RuleSource.UserSimple,
+            kind = kind,
             name = name.ifBlank { "首页弹窗关闭" },
             packageName = packageName,
             appName = appName.ifBlank { packageName },
             enabled = enabled,
+            activityName = activityName.trim(),
             matchTexts = cleanTexts,
             matchContentDescriptions = cleanDescriptions,
             matchViewIds = cleanViewIds,
+            textMatchMode = if (kind == RuleKind.Precise) MatchMode.Exact else MatchMode.Contains,
+            contentDescriptionMatchMode = if (kind == RuleKind.Precise) MatchMode.Exact else MatchMode.Contains,
+            viewIdMatchMode = if (kind == RuleKind.Precise) MatchMode.Exact else MatchMode.Contains,
             area = area,
             priority = priority,
             cooldownMs = cooldownMs,
@@ -273,6 +284,9 @@ object RuleImportManager {
             coordinateFallback = coordinateFallback,
             packageId = "local"
         )
+        PreciseRulePolicy.validationError(rule)?.let {
+            return RuleImportResult(false, "硬性阻断：$it")
+        }
         val risks = RuleImportRiskPolicy.assess(
             rule = rule,
             selfPackageName = selfPackageName,
@@ -297,7 +311,7 @@ object RuleImportManager {
         return buildList {
             if (rule.area == RuleArea.Any) add("位置为“不确定”，建议只用于按钮文字非常明确的场景。")
             if (rule.minScore < 60) add("最低分过低，可能增加误触风险。")
-            if (rule.validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
+            if (rule.kind == RuleKind.Standard && rule.validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
                 add("当前版本默认只在应用打开后的前 ${defaultWindowSeconds()} 秒执行自定义规则。")
             }
             if (rule.cooldownMs < MIN_COOLDOWN_MS) add("点击间隔低于 800ms，可能导致重复点击。")
@@ -317,7 +331,7 @@ object RuleImportManager {
         return """
             {
               "name": "开屏页面助手规则包",
-              "schemaVersion": 2,
+              "schemaVersion": 3,
               "version": 1,
               "author": "local",
               "updateTime": "2026-01-01",
@@ -329,19 +343,20 @@ object RuleImportManager {
                   "rules": [
                     {
                       "id": "example_skip_001",
+                      "kind": "precise",
                       "name": "开屏页面跳过控件",
-                      "activityName": "*",
-                      "matchTexts": ["跳过", "关闭", "Skip"],
-                      "matchContentDescriptions": ["跳过", "Skip"],
-                      "matchViewIds": ["com.example.app:id/ad_skip", "com.example.app:id/splash_close"],
-                      "textMatchMode": "contains",
-                      "contentDescriptionMatchMode": "contains",
-                      "viewIdMatchMode": "contains",
+                      "activityName": "com.example.app.SplashActivity",
+                      "matchTexts": ["跳过"],
+                      "matchContentDescriptions": ["跳过"],
+                      "matchViewIds": ["com.example.app:id/ad_skip"],
+                      "textMatchMode": "exact",
+                      "contentDescriptionMatchMode": "exact",
+                      "viewIdMatchMode": "exact",
                       "area": "top_right",
                       "action": "click",
-                      "priority": 10,
-                      "cooldownMs": 1200,
-                      "validDurationMs": 8000,
+                      "priority": 300,
+                      "cooldownMs": 1500,
+                      "validDurationMs": 15000,
                       "minScore": 70,
                       "coordinateFallback": {
                         "enabled": false,
@@ -368,6 +383,9 @@ object RuleImportManager {
     ): RuleImportResult {
         val id = ruleJson.optString("id").trim()
         if (id.isBlank()) return RuleImportResult(false, "$appPackageName 的 rule id 不能为空")
+        val kindValue = ruleJson.optString("kind", RuleKind.Standard.value)
+        val kind = RuleKind.fromValue(kindValue)
+            ?: return RuleImportResult(false, "$id 的 kind 不合法：$kindValue")
 
         val action = RuleAction.fromValue(ruleJson.optString("action", "click"))
             ?: return RuleImportResult(false, "$id 的 action 暂只支持 click")
@@ -429,12 +447,14 @@ object RuleImportManager {
         if (cooldownMs < MIN_COOLDOWN_MS) warningMessages += "$id 的 cooldownMs 低于 800，已导入但不推荐。"
         val effectiveWindowMs = if (coordinateFallback?.enabled == true) {
             RuleRepository.canonicalCoordinateFallbackWindowMs(validDurationMs)
+        } else if (kind == RuleKind.Precise) {
+            PreciseRulePolicy.canonicalWindowMs(validDurationMs)
         } else {
             RuleRepository.DEFAULT_RULE_WINDOW_MS
         }
         if (coordinateFallback?.enabled == true && validDurationMs != effectiveWindowMs) {
             warningMessages += "$id 的 coordinateFallback 时间窗已收紧到 ${effectiveWindowMs}ms。"
-        } else if (validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
+        } else if (kind == RuleKind.Standard && validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
             warningMessages += "$id 的 validDurationMs 已收紧到 ${RuleRepository.DEFAULT_RULE_WINDOW_MS}ms，使用过程中不再默认扫描。"
         }
         if (minScore !in 0..100) return RuleImportResult(false, "$id 的 minScore 必须在 0 到 100 之间")
@@ -451,6 +471,7 @@ object RuleImportManager {
         val rule = SkipRule(
             id = id,
             source = RuleSource.JsonFile,
+            kind = kind,
             name = ruleJson.optString("name", id),
             packageName = appPackageName,
             appName = appName,
@@ -471,6 +492,9 @@ object RuleImportManager {
             coordinateFallback = coordinateFallback,
             packageId = packageId
         )
+        PreciseRulePolicy.validationError(rule)?.let {
+            return RuleImportResult(false, "硬性阻断：$id $it")
+        }
         val risks = RuleImportRiskPolicy.assess(
             rule = rule,
             selfPackageName = selfPackageName,

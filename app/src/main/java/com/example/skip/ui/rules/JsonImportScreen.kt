@@ -148,9 +148,14 @@ fun JsonImportScreen(onBack: () -> Unit) {
                 strategy = strategy,
                 onDismiss = { showPreview = false },
                 onConfirm = {
-                    RuleLifecycleRepository.saveJsonImport(context, result, strategy)
-                    showPreview = false
-                    onBack()
+                    val saved = RuleLifecycleRepository.saveJsonImport(context, result, strategy)
+                    if (saved.success) {
+                        showPreview = false
+                        onBack()
+                    } else {
+                        error = saved.errorMessage
+                        showPreview = false
+                    }
                 }
             )
         }

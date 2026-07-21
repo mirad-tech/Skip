@@ -15,6 +15,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.InstalledAppRepository
 import com.example.skip.data.LogRepository
+import com.example.skip.data.LogStorageState
 import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.model.RuleSource
@@ -36,26 +39,39 @@ import com.example.skip.ui.common.SimpleScreenScaffold
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun AppDetailScreen(
     packageName: String,
     onBack: () -> Unit,
     onAddRule: (String) -> Unit,
+    onAddPreciseRule: (String, String, String, String, String, String) -> Unit,
     onImportJsonRule: (String) -> Unit,
     onDefaultRuleSettings: () -> Unit,
     onEditRule: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val storageState by LogRepository.storageState.collectAsState()
     var refreshKey by remember { mutableIntStateOf(0) }
-    val status = remember(packageName, refreshKey) {
-        InstalledAppRepository.resolve(context, packageName)
+    var status by remember(packageName) {
+        mutableStateOf(InstalledAppRepository.resolve(context, packageName))
     }
     val rules = remember(packageName, refreshKey) {
         RuleRepository.getCustomRulesForPackage(context, packageName)
     }
-    val logs = remember(packageName, refreshKey) {
-        LogRepository.getClickLogs(context).filter { it.packageName == packageName }.take(5)
+    val builtInPreciseRules = remember(packageName) {
+        RuleRepository.getBuiltInPreciseRulesForPackage(packageName)
+    }
+    var logs by remember(packageName) { mutableStateOf(emptyList<com.example.skip.model.ClickLog>()) }
+    LaunchedEffect(packageName, refreshKey) {
+        logs = runCatching { withContext(Dispatchers.IO) {
+            LogRepository.getClickLogs(context).filter { it.packageName == packageName }.take(5)
+        } }.getOrElse {
+            LogRepository.getCachedClickLogs().filter { it.packageName == packageName }.take(5)
+        }
+        status = InstalledAppRepository.resolve(context, packageName)
     }
     val defaultRuleConfig = remember(refreshKey) {
         RuleRepository.getDefaultRuleConfig(context)
@@ -103,6 +119,22 @@ fun AppDetailScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Text(
+                        text = if (logs.firstOrNull { it.planScope.isNotBlank() }?.planScope == "precise_takeover") {
+                            "当前执行模式：精确规则接管"
+                        } else {
+                            "当前执行模式：通用规则回退"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (storageState is LogStorageState.Degraded) {
+                        Text(
+                            text = "最近日志暂时不可用；规则配置和自动跳过不受影响。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     PolicySwitchRow(
                         title = "本应用自动辅助",
                         subtitle = "关闭后本应用的默认规则和自定义规则都暂停执行。",
@@ -181,6 +213,34 @@ fun AppDetailScreen(
                 }
             }
 
+            if (builtInPreciseRules.isNotEmpty()) {
+                SectionTitle("内置精确规则")
+                builtInPreciseRules.forEach { builtInRule ->
+                    RuleCard(
+                        rule = builtInRule,
+                        editable = false,
+                        copyable = true,
+                        deletable = false,
+                        toggleable = false,
+                        onEnabledChange = {},
+                        onEdit = {
+                            RuleRepository.upsertRule(
+                                context,
+                                builtInRule.copy(
+                                    id = "user_copy_${builtInRule.id}_${System.currentTimeMillis()}",
+                                    source = RuleSource.UserSimple,
+                                    priority = 300,
+                                    packageId = "local",
+                                    createdAt = System.currentTimeMillis()
+                                )
+                            )
+                            refreshKey++
+                        },
+                        onDelete = {}
+                    )
+                }
+            }
+
             SectionTitle("最近命中日志")
             if (logs.isEmpty()) {
                 InfoCard("暂无数据")
@@ -203,6 +263,24 @@ fun AppDetailScreen(
                             }
                         }
                     )
+                    val hasStableSignal = log.activityName.isNotBlank() &&
+                        (log.viewIdResourceName.isNotBlank() || log.nodeText.isNotBlank() || log.contentDescription.isNotBlank())
+                    if (hasStableSignal && !(log.stage.value == "no_candidate_found" &&
+                            log.viewIdResourceName.isBlank() && log.nodeText.isBlank() && log.contentDescription.isBlank())) {
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                onAddPreciseRule(
+                                    packageName,
+                                    log.activityName,
+                                    log.nodeText,
+                                    log.contentDescription,
+                                    log.viewIdResourceName,
+                                    log.area
+                                )
+                            }
+                        ) { Text("创建精确规则") }
+                    }
                 }
             }
         }
@@ -214,6 +292,10 @@ fun AppDetailScreen(
             onCreateSimpleRule = {
                 showAddRuleOptions = false
                 onAddRule(packageName)
+            },
+            onCreatePreciseRule = {
+                showAddRuleOptions = false
+                onAddPreciseRule(packageName, "", "", "", "", "")
             },
             onImportJson = {
                 showAddRuleOptions = false
@@ -227,6 +309,7 @@ fun AppDetailScreen(
 private fun AddRuleOptionsDialog(
     onDismiss: () -> Unit,
     onCreateSimpleRule: () -> Unit,
+    onCreatePreciseRule: () -> Unit,
     onImportJson: () -> Unit
 ) {
     AlertDialog(
@@ -238,7 +321,13 @@ private fun AddRuleOptionsDialog(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = onCreateSimpleRule
                 ) {
-                    Text("选择位置和关键词")
+                    Text("创建普通规则")
+                }
+                TextButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onCreatePreciseRule
+                ) {
+                    Text("创建精确规则")
                 }
                 TextButton(
                     modifier = Modifier.fillMaxWidth(),
@@ -298,6 +387,9 @@ private fun PolicySwitchRow(
 private fun RuleCard(
     rule: SkipRule,
     editable: Boolean,
+    copyable: Boolean = false,
+    deletable: Boolean = true,
+    toggleable: Boolean = true,
     onEnabledChange: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
@@ -320,16 +412,18 @@ private fun RuleCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(rule.name, fontWeight = FontWeight.Medium)
                     Text(
-                        "${rule.area.label} · ${formatDuration(rule.validDurationMs)}",
+                        "${rule.kind.label} · ${rule.activityName} · ${rule.area.label} · ${formatDuration(rule.validDurationMs)} · ${rule.textMatchMode.value}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(checked = rule.enabled, onCheckedChange = onEnabledChange)
+                Switch(checked = rule.enabled, enabled = toggleable, onCheckedChange = onEnabledChange)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(enabled = editable, onClick = onEdit) { Text("编辑") }
-                TextButton(onClick = onDelete) { Text("删除") }
+                if (editable || copyable) {
+                    TextButton(onClick = onEdit) { Text(if (editable) "编辑" else "复制为本地规则") }
+                }
+                if (deletable) TextButton(onClick = onDelete) { Text("删除") }
             }
         }
     }

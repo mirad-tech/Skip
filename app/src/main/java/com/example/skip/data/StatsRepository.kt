@@ -9,6 +9,14 @@ import com.example.skip.model.StatsWindow
 
 object StatsRepository {
     fun getStats(
+        @Suppress("UNUSED_PARAMETER") context: Context,
+        window: StatsWindow = StatsWindow.All,
+        now: Long = System.currentTimeMillis()
+    ): HitStats {
+        return aggregate(LogRepository.getCachedClickLogs(), window, now)
+    }
+
+    suspend fun loadStats(
         context: Context,
         window: StatsWindow = StatsWindow.All,
         now: Long = System.currentTimeMillis()

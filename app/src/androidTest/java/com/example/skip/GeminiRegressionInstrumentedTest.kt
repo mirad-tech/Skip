@@ -1,6 +1,8 @@
 package com.example.skip
 
+import android.content.Intent
 import android.os.SystemClock
+import android.os.ParcelFileDescriptor
 import android.graphics.Rect
 import android.util.Log
 import androidx.test.core.app.ActivityScenario
@@ -10,6 +12,7 @@ import com.example.skip.data.LogRepository
 import com.example.skip.data.RuleRepository
 import com.example.skip.engine.ClickExecutor
 import com.example.skip.engine.NodeScanner
+import com.example.skip.engine.ScoreEvaluator
 import com.example.skip.engine.CurrentTargetRevalidator
 import com.example.skip.model.ClickLog
 import com.example.skip.model.ClickMethodLog
@@ -78,7 +81,7 @@ class GeminiRegressionInstrumentedTest {
     @Test
     fun clickLogPersistenceDefaultsMissingStandaloneSkipAuthorizationToFalse() {
         val restored = LogRepository.deserializeClickLogPersistence(
-            """[{"timeMillis":1,"packageName":"com.example.news"}]"""
+            """[{"timeMillis":1,"packageName":"com.example.news","stage":"click_effect_confirmed"}]"""
         )
 
         assertEquals(1, restored.size)
@@ -128,7 +131,7 @@ class GeminiRegressionInstrumentedTest {
 
             val builtInRule = RuleRepository.getBuiltInRuleForPackage(context, "com.example.news")
 
-            assertEquals(10_000L, builtInRule.validDurationMs)
+            assertEquals(8_000L, builtInRule.validDurationMs)
         } finally {
             RuleRepository.saveDefaultRuleConfig(context, originalConfig)
         }
@@ -148,7 +151,7 @@ class GeminiRegressionInstrumentedTest {
             minScore = 60
         )
 
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val rootNode = InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -178,7 +181,7 @@ class GeminiRegressionInstrumentedTest {
             minScore = 70
         )
 
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val rootNode = InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -194,7 +197,7 @@ class GeminiRegressionInstrumentedTest {
     @Test
     fun standaloneSkipInSmallClickableParentMatchesBuiltInRule() {
         ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.StandaloneSkipInsideClickableParent
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
             val match = NodeScanner.findBestMatch(root, listOf(builtInDefaultRule("com.example.news", "News")), 1_000L)
@@ -210,7 +213,7 @@ class GeminiRegressionInstrumentedTest {
     @Test
     fun standaloneSkipAfterEightSecondsDoesNotMatchBuiltInRule() {
         ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.StandaloneSkipInsideClickableParent
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
 
@@ -221,7 +224,7 @@ class GeminiRegressionInstrumentedTest {
     @Test
     fun standaloneSkipInsideEditableActionPathIsRejected() {
         ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.StandaloneSkipInsideEditableActionPath
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
             val skipNode = root.findAccessibilityNodeInfosByText("跳过").first { node ->
@@ -248,7 +251,7 @@ class GeminiRegressionInstrumentedTest {
     fun coordinateSnapshotKeepsDecorativeChildBoundsAndUsesClickableParentIdentity() {
         ScannerFixtureActivity.scenario =
             ScannerFixtureActivity.Scenario.CoordinateIdentityChildInsideClickableParent
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
 
@@ -265,7 +268,7 @@ class GeminiRegressionInstrumentedTest {
     fun coordinateSnapshotTraversesVisibleNonClickableParentToReachSafeDescendant() {
         ScannerFixtureActivity.scenario =
             ScannerFixtureActivity.Scenario.CoordinateIdentityInsideVisibleNonClickableParent
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
 
@@ -294,7 +297,7 @@ class GeminiRegressionInstrumentedTest {
             minScore = 70
         )
 
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val rootNode = InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -314,7 +317,7 @@ class GeminiRegressionInstrumentedTest {
             appName = "Chrome"
         )
 
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val rootNode = InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -334,7 +337,7 @@ class GeminiRegressionInstrumentedTest {
             appName = "哔哩哔哩"
         )
 
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val rootNode = InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -354,7 +357,7 @@ class GeminiRegressionInstrumentedTest {
             appName = "哔哩哔哩"
         )
 
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val rootNode = InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -368,6 +371,24 @@ class GeminiRegressionInstrumentedTest {
     }
 
     @Test
+    fun genericCloseCandidateIsSafetyTerminalInsteadOfRetryableLowScore() {
+        ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.GenericCloseOnly
+
+        launchScannerFixture().use {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val rootNode = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+            val scan = NodeScanner.scan(
+                root = rootNode,
+                rules = listOf(builtInDefaultRule("com.example.shop", "Shop")),
+                appElapsedMs = 1_000L
+            )
+
+            assertNull(scan.bestMatch)
+            assertEquals(ScoreEvaluator.GENERIC_CLOSE_BLOCKED_REASON, scan.failureReason)
+        }
+    }
+
+    @Test
     fun bilibiliSearchClearButtonIsNotDefaultSplashCandidate() {
         ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.BilibiliSearchClearButton
         val rule = builtInDefaultRule(
@@ -375,7 +396,7 @@ class GeminiRegressionInstrumentedTest {
             appName = "哔哩哔哩"
         )
 
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val rootNode = InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -391,7 +412,7 @@ class GeminiRegressionInstrumentedTest {
     fun activeTextInputGuardDetectsFocusedSearchField() {
         ScannerFixtureActivity.scenario = ScannerFixtureActivity.Scenario.FocusedTopSearchField
 
-        ActivityScenario.launch(ScannerFixtureActivity::class.java).use {
+        launchScannerFixture().use {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val rootNode = InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -499,8 +520,26 @@ class GeminiRegressionInstrumentedTest {
         return sorted[index] / 1_000_000.0
     }
 
+    private fun launchScannerFixture(): ActivityScenario<ScannerFixtureActivity> {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val targetContext = instrumentation.targetContext
+        val intent = Intent(targetContext, ScannerFixtureActivity::class.java).apply {
+            action = SCANNER_FIXTURE_ACTION
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        }
+        val component = "${targetContext.packageName}/${ScannerFixtureActivity::class.java.name}"
+        val command = "am start -W -a $SCANNER_FIXTURE_PRIME_ACTION -f 0x10008000 -n $component"
+        ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand(command)
+        ).use { output -> output.readBytes() }
+        instrumentation.waitForIdleSync()
+        return ActivityScenario.launch(intent)
+    }
+
     private companion object {
         const val LOG_TAG = "SkipLogBenchmark"
+        const val SCANNER_FIXTURE_ACTION = "com.example.skip.action.SCANNER_FIXTURE_TEST"
+        const val SCANNER_FIXTURE_PRIME_ACTION = "com.example.skip.action.SCANNER_FIXTURE_PRIME"
         const val BENCHMARK_LOG_COUNT = 1_000
         const val BENCHMARK_SAMPLES = 10
     }

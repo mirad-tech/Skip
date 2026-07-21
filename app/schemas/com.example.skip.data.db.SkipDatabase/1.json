@@ -1,0 +1,187 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "aba05acbc75e9c98334c3efd684c42a5",
+    "entities": [
+      {
+        "tableName": "click_logs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `storageKey` TEXT NOT NULL, `timeMillis` INTEGER NOT NULL, `packageName` TEXT NOT NULL, `ruleId` TEXT NOT NULL, `stage` TEXT NOT NULL, `failureReason` TEXT NOT NULL, `payloadJson` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "storageKey",
+            "columnName": "storageKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeMillis",
+            "columnName": "timeMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "packageName",
+            "columnName": "packageName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ruleId",
+            "columnName": "ruleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failureReason",
+            "columnName": "failureReason",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadJson",
+            "columnName": "payloadJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_click_logs_storageKey",
+            "unique": true,
+            "columnNames": [
+              "storageKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_click_logs_storageKey` ON `${TABLE_NAME}` (`storageKey`)"
+          },
+          {
+            "name": "index_click_logs_timeMillis",
+            "unique": false,
+            "columnNames": [
+              "timeMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_click_logs_timeMillis` ON `${TABLE_NAME}` (`timeMillis`)"
+          },
+          {
+            "name": "index_click_logs_packageName",
+            "unique": false,
+            "columnNames": [
+              "packageName"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_click_logs_packageName` ON `${TABLE_NAME}` (`packageName`)"
+          },
+          {
+            "name": "index_click_logs_packageName_ruleId_stage_failureReason_timeMillis",
+            "unique": false,
+            "columnNames": [
+              "packageName",
+              "ruleId",
+              "stage",
+              "failureReason",
+              "timeMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_click_logs_packageName_ruleId_stage_failureReason_timeMillis` ON `${TABLE_NAME}` (`packageName`, `ruleId`, `stage`, `failureReason`, `timeMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "click_log_throttle_counts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`dayStartMillis` INTEGER NOT NULL, `reasonKey` TEXT NOT NULL, `count` INTEGER NOT NULL, `updatedAtMillis` INTEGER NOT NULL, PRIMARY KEY(`dayStartMillis`, `reasonKey`))",
+        "fields": [
+          {
+            "fieldPath": "dayStartMillis",
+            "columnName": "dayStartMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reasonKey",
+            "columnName": "reasonKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "count",
+            "columnName": "count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "dayStartMillis",
+            "reasonKey"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_click_log_throttle_counts_dayStartMillis",
+            "unique": false,
+            "columnNames": [
+              "dayStartMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_click_log_throttle_counts_dayStartMillis` ON `${TABLE_NAME}` (`dayStartMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "storage_metadata",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))",
+        "fields": [
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "key"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'aba05acbc75e9c98334c3efd684c42a5')"
+    ]
+  }
+}

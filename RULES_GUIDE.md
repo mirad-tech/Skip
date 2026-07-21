@@ -5,7 +5,8 @@
 ## 基本原则
 
 - 每条规则必须绑定具体 `packageName`。
-- 默认只在应用进入前台后的 8 秒内生效；可在“默认规则设置”中调整为 6、8 或 10 秒。
+- `standard` 通用规则固定在应用进入前台后的 8 秒内生效。
+- `precise` 精确规则绑定具体 Activity，窗口允许 3～15 秒；当前 Activity 有有效精确规则时只执行精确规则，否则回退通用规则。
 - 优先使用文字、内容描述、View ID 和区域匹配。
 - 尽量避免 `area=any`。
 - 不要把最低分设置过低。
@@ -15,7 +16,7 @@
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "name": "本地规则包",
   "version": 1,
   "author": "local",
@@ -49,6 +50,7 @@ Skip 自身包名会被忽略或拒绝。系统、支付、银行、安装器、
 ## rule 字段
 
 - `id`：规则唯一 ID。
+- `kind`：`standard` 或 `precise`；旧 schema 2 缺少该字段时按 `standard`。
 - `name`：规则名称。
 - `enabled`：是否启用。
 - `activityName`：Activity 名称，默认 `*`。
@@ -62,7 +64,7 @@ Skip 自身包名会被忽略或拒绝。系统、支付、银行、安装器、
 - `action`：当前只支持 `click`。
 - `priority`：优先级。
 - `cooldownMs`：点击冷却时间，建议不低于 800。
-- `validDurationMs`：导入后统一收紧到当前默认时间窗，出厂默认 8000。
+- `validDurationMs`：普通规则固定 8000；精确规则钳制到 3000～15000；坐标兜底最多 6000。
 - `minScore`：最低匹配分，建议不低于 70。
 - `coordinateFallback`：坐标兜底，默认关闭。
 
@@ -82,6 +84,15 @@ Skip 自身包名会被忽略或拒绝。系统、支付、银行、安装器、
 - `any`
 
 `any` 会增加误触风险，只建议用于文字极明确的规则。
+
+## 精确规则
+
+精确规则必须绑定具体包名和非空、非 `*` Activity，所有匹配模式固定为 `exact`，冷却时间不得低于 800ms，并满足以下一类：
+
+- 完整 View ID（例如 `com.example.app:id/ad_skip`）且 `minScore >= 70`；或
+- 精确文本/内容描述、非 `any` 区域且 `minScore >= 80`。
+
+内置精确规则受“默认开屏规则”开关控制。证据不足时不得猜测第三方 View ID；B站、ChatGPT、Grok 等应用没有稳定证据时不应硬编码规则。
 
 ## 高风险词
 

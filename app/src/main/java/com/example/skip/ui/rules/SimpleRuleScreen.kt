@@ -40,6 +40,7 @@ import com.example.skip.data.RuleRepository
 import com.example.skip.model.CoordinateFallback
 import com.example.skip.model.InstalledApp
 import com.example.skip.model.RuleArea
+import com.example.skip.model.RuleKind
 import com.example.skip.model.SkipRule
 import com.example.skip.ui.common.SimpleScreenScaffold
 import com.example.skip.util.InstalledAppUtils
@@ -48,12 +49,19 @@ import com.example.skip.util.InstalledAppUtils
 fun SimpleRuleScreen(
     editingRuleId: String?,
     initialPackageName: String? = null,
+    createPrecise: Boolean = false,
+    initialActivityName: String = "",
+    initialText: String = "",
+    initialDescription: String = "",
+    initialViewId: String = "",
+    initialArea: String = "",
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val editingRule = remember(editingRuleId) {
         editingRuleId?.let { id -> RuleRepository.getRules(context).firstOrNull { it.id == id } }
     }
+    val preciseMode = editingRule?.kind == RuleKind.Precise || (editingRule == null && createPrecise)
     val fixedPackageName = editingRule?.packageName ?: initialPackageName.orEmpty()
     val apps = remember(fixedPackageName) {
         if (fixedPackageName.isBlank()) InstalledAppUtils.loadLaunchableApps(context) else emptyList()
@@ -65,25 +73,30 @@ fun SimpleRuleScreen(
     var appQuery by remember { mutableStateOf("") }
     var packageName by remember { mutableStateOf(fixedPackageName) }
     var appName by remember { mutableStateOf(editingRule?.appName ?: fixedApp?.label.orEmpty()) }
-    var ruleName by remember { mutableStateOf(editingRule?.name ?: "首页弹窗关闭") }
+    var ruleName by remember { mutableStateOf(editingRule?.name ?: if (preciseMode) "精确跳过" else "首页弹窗关闭") }
+    var activityName by remember { mutableStateOf(editingRule?.activityName?.takeUnless { it == "*" } ?: initialActivityName) }
     var texts by remember {
-        mutableStateOf(editingRule?.matchTexts?.joinToString("，") ?: "关闭，跳过，以后再说，我知道了")
+        mutableStateOf(editingRule?.matchTexts?.joinToString("，") ?: if (preciseMode) initialText else "关闭，跳过，以后再说，我知道了")
     }
     var descriptions by remember {
         mutableStateOf(
             editingRule?.matchContentDescriptions?.joinToString("，")
-                ?: "关闭，跳过，以后再说，我知道了"
+                ?: if (preciseMode) initialDescription else "关闭，跳过，以后再说，我知道了"
         )
     }
     var viewIds by remember {
-        mutableStateOf(editingRule?.matchViewIds?.joinToString("，") ?: "")
+        mutableStateOf(editingRule?.matchViewIds?.joinToString("，") ?: initialViewId)
     }
-    var area by remember { mutableStateOf(editingRule?.area ?: RuleArea.TopRight) }
-    var validDurationMs by remember { mutableLongStateOf(RuleRepository.DEFAULT_RULE_WINDOW_MS) }
+    var area by remember {
+        mutableStateOf(editingRule?.area ?: RuleArea.fromValue(initialArea) ?: RuleArea.TopRight)
+    }
+    var validDurationMs by remember { mutableLongStateOf(editingRule?.validDurationMs ?: RuleRepository.DEFAULT_RULE_WINDOW_MS) }
     var enabled by remember { mutableStateOf(editingRule?.enabled ?: true) }
-    var priorityText by remember { mutableStateOf((editingRule?.priority ?: 100).toString()) }
-    var minScoreText by remember { mutableStateOf((editingRule?.minScore ?: 72).toString()) }
-    var cooldownText by remember { mutableStateOf((editingRule?.cooldownMs ?: 1200L).toString()) }
+    var priorityText by remember { mutableStateOf((editingRule?.priority ?: if (preciseMode) 300 else 100).toString()) }
+    var minScoreText by remember {
+        mutableStateOf((editingRule?.minScore ?: if (preciseMode && initialViewId.contains(":id/")) 70 else if (preciseMode) 80 else 72).toString())
+    }
+    var cooldownText by remember { mutableStateOf((editingRule?.cooldownMs ?: if (preciseMode) 1500L else 1200L).toString()) }
     var coordinateEnabled by remember { mutableStateOf(editingRule?.coordinateFallback?.enabled == true) }
     var coordinateXRatio by remember {
         mutableStateOf(editingRule?.coordinateFallback?.xRatio?.toString() ?: "0.90")
@@ -98,12 +111,12 @@ fun SimpleRuleScreen(
     var message by remember { mutableStateOf<String?>(null) }
 
     SimpleScreenScaffold(
-        title = if (editingRule == null) "创建跳过规则" else "编辑跳过规则",
+        title = if (editingRule == null) (if (preciseMode) "创建精确规则" else "创建普通规则") else "编辑跳过规则",
         onBack = onBack
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
-                text = "为减少误触，规则默认只在应用打开后的前 8 秒内生效。",
+                text = if (preciseMode) "精确规则仅在指定 Activity 接管，匹配模式固定为 exact。" else "普通规则只在应用打开后的前 8 秒内生效。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -136,6 +149,17 @@ fun SimpleRuleScreen(
                 }
             }
 
+            if (preciseMode) {
+                OutlinedTextField(
+                    value = activityName,
+                    onValueChange = { activityName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Activity 名称（必填）") },
+                    placeholder = { Text("com.example.app.SplashActivity") },
+                    singleLine = true
+                )
+            }
+
             OutlinedTextField(
                 value = texts,
                 onValueChange = { texts = it },
@@ -156,16 +180,19 @@ fun SimpleRuleScreen(
 
             OutlinedTextField(
                 value = viewIds,
-                onValueChange = { viewIds = it },
+                onValueChange = {
+                    viewIds = it
+                    if (preciseMode && minScoreText == "80" && it.contains(":id/")) minScoreText = "70"
+                },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("View ID 关键词") },
-                placeholder = { Text("例如：skip、ad_skip、close_btn") },
+                label = { Text(if (preciseMode) "完整 View ID" else "View ID 关键词") },
+                placeholder = { Text(if (preciseMode) "例如：com.example.app:id/ad_skip" else "例如：skip、ad_skip、close_btn") },
                 minLines = 2
             )
 
             Text("按钮大概位置", style = MaterialTheme.typography.titleSmall)
             ChipGrid(
-                values = RuleArea.entries,
+                values = if (preciseMode) RuleArea.entries.filterNot { it == RuleArea.Any } else RuleArea.entries,
                 selected = area,
                 label = { it.label },
                 onSelected = { area = it }
@@ -173,7 +200,7 @@ fun SimpleRuleScreen(
 
             Text("规则生效时间", style = MaterialTheme.typography.titleSmall)
             ChipGrid(
-                values = listOf(RuleRepository.DEFAULT_RULE_WINDOW_MS),
+                values = if (preciseMode) listOf(3_000L, 5_000L, 8_000L, 10_000L, 15_000L) else listOf(RuleRepository.DEFAULT_RULE_WINDOW_MS),
                 selected = validDurationMs,
                 label = { formatDuration(it) },
                 onSelected = { validDurationMs = it }
@@ -331,7 +358,9 @@ fun SimpleRuleScreen(
                         validDurationMs = validDurationMs,
                         minScore = minScore,
                         coordinateFallback = coordinateFallback,
-                        selfPackageName = context.packageName
+                        selfPackageName = context.packageName,
+                        kind = if (preciseMode) RuleKind.Precise else RuleKind.Standard,
+                        activityName = if (preciseMode) activityName else "*"
                     )
                     if (!result.success) {
                         message = result.errorMessage

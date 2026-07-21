@@ -30,21 +30,27 @@ object NodeScanner {
         var bestMatch: MatchResult? = null
         var candidateCount = 0
         var bestCandidate: CandidateEvaluation? = null
-        var lastFailureReason = "no_candidate_found"
 
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
 
             if (node.isVisibleToUser) {
+                val signals = ClickExecutor.describeRuleCandidateSignals(node)
+                var resolution: ClickCandidateResolution? = null
                 scopedRules.forEach { rule ->
-                    val candidate = RuleMatcher.evaluate(node, rule, appElapsedMs)
+                    if (!ScoreEvaluator.hasPotentialRuleMatch(signals, rule)) return@forEach
+                    val candidateResolution = resolution
+                        ?: ClickExecutor.resolveCandidate(node, signals).also { resolution = it }
+                    val candidate = RuleMatcher.evaluateResolved(
+                        node = node,
+                        rule = rule,
+                        appElapsedMs = appElapsedMs,
+                        resolution = candidateResolution
+                    )
                     if (candidate != null) {
                         candidateCount++
                         if (candidate.isBetterCandidateThan(bestCandidate)) {
                             bestCandidate = candidate
-                        }
-                        if (candidate.failureReason.isNotBlank()) {
-                            lastFailureReason = candidate.failureReason
                         }
                         val match = candidate.match
                         if (match != null && match.isBetterThan(bestMatch)) {
@@ -72,11 +78,11 @@ object NodeScanner {
             bestCandidateScore = bestCandidate?.score,
             bestCandidateMinScore = bestCandidate?.minScore,
             bestCandidateBounds = bestCandidate?.target?.boundsString().orEmpty(),
-            failureReason = when {
-                candidateCount == 0 -> "no_candidate_found"
-                bestMatch == null -> lastFailureReason.ifBlank { "candidate_below_threshold" }
-                else -> ""
-            },
+            failureReason = failureReasonForScan(
+                candidateCount = candidateCount,
+                bestMatchFound = bestMatch != null,
+                bestCandidateFailureReason = bestCandidate?.failureReason
+            ),
             bestCandidateRuleId = bestCandidate?.rule?.id.orEmpty(),
             bestCandidateRuleName = bestCandidate?.let { candidate ->
                 listOf(candidate.rule.name, candidate.matchedKeyword)
@@ -127,5 +133,18 @@ object NodeScanner {
         if (other == null) return true
         if (rule.priority != other.rule.priority) return rule.priority > other.rule.priority
         return score > other.score
+    }
+
+    internal fun failureReasonForScan(
+        candidateCount: Int,
+        bestMatchFound: Boolean,
+        bestCandidateFailureReason: String?
+    ): String {
+        return when {
+            candidateCount == 0 -> "no_candidate_found"
+            !bestMatchFound -> bestCandidateFailureReason.orEmpty()
+                .ifBlank { "candidate_below_threshold" }
+            else -> ""
+        }
     }
 }

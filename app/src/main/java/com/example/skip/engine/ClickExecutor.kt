@@ -12,6 +12,14 @@ import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.util.PrivacySanitizer
 import kotlin.math.abs
 
+internal data class RuleCandidateSignals(
+    val text: String,
+    val contentDescription: String,
+    val viewId: String,
+    val className: String,
+    val input: Boolean
+)
+
 object ClickExecutor {
     const val COORDINATE_TEXT_INPUT_CLEAR_BUTTON_REASON = "coordinate_text_input_clear_button"
 
@@ -27,13 +35,66 @@ object ClickExecutor {
         return findClickableSelection(node, defaultRule = false)?.node
     }
 
-    internal fun resolveCandidate(node: AccessibilityNodeInfo): ClickCandidateResolution {
+    internal fun resolveCandidate(
+        node: AccessibilityNodeInfo,
+        candidateSignals: RuleCandidateSignals = describeRuleCandidateSignals(node)
+    ): ClickCandidateResolution {
+        lateinit var candidate: ClickTargetInfo
+        var strictSelection: ClickTargetSelection? = null
+        var relaxedSelection: ClickTargetSelection? = null
+        val ancestorSafetyTexts = mutableListOf<String>()
+        val unsafeNodeDepths = mutableSetOf<Int>()
+
+        walkParentChain(
+            start = node,
+            maxDepth = MAX_CLICKABLE_PARENT_DEPTH,
+            parentOf = AccessibilityNodeInfo::getParent
+        ) { current, parent, depth ->
+            val signals = if (depth == 0) {
+                candidateSignals
+            } else {
+                describeRuleCandidateSignals(current)
+            }
+            val target = describeTarget(
+                node = current,
+                parentClickable = parent?.isClickable == true,
+                signals = signals
+            )
+            if (depth == 0) candidate = target
+
+            ancestorSafetyTexts += listOf(
+                current.text?.toString().orEmpty(),
+                current.contentDescription?.toString().orEmpty(),
+                current.viewIdResourceName.orEmpty(),
+                current.className?.toString().orEmpty()
+            )
+            if (current.isUnsafeActionPathNode()) unsafeNodeDepths += depth
+
+            val relaxedSafe = current.isSafeClickTarget(defaultRule = false)
+            if (relaxedSafe && relaxedSelection == null) {
+                relaxedSelection = ClickTargetSelection(
+                    node = current,
+                    target = target,
+                    parentDepth = depth,
+                    source = depth.toClickTargetSource()
+                )
+            }
+            if (relaxedSafe && !target.bounds.isLargeDefaultBounds() && strictSelection == null) {
+                strictSelection = ClickTargetSelection(
+                    node = current,
+                    target = target,
+                    parentDepth = depth,
+                    source = depth.toClickTargetSource()
+                )
+            }
+        }
+
         return ClickCandidateResolution(
-            candidate = describeTarget(node),
-            strictSelection = findClickableSelection(node, defaultRule = true),
-            relaxedSelection = findClickableSelection(node, defaultRule = false),
-            ancestorSafetyTexts = node.collectAncestorSafetyTexts(),
-            unsafeNodeDepths = node.collectUnsafeActionPathNodeDepths()
+            candidate = candidate,
+            strictSelection = strictSelection,
+            relaxedSelection = relaxedSelection,
+            ancestorSafetyTexts = ancestorSafetyTexts,
+            unsafeNodeDepths = unsafeNodeDepths
         )
     }
 
@@ -99,7 +160,7 @@ object ClickExecutor {
         target: ClickTargetInfo,
         allowLargeBounds: Boolean = false,
         onResult: (ClickAttempt) -> Unit
-    ) {
+    ): Boolean {
         if (!target.canUseGestureFallback(allowLargeBounds)) {
             onResult(
                 ClickAttempt(
@@ -109,7 +170,7 @@ object ClickExecutor {
                     reason = "gesture_fallback_not_safe"
                 )
             )
-            return
+            return false
         }
 
         val centerX = target.bounds.exactCenterX()
@@ -157,6 +218,7 @@ object ClickExecutor {
                 )
             )
         }
+        return accepted
     }
 
     fun gestureClickPoint(
@@ -165,7 +227,7 @@ object ClickExecutor {
         x: Int,
         y: Int,
         onResult: (ClickAttempt) -> Unit
-    ) {
+    ): Boolean {
         val blockReason = coordinateFallbackGestureTargetBlockReason(target)
         if (blockReason != null) {
             onResult(
@@ -176,7 +238,7 @@ object ClickExecutor {
                     reason = blockReason
                 )
             )
-            return
+            return false
         }
         val screenWidth = android.content.res.Resources.getSystem().displayMetrics.widthPixels
             .coerceAtLeast(1)
@@ -191,7 +253,7 @@ object ClickExecutor {
                     reason = "coordinate_fallback_out_of_screen"
                 )
             )
-            return
+            return false
         }
 
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
@@ -235,6 +297,7 @@ object ClickExecutor {
                 )
             )
         }
+        return accepted
     }
 
     fun isCoordinateFallbackGestureTargetSafe(target: ClickTargetInfo): Boolean {
@@ -285,14 +348,10 @@ object ClickExecutor {
             value.substringAfter(":id/", missingDelimiterValue = "").isNotBlank()
     }
 
-    fun describeTarget(node: AccessibilityNodeInfo): ClickTargetInfo {
-        val bounds = Rect()
-        node.getBoundsInScreen(bounds)
-        val parent = node.parent
+    internal fun describeRuleCandidateSignals(node: AccessibilityNodeInfo): RuleCandidateSignals {
         val classNameValue = node.className?.toString().orEmpty()
         val isInput = classNameValue.contains("EditText", ignoreCase = true) || node.isPassword
-        return ClickTargetInfo(
-            bounds = Rect(bounds),
+        return RuleCandidateSignals(
             text = PrivacySanitizer.sanitizeNodeText(node.text?.toString().orEmpty(), isInput),
             contentDescription = PrivacySanitizer.sanitizeNodeText(
                 node.contentDescription?.toString().orEmpty(),
@@ -300,28 +359,56 @@ object ClickExecutor {
             ),
             viewId = node.viewIdResourceName.orEmpty(),
             className = classNameValue,
-            nodeClickable = node.isClickable,
-            parentClickable = parent?.isClickable == true,
-            enabled = node.isEnabled,
-            visibleToUser = node.isVisibleToUser,
-            password = node.isPassword,
             input = isInput
         )
     }
 
-    private fun AccessibilityNodeInfo.collectAncestorSafetyTexts(): List<String> {
-        return collectActionPathValues(
-            start = this,
-            parentOf = AccessibilityNodeInfo::getParent,
-            valuesOf = { ancestor ->
-                listOf(
-                    ancestor.text?.toString().orEmpty(),
-                    ancestor.contentDescription?.toString().orEmpty(),
-                    ancestor.viewIdResourceName.orEmpty(),
-                    ancestor.className?.toString().orEmpty()
-                )
-            }
+    fun describeTarget(node: AccessibilityNodeInfo): ClickTargetInfo {
+        val parent = node.parent
+        return describeTarget(
+            node = node,
+            parentClickable = parent?.isClickable == true,
+            signals = describeRuleCandidateSignals(node)
         )
+    }
+
+    private fun describeTarget(
+        node: AccessibilityNodeInfo,
+        parentClickable: Boolean,
+        signals: RuleCandidateSignals
+    ): ClickTargetInfo {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        return ClickTargetInfo(
+            bounds = Rect(bounds),
+            text = signals.text,
+            contentDescription = signals.contentDescription,
+            viewId = signals.viewId,
+            className = signals.className,
+            nodeClickable = node.isClickable,
+            parentClickable = parentClickable,
+            enabled = node.isEnabled,
+            visibleToUser = node.isVisibleToUser,
+            password = node.isPassword,
+            input = signals.input
+        )
+    }
+
+    internal fun <Node> walkParentChain(
+        start: Node,
+        maxDepth: Int,
+        parentOf: (Node) -> Node?,
+        visit: (node: Node, parent: Node?, depth: Int) -> Unit
+    ) {
+        var current: Node? = start
+        var depth = 0
+        while (current != null && depth <= maxDepth) {
+            val node = current
+            val parent = parentOf(node)
+            visit(node, parent, depth)
+            current = parent
+            depth++
+        }
     }
 
     internal fun <Node> collectActionPathValues(
@@ -337,18 +424,6 @@ object ClickExecutor {
             current = parentOf(node)
         }
         return values
-    }
-
-    private fun AccessibilityNodeInfo.collectUnsafeActionPathNodeDepths(): Set<Int> {
-        val unsafeDepths = mutableSetOf<Int>()
-        var current: AccessibilityNodeInfo? = this
-        var depth = 0
-        while (current != null && depth <= MAX_CLICKABLE_PARENT_DEPTH) {
-            if (current.isUnsafeActionPathNode()) unsafeDepths += depth
-            current = current.parent
-            depth++
-        }
-        return unsafeDepths
     }
 
     private fun AccessibilityNodeInfo.isUnsafeActionPathNode(): Boolean {
@@ -482,6 +557,14 @@ object ClickExecutor {
             abs(top - other.top) <= BOUNDS_TOLERANCE_PX &&
             abs(right - other.right) <= BOUNDS_TOLERANCE_PX &&
             abs(bottom - other.bottom) <= BOUNDS_TOLERANCE_PX
+    }
+
+    private fun Int.toClickTargetSource(): ClickTargetSourceLog {
+        return if (this == 0) {
+            ClickTargetSourceLog.NodeSelf
+        } else {
+            ClickTargetSourceLog.ClickableParent
+        }
     }
 }
 

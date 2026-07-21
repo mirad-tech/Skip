@@ -23,7 +23,8 @@ data class MatchResult(
     val defaultRuleAreaAllowed: Boolean?,
     val textKeywordIsStandaloneSkip: Boolean,
     val standaloneSkipAllowed: Boolean,
-    val clickTargetSource: ClickTargetSourceLog
+    val clickTargetSource: ClickTargetSourceLog,
+    val ruleKind: RuleKind = RuleKind.Standard
 )
 
 data class ScanReport(

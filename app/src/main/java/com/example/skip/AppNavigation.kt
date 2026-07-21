@@ -80,7 +80,13 @@ internal sealed interface AppScreen {
     data class CreateRule(
         val ruleId: String?,
         val packageName: String?,
-        val returnTarget: AppDetailReturnTarget?
+        val returnTarget: AppDetailReturnTarget?,
+        val precise: Boolean = false,
+        val initialActivityName: String = "",
+        val initialText: String = "",
+        val initialDescription: String = "",
+        val initialViewId: String = "",
+        val initialArea: String = ""
     ) : AppScreen
     data class JsonImport(
         val returnPackageName: String?,

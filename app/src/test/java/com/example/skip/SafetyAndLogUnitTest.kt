@@ -15,7 +15,11 @@ import com.example.skip.data.RuleRepository
 import com.example.skip.data.SettingsRepository
 import com.example.skip.data.StatsRepository
 import com.example.skip.engine.CoordinateFallbackMatcher
+import com.example.skip.engine.BuiltInPreciseRuleCatalog
+import com.example.skip.engine.PreciseRulePolicy
 import com.example.skip.engine.ClickExecutor
+import com.example.skip.engine.ClickActionPathSafetyContext
+import com.example.skip.engine.ClickActionPathSafetyPolicy
 import com.example.skip.engine.ClickTargetInfo
 import com.example.skip.engine.CurrentTargetRevalidator
 import com.example.skip.engine.CoordinateFallbackMatch
@@ -43,6 +47,7 @@ import com.example.skip.model.InstalledApp
 import com.example.skip.model.MatchMode
 import com.example.skip.model.RuleArea
 import com.example.skip.model.RuleImportResult
+import com.example.skip.model.RuleKind
 import com.example.skip.model.RulePackage
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
@@ -55,6 +60,7 @@ import com.example.skip.service.DelayedClickSafetyCheck
 import com.example.skip.service.EventContext
 import com.example.skip.service.AppDisplayNamePolicy
 import com.example.skip.service.OpeningAdRescanPolicy
+import com.example.skip.service.InputMethodWindowPolicy
 import com.example.skip.service.PendingClickRelocationPolicy
 import com.example.skip.service.PendingActivityScopePolicy
 import com.example.skip.service.SkipAccessibilityService
@@ -82,6 +88,248 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SafetyAndLogUnitTest {
+    @Test
+    fun inputMethodWindowPolicyBlocksSoftInputClassAndEnabledImePackage() {
+        assertTrue(
+            InputMethodWindowPolicy.shouldBlock(
+                packageName = "com.example.keyboard",
+                eventClassName = "",
+                rootClassName = "",
+                enabledInputMethodPackages = setOf("com.example.keyboard")
+            )
+        )
+        assertTrue(
+            InputMethodWindowPolicy.shouldBlock(
+                packageName = "com.example.unknownime",
+                eventClassName = "android.view.View",
+                rootClassName = "android.widget.FrameLayout",
+                enabledInputMethodPackages = emptySet(),
+                isInputMethodWindowType = true
+            )
+        )
+        assertTrue(
+            InputMethodWindowPolicy.shouldBlock(
+                packageName = "com.example.host",
+                eventClassName = InputMethodWindowPolicy.SOFT_INPUT_WINDOW_CLASS,
+                rootClassName = "",
+                enabledInputMethodPackages = emptySet()
+            )
+        )
+        assertFalse(
+            InputMethodWindowPolicy.shouldBlock(
+                packageName = "com.example.host",
+                eventClassName = "android.app.Activity",
+                rootClassName = "android.widget.FrameLayout",
+                enabledInputMethodPackages = emptySet()
+            )
+        )
+    }
+
+    @Test
+    fun schema2RuleWithoutKindImportsAsStandard() {
+        val result = RuleImportManager.parseRulePackage(
+            """{"schemaVersion":2,"apps":[{"packageName":"com.example.app","rules":[{"id":"legacy","activityName":"*","matchTexts":["跳过广告"],"area":"top_right"}]}]}"""
+        )
+        assertTrue(result.success)
+        assertEquals(RuleKind.Standard, result.rules.single().kind)
+        assertEquals(8_000L, result.rules.single().validDurationMs)
+    }
+
+    @Test
+    fun schema3PreciseRuleImportsWithExactFieldsAndWindow() {
+        val result = RuleImportManager.parseRulePackage(
+            """{"schemaVersion":3,"apps":[{"packageName":"com.example.app","rules":[{"id":"precise","kind":"precise","activityName":"com.example.app.SplashActivity","matchTexts":["跳过"],"matchViewIds":["com.example.app:id/ad_skip"],"textMatchMode":"exact","contentDescriptionMatchMode":"exact","viewIdMatchMode":"exact","area":"top_right","priority":300,"cooldownMs":1500,"validDurationMs":15000,"minScore":70}]}]}"""
+        )
+        assertTrue(result.errorMessage, result.success)
+        assertEquals(RuleKind.Precise, result.rules.single().kind)
+        assertEquals(15_000L, result.rules.single().validDurationMs)
+        assertFalse(result.rules.single().enabled)
+    }
+
+    @Test
+    fun invalidPreciseRuleShapesAreRejected() {
+        val invalidBodies = listOf(
+            "\"activityName\":\"*\",\"matchViewIds\":[\"com.example.app:id/ad_skip\"],\"viewIdMatchMode\":\"exact\",\"textMatchMode\":\"exact\",\"contentDescriptionMatchMode\":\"exact\",\"area\":\"top_right\",\"minScore\":70",
+            "\"activityName\":\"com.example.app.Splash\",\"matchTexts\":[\"跳过\"],\"textMatchMode\":\"contains\",\"contentDescriptionMatchMode\":\"exact\",\"viewIdMatchMode\":\"exact\",\"area\":\"top_right\",\"minScore\":80",
+            "\"activityName\":\"com.example.app.Splash\",\"matchTexts\":[\"跳过\"],\"textMatchMode\":\"exact\",\"contentDescriptionMatchMode\":\"exact\",\"viewIdMatchMode\":\"exact\",\"area\":\"any\",\"minScore\":79"
+        )
+        invalidBodies.forEachIndexed { index, body ->
+            val result = RuleImportManager.parseRulePackage(
+                """{"schemaVersion":3,"apps":[{"packageName":"com.example.app","rules":[{"id":"bad$index","kind":"precise",$body,"cooldownMs":1500}]}]}"""
+            )
+            assertFalse(result.success)
+        }
+    }
+
+    @Test
+    fun preciseWindowsAndCoordinateWindowsAreCanonicalized() {
+        val precise = preciseRule(validDurationMs = 99_000L)
+        assertEquals(15_000L, RuleRepository.normalizeRuleWindowForStorage(precise).validDurationMs)
+        assertEquals(3_000L, RuleRepository.normalizeRuleWindowForStorage(precise.copy(validDurationMs = 1L)).validDurationMs)
+        assertEquals(8_000L, RuleRepository.normalizeRuleWindowForStorage(precise.copy(kind = RuleKind.Standard, validDurationMs = 15_000L)).validDurationMs)
+        assertEquals(6_000L, RuleRepository.normalizeRuleWindowForStorage(precise.copy(coordinateFallback = CoordinateFallback(true, .9f, .1f, anchorTexts = listOf("广告")))).validDurationMs)
+    }
+
+    @Test
+    fun precisePlanTakesOverOnlyMatchingActivity() {
+        val local = preciseRule(id = "local", priority = 300)
+        val builtIn = BuiltInPreciseRuleCatalog.all().single().copy(
+            packageName = local.packageName,
+            activityName = local.activityName
+        )
+        val takeover = RulePlanProvider.plan(
+            packageName = local.packageName,
+            selfPackageName = "com.example.skip",
+            policy = AppPolicy(packageName = local.packageName),
+            customRules = listOf(local),
+            builtInRule = SkipRule("default", RuleSource.BuiltIn, name = "default", packageName = local.packageName, appName = "app"),
+            currentActivity = local.activityName,
+            builtInPreciseRules = listOf(builtIn)
+        )
+        assertEquals("precise_takeover", takeover.scope)
+        assertEquals(listOf("local", builtIn.id), takeover.rules.map { it.id })
+        assertEquals(15_000L, takeover.effectiveWindowMs)
+
+        val fallback = RulePlanProvider.plan(
+            packageName = local.packageName,
+            selfPackageName = "com.example.skip",
+            policy = AppPolicy(packageName = local.packageName),
+            customRules = listOf(local),
+            builtInRule = SkipRule("default", RuleSource.BuiltIn, name = "default", packageName = local.packageName, appName = "app"),
+            currentActivity = "com.example.Other",
+            builtInPreciseRules = listOf(builtIn)
+        )
+        assertEquals("default_splash_only", fallback.scope)
+        assertEquals(8_000L, fallback.effectiveWindowMs)
+    }
+
+    @Test
+    fun huyaBuiltInPreciseRuleMatchesContract() {
+        val rule = BuiltInPreciseRuleCatalog.all().single()
+        assertEquals("built_in_precise_com.duowan.kiwi_second_splash", rule.id)
+        assertEquals(RuleKind.Precise, rule.kind)
+        assertEquals("com.duowan.kiwi.adsplash.view.SecondAdSplashActivity", rule.activityName)
+        assertEquals(listOf("com.duowan.kiwi:id/skip_time"), rule.matchViewIds)
+        assertEquals(200, rule.priority)
+        assertEquals(15_000L, rule.validDurationMs)
+    }
+
+    @Test
+    fun classAPreciseRuleRequiresActualFullViewIdEvidence() {
+        val rule = preciseRule()
+        assertEquals(
+            "precise_view_id_required",
+            PreciseRulePolicy.candidateEvidenceError(
+                rule,
+                matchedViewIdRule = null,
+                matchedTextRule = null,
+                matchedDescriptionRule = null,
+                candidateArea = RuleArea.TopRight
+            )
+        )
+        assertEquals(
+            "precise_view_id_required",
+            PreciseRulePolicy.candidateEvidenceError(
+                rule,
+                matchedViewIdRule = "skip_time",
+                matchedTextRule = null,
+                matchedDescriptionRule = null,
+                candidateArea = RuleArea.TopRight
+            )
+        )
+        assertEquals(
+            null,
+            PreciseRulePolicy.candidateEvidenceError(
+                rule,
+                matchedViewIdRule = "com.example.app:id/ad_skip",
+                matchedTextRule = null,
+                matchedDescriptionRule = null,
+                candidateArea = RuleArea.Center
+            )
+        )
+        assertEquals(
+            null,
+            PreciseRulePolicy.candidateEvidenceError(
+                rule.copy(minScore = 80),
+                matchedViewIdRule = null,
+                matchedTextRule = "跳过",
+                matchedDescriptionRule = null,
+                candidateArea = RuleArea.TopRight
+            )
+        )
+        assertEquals(
+            "precise_area_mismatch",
+            PreciseRulePolicy.candidateEvidenceError(
+                rule.copy(minScore = 80),
+                matchedViewIdRule = null,
+                matchedTextRule = "跳过",
+                matchedDescriptionRule = null,
+                candidateArea = RuleArea.Center
+            )
+        )
+    }
+
+    @Test
+    fun mergeStandardRuleIntoPreciseCopiesActivityAndPreservesIdentity() {
+        val existing = preciseRule().copy(
+            kind = RuleKind.Standard,
+            activityName = "*",
+            source = RuleSource.UserSimple,
+            createdAt = 123L,
+            validDurationMs = 8_000L
+        )
+        val incoming = preciseRule().copy(
+            activityName = "com.example.app.NewSplashActivity",
+            source = RuleSource.JsonFile,
+            createdAt = 999L
+        )
+
+        val result = RuleRepository.mergeRuleForImport(existing, incoming)
+        val merged = requireNotNull(result.rule)
+
+        assertEquals("", result.errorMessage)
+        assertEquals(RuleKind.Precise, merged.kind)
+        assertEquals("com.example.app.NewSplashActivity", merged.activityName)
+        assertEquals(existing.id, merged.id)
+        assertEquals(existing.source, merged.source)
+        assertEquals(existing.createdAt, merged.createdAt)
+    }
+
+    @Test
+    fun invalidPreciseMergeReturnsErrorWithoutRule() {
+        val existing = preciseRule().copy(kind = RuleKind.Standard, activityName = "*")
+        val invalidIncoming = preciseRule().copy(activityName = "*")
+
+        val result = RuleRepository.mergeRuleForImport(existing, invalidIncoming)
+
+        assertEquals(null, result.rule)
+        assertTrue(result.errorMessage.isNotBlank())
+    }
+
+    private fun preciseRule(
+        id: String = "precise",
+        priority: Int = 300,
+        validDurationMs: Long = 15_000L
+    ) = SkipRule(
+        id = id,
+        source = RuleSource.UserSimple,
+        kind = RuleKind.Precise,
+        name = id,
+        packageName = "com.example.app",
+        appName = "Example",
+        activityName = "com.example.app.SplashActivity",
+        matchTexts = listOf("跳过"),
+        matchViewIds = listOf("com.example.app:id/ad_skip"),
+        textMatchMode = MatchMode.Exact,
+        contentDescriptionMatchMode = MatchMode.Exact,
+        viewIdMatchMode = MatchMode.Exact,
+        area = RuleArea.TopRight,
+        priority = priority,
+        cooldownMs = 1_500L,
+        validDurationMs = validDurationMs,
+        minScore = 70
+    )
+
     @Test
     fun bankAndPaymentPackagesAreProtected() {
         assertTrue(SafetyGuard.isProtectedPackage("com.icbc.android"))
@@ -656,10 +904,10 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
-    fun accessibilityNotificationTimeoutIsFiftyMs() {
+    fun accessibilityNotificationTimeoutIsOneHundredMs() {
         val xml = File("src/main/res/xml/accessibility_service_config.xml").readText()
 
-        assertTrue(xml.contains("android:notificationTimeout=\"50\""))
+        assertTrue(xml.contains("android:notificationTimeout=\"100\""))
     }
 
     @Test
@@ -702,7 +950,7 @@ class SafetyAndLogUnitTest {
         assertEquals(90, high.minScore)
         assertEquals(RuleArea.Any, high.area)
         assertEquals(800L, high.cooldownMs)
-        assertEquals(6_000L, low.validDurationMs)
+        assertEquals(8_000L, low.validDurationMs)
         assertEquals(60, low.minScore)
         assertEquals(RuleArea.BottomRight, low.area)
         assertEquals(1_200L, low.cooldownMs)
@@ -3612,6 +3860,114 @@ class SafetyAndLogUnitTest {
     }
 
     @Test
+    fun preciseStandaloneActionPathRejectsUnsafeOrEditableNodes() {
+        val target = testClickTarget(900, 20, 990, 80, text = "跳过")
+        val unsafePath = ClickActionPathSafetyPolicy.evaluate(
+            ClickActionPathSafetyContext(
+                candidate = target,
+                actionPath = ResolvedActionPath(
+                    parentDepth = 1,
+                    hasSafeClickableTarget = true,
+                    hasUnsafeNode = true
+                ),
+                ancestorSafetyTexts = emptyList()
+            )
+        )
+        val editableTarget = ClickActionPathSafetyPolicy.evaluate(
+            ClickActionPathSafetyContext(
+                candidate = target.copy(input = true),
+                actionPath = ResolvedActionPath(
+                    parentDepth = 0,
+                    hasSafeClickableTarget = true
+                ),
+                ancestorSafetyTexts = emptyList()
+            )
+        )
+
+        assertFalse(unsafePath.allowed)
+        assertEquals("standalone_skip_candidate_unsafe", unsafePath.reason)
+        assertFalse(editableTarget.allowed)
+    }
+
+    @Test
+    fun preciseStandaloneActionPathAllowsSafeClickableTarget() {
+        val result = ClickActionPathSafetyPolicy.evaluate(
+            ClickActionPathSafetyContext(
+                candidate = testClickTarget(900, 20, 990, 80, text = "跳过"),
+                actionPath = ResolvedActionPath(
+                    parentDepth = 1,
+                    hasSafeClickableTarget = true,
+                    hasUnsafeNode = false
+                ),
+                ancestorSafetyTexts = emptyList()
+            )
+        )
+
+        assertTrue(result.allowed)
+    }
+
+    @Test
+    fun safetyLogRateLimiterKeepsOneDetailPerThirtySecondsAndCountsSuppression() {
+        val limiter = ClickLogRateLimiter(windowMs = 2_000L, safetyWindowMs = 30_000L)
+        val safety = ClickLog(
+            timeMillis = 1_000L,
+            packageName = "com.example.keyboard",
+            stage = ClickLogStage.SkippedBySafety,
+            failureReason = "input_method_window",
+            blockedReason = "input_method_window",
+            blockedBySafety = true
+        )
+        assertTrue(limiter.shouldStore(safety, 1_000L).allowed)
+        assertFalse(limiter.shouldStore(safety.copy(timeMillis = 10_000L), 10_000L).allowed)
+        assertTrue(limiter.shouldStore(safety.copy(timeMillis = 31_000L), 31_000L).allowed)
+        assertTrue(
+            limiter.shouldStore(
+                safety.copy(stage = ClickLogStage.RuleMatched, timeMillis = 31_001L),
+                31_001L
+            ).allowed
+        )
+    }
+
+    @Test
+    fun safetyLogRateLimiterKeepsFirstDetailForEachForegroundSession() {
+        val limiter = ClickLogRateLimiter(windowMs = 2_000L, safetyWindowMs = 30_000L)
+        val firstSession = ClickLog(
+            timeMillis = 1_000L,
+            packageName = "com.example.keyboard",
+            stage = ClickLogStage.SkippedBySafety,
+            failureReason = "input_method_window",
+            foregroundStartTimeMillis = 100L
+        )
+        val secondSession = firstSession.copy(
+            timeMillis = 2_000L,
+            foregroundStartTimeMillis = 1_500L
+        )
+
+        val first = limiter.shouldStore(firstSession, 1_000L)
+        val suppressed = limiter.shouldStore(firstSession.copy(timeMillis = 1_100L), 1_100L)
+        assertTrue(first.allowed)
+        assertFalse(suppressed.allowed)
+        assertFalse(suppressed.throttleAggregateKey.contains("100"))
+        assertTrue(limiter.shouldStore(secondSession, 2_000L).allowed)
+    }
+
+    @Test
+    fun candidateLossReasonsAreNeverRateLimited() {
+        val limiter = ClickLogRateLimiter(windowMs = 2_000L, safetyWindowMs = 30_000L)
+        listOf("candidate_lost_before_click", "candidate_changed_before_click").forEach { reason ->
+            val log = ClickLog(
+                timeMillis = 1_000L,
+                packageName = "com.example.app",
+                stage = ClickLogStage.NoCandidateFound,
+                failureReason = reason,
+                foregroundStartTimeMillis = 100L
+            )
+            assertTrue(limiter.shouldStore(log, 1_000L).allowed)
+            assertTrue(limiter.shouldStore(log.copy(timeMillis = 1_001L), 1_001L).allowed)
+        }
+    }
+
+    @Test
     fun diagnosticReportContainsStableSchemaSanitizedLogsAndSummaryCounts() {
         val now = 10_000L
         val json = DiagnosticReportRepository.buildReportJson(
@@ -3760,7 +4116,7 @@ class SafetyAndLogUnitTest {
         val firstRule = rulesSnapshot.optJSONArray("rules")!!.optJSONObject(0)!!
         val firstRuleLog = ruleLogs.optJSONObject(0)!!
 
-        assertEquals(2, report.optInt("schemaVersion"))
+        assertEquals(4, report.optInt("schemaVersion"))
         assertEquals("1.0.0", report.optString("skipVersion"))
         assertEquals("Pixel", device.optString("model"))
         assertTrue(runtime.optBoolean("masterEnabled"))
@@ -3768,7 +4124,7 @@ class SafetyAndLogUnitTest {
         assertEquals(1, runtime.optInt("appPolicyCount"))
         assertEquals(1, rulesSnapshot.optInt("ruleCount"))
         assertEquals(1, rulesSnapshot.optInt("coordinateFallbackEnabledRuleCount"))
-        assertEquals(10_000L, defaultRuleRuntime.optLong("defaultRuleWindowMs"))
+        assertEquals(8_000L, defaultRuleRuntime.optLong("defaultRuleWindowMs"))
         assertEquals(65, defaultRuleRuntime.optInt("defaultRuleMinScore"))
         assertEquals("bottom_right", defaultRuleRuntime.optString("defaultRuleArea"))
         assertEquals(1_800L, defaultRuleRuntime.optLong("defaultRuleCooldownMs"))
