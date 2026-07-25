@@ -25,7 +25,11 @@
 
 - `versionCode`：21
 - `versionName`：`1.0.13`
-- 当前处于发布准备阶段；GitHub Release 尚未创建，下载仍指向已发布的 `1.0.12`。
+
+### 发布文件
+
+- Release APK：`Skip-v1.0.13-release.apk`
+- SHA256：`D867DE7C7BC57F7ADD57EDF8EA05B4493FD2A5B6B152D8B6772DDB83FE2848F0`
 
 ### 验证摘要
 
