@@ -2488,8 +2488,11 @@ class SafetyAndLogUnitTest {
     @Test
     fun coordinateFallbackServiceHandlesExplicitInitialBlockedResult() {
         val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
-        val blockedLogger = source.substringAfter("private fun logCoordinateFallbackBlocked")
-            .substringBefore("private fun relocateAndClick")
+        val startMarker = "internal fun logCoordinateFallbackBlocked"
+        val endMarker = "private fun logScan"
+        assertTrue("missing start marker: $startMarker", source.contains(startMarker))
+        assertTrue("missing end marker: $endMarker", source.contains(endMarker))
+        val blockedLogger = source.substringAfter(startMarker).substringBefore(endMarker)
 
         assertTrue(source.contains("CoordinateFallbackMatcher.findResult"))
         assertTrue(source.contains("CoordinateFallbackMatchResult.Blocked"))
@@ -2502,7 +2505,7 @@ class SafetyAndLogUnitTest {
 
     @Test
     fun coordinateFallbackServiceRevalidatesBeforeDispatchingGesture() {
-        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
+        val source = readProjectFile("app/src/main/java/com/example/skip/service/PendingClickCoordinator.kt")
         val runCoordinateFallback = source.substringAfter("private fun runCoordinateFallback")
             .substringBefore("private fun verifyActionClick")
 
@@ -2512,7 +2515,7 @@ class SafetyAndLogUnitTest {
 
     @Test
     fun normalGestureFallbackRevalidatesCurrentTargetBeforeDispatching() {
-        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
+        val source = readProjectFile("app/src/main/java/com/example/skip/service/PendingClickCoordinator.kt")
         val runGestureFallback = source.substringAfter("private fun runGestureFallback")
             .substringBefore("private fun verifyClickEffect")
 
@@ -2651,7 +2654,7 @@ class SafetyAndLogUnitTest {
 
     @Test
     fun delayedRescanUsesTheCurrentActivityInsteadOfHistoricalContext() {
-        val source = readProjectFile("app/src/main/java/com/example/skip/service/SkipAccessibilityService.kt")
+        val source = readProjectFile("app/src/main/java/com/example/skip/service/PendingClickCoordinator.kt")
         val relocateAndClick = source.substringAfter("private fun relocateAndClick")
             .substringBefore("private fun runCoordinateFallback")
 
