@@ -1,6 +1,7 @@
 package com.example.skip.service
 
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.skip.util.AccessibilityNodeAccess
 
 object ActiveTextInputGuard {
     fun hasFocusedEditableInput(root: AccessibilityNodeInfo?): Boolean {
@@ -11,7 +12,7 @@ object ActiveTextInputGuard {
             val node = queue.removeFirst()
             if (node.isActiveTextInput()) return true
             for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
+                AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
         }
         return false

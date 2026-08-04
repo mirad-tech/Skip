@@ -3,6 +3,7 @@ package com.example.skip.service
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.example.skip.engine.SafetyGuard
+import com.example.skip.util.AccessibilityNodeAccess
 
 internal class AccessibilityWindowResolver(
     private val selfPackageName: String,
@@ -74,7 +75,7 @@ internal class AccessibilityWindowResolver(
             .getOrNull()
             .orEmpty()
             .mapNotNull { window ->
-                val root = window.root ?: return@mapNotNull null
+                val root = AccessibilityNodeAccess.root(window) ?: return@mapNotNull null
                 val packageName = root.packageName?.toString().orEmpty().trim()
                 if (packageName.isBlank()) null else WindowRoot(root, packageName)
             }

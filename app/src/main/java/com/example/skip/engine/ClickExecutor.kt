@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.skip.util.AccessibilityNodeAccess
 import com.example.skip.model.ClickMethodLog
 import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.util.PrivacySanitizer
@@ -133,7 +134,7 @@ object ClickExecutor {
                 )
             }
             if (++depth > MAX_CLICKABLE_PARENT_DEPTH) return null
-            current = current.parent
+            current = AccessibilityNodeAccess.parent(current)
         }
         return null
     }
@@ -364,7 +365,7 @@ object ClickExecutor {
     }
 
     fun describeTarget(node: AccessibilityNodeInfo): ClickTargetInfo {
-        val parent = node.parent
+        val parent = AccessibilityNodeAccess.parent(node)
         return describeTarget(
             node = node,
             parentClickable = parent?.isClickable == true,
@@ -465,7 +466,7 @@ object ClickExecutor {
             val node = queue.removeFirst()
             if (node.isVisibleToUser && node.matchesTarget(target)) return true
             for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
+                AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
         }
         return false

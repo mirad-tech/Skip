@@ -2,6 +2,7 @@ package com.example.skip.engine
 
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.skip.util.AccessibilityNodeAccess
 import kotlin.math.abs
 
 internal object CurrentTargetRevalidator {
@@ -93,7 +94,7 @@ internal object CurrentTargetRevalidator {
             childrenOf = { node ->
                 buildList {
                     for (index in 0 until node.childCount) {
-                        node.getChild(index)?.let(::add)
+                        AccessibilityNodeAccess.child(node, index)?.let(::add)
                     }
                 }
             },
@@ -163,7 +164,7 @@ internal object CurrentTargetRevalidator {
                 node.className?.toString().orEmpty()
             )
             for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
+                AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
         }
         return values
