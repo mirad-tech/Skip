@@ -9,10 +9,8 @@
    - `app/build.gradle.kts` 中 `versionName`
 2. 确认发布文档已更新：
    - `README.md`
+   - `docs/README.md`
    - `RELEASE_NOTES.md`
-   - `RELEASE_TEST_MATRIX.md`
-   - `RULES_GUIDE.md`
-   - `LOG_DIAGNOSTIC_GUIDE.md`
 3. 确认 `sample_rules.json` 可导入。
 4. 确认没有新增无关敏感权限。
 
@@ -97,16 +95,47 @@ release APK 输出路径通常为：
 app/build/outputs/apk/release/app-release.apk
 ```
 
-发布前必须在真机安装 release APK，验证：
+## 7. 固定的 GitHub 发布闭环
 
-- 首次披露流程。
-- 无障碍授权流程。
-- 高风险按钮阻止。
-- 坐标兜底限制。
-- 规则导入导出。
-- 日志和统计。
+除非项目所有者明确要求使用分支或 Pull Request，否则 Skip 的日常版本发布直接在干净且已同步的 `main` 上完成，不新建发布分支。
 
-## 7. 回滚流程
+必须按以下顺序执行，不得只推送源码版本后停止：
+
+1. `git fetch --prune --tags origin`，确认当前分支为 `main`、工作区干净，且本地 `main` 与 `origin/main` 一致。
+2. 更新 `app/build.gradle.kts` 中的 `versionCode` 和 `versionName`。
+3. 强制重新执行单元测试、AndroidTest 源码编译、Debug 构建和签名 Release 构建。
+4. 验证 APK 内嵌版本、v2 签名和历史发布包签名证书，生成版本化文件 `downloads/Skip-v<version>-release.apk` 与真实 SHA256。
+5. 同步更新 `README.md`、`docs/README.md` 和 `RELEASE_NOTES.md`：三处版本、APK 文件名、下载链接和 SHA256 必须一致，不得保留“尚未发布”占位文字。
+6. 运行发布元数据校验：
+
+   ```powershell
+   .\tools\verify-release.ps1 -Version <version> -VersionCode <code> -Sha256 <sha256> -AllowDirty
+   ```
+
+7. 精确暂存本次发布文件，运行 `git diff --cached --check`，提交后直接执行 `git push origin main`。
+8. 在已推送的 `main` 提交上创建并推送 annotated tag：
+
+   ```powershell
+   git tag -a v<version> -m "Skip v<version>"
+   git push origin v<version>
+   ```
+
+9. 使用版本化 APK、真实发布说明创建正式且标记为 Latest 的 GitHub Release：
+
+    ```powershell
+    gh release create v<version> downloads\Skip-v<version>-release.apk --repo mirad-tech/Skip --verify-tag --latest --title "Skip v<version>" --notes-file <release-notes-file>
+    ```
+
+10. 重新拉取标签并执行最终回读验证：
+
+    ```powershell
+    git fetch --prune --tags origin
+    .\tools\verify-release.ps1 -Version <version> -VersionCode <code> -Sha256 <sha256> -VerifyGitHubRelease
+    ```
+
+11. 确认 GitHub Release 页面、APK 下载 URL、资产 SHA256、`main`、tag 和本地工作区全部一致后，发布才算完成。
+
+## 8. 回滚流程
 
 如果发布后发现阻塞问题：
 
@@ -116,12 +145,13 @@ app/build/outputs/apk/release/app-release.apk
 4. 在修复分支添加回归测试。
 5. 重新执行 `RELEASE_TEST_MATRIX.md`。
 
-## 8. 发布阻塞条件
+## 9. 发布阻塞条件
 
 出现以下任一情况不得发布：
 
 - 单元测试失败。
 - debug 或 release 构建失败。
+- `README.md`、`docs/README.md`、`RELEASE_NOTES.md` 与 APK 的版本、文件名或 SHA256 不一致。
 - Manifest 出现无关敏感权限。
 - 首次披露无法展示。
 - 未同意即跳转系统无障碍设置。

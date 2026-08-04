@@ -10,9 +10,8 @@
 - 在无障碍事件、延迟扫描、延迟点击以及服务中断和销毁边界清理框架缓存，防止跨任务持有过期节点。
 - 调试日志关闭时，在构造日志载荷前直接跳过调试专用事件，减少高频服务路径中的无效分配。
 
-### 回归保护
+### 兼容性
 
-- 新增无预取节点读取、事件与延迟任务缓存边界，以及调试日志短路的源码回归测试。
 - 保留 Android 12 及以下版本原有节点读取路径，不扩大自动点击范围或权限边界。
 
 ### 版本信息
@@ -20,16 +19,10 @@
 - `versionCode`：22
 - `versionName`：`1.0.14`
 
-### 发布状态
+### 发布文件
 
-- 本节记录当前源码的发布准备状态；GitHub Release 尚未创建，APK 尚未上传，发布校验值尚未记录。
-
-### 验证摘要
-
-- JVM 单元测试已强制重新执行：240 tests，0 failures，0 errors，0 skipped。
-- Android instrumentation 测试源码已编译通过；未安装本次构建，也未执行真机测试。
-- Debug 与签名 Release APK 构建通过，release lint vital 检查通过。
-- `lintDebug` 仍有 2 个既有 Compose API 错误，位于本次未修改的 `HomeScreen.kt` 和 `IconAppearanceScreen.kt`；另有 17 个警告。
+- Release APK：`Skip-v1.0.14-release.apk`
+- SHA256：`153F71057D8E5617F74A5B1C061936E7D91C4BEE0112E2A6EEBD303980B7A51E`
 
 ## 1.0.13
 
