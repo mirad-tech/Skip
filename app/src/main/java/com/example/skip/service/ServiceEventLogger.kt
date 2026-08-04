@@ -52,6 +52,8 @@ internal class ServiceEventLogger(
         clickTargetSource: ClickTargetSourceLog = pending?.clickTargetSource ?: ClickTargetSourceLog.None,
         ruleScope: String = pending?.ruleScope.orEmpty()
     ) {
+        if (stage.isDebugOnly && !SettingsRepository.isDebugToastEnabled(service)) return
+
         val safetyModeEnabled = SettingsRepository.isSafetyModeEnabled(service)
         val appName = pending?.appName ?: eventContext.packageName.takeIf { it.isNotBlank() }?.let {
             InstalledAppUtils.getAppLabel(service, it)

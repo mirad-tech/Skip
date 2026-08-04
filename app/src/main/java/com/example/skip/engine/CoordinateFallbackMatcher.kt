@@ -5,6 +5,7 @@ import com.example.skip.data.RuleRepository
 import com.example.skip.model.CoordinateFallback
 import com.example.skip.model.RuleSource
 import com.example.skip.model.SkipRule
+import com.example.skip.util.AccessibilityNodeAccess
 import java.util.Locale
 
 object CoordinateFallbackMatcher {
@@ -390,7 +391,7 @@ object CoordinateFallbackMatcher {
             val node = queue.removeFirst()
             if (node.matchesAnchor(fallback)) return true
             for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
+                AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
         }
         return false

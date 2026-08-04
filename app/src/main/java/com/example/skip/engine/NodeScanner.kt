@@ -4,6 +4,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.example.skip.model.MatchResult
 import com.example.skip.model.ScanReport
 import com.example.skip.model.SkipRule
+import com.example.skip.util.AccessibilityNodeAccess
 
 object NodeScanner {
     fun scan(
@@ -63,7 +64,7 @@ object NodeScanner {
             // Performance Optimization: Skip child scanning for leaves with no content
             if (node.childCount > 0) {
                 for (index in 0 until node.childCount) {
-                    node.getChild(index)?.let(queue::add)
+                    AccessibilityNodeAccess.child(node, index)?.let(queue::add)
                 }
             }
 

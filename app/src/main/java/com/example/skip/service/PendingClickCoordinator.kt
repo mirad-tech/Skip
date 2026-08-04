@@ -19,6 +19,7 @@ import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.MatchResult
 import com.example.skip.model.ScanReport
 import com.example.skip.model.SkipRule
+import com.example.skip.util.AccessibilityNodeAccess
 
 internal class PendingClickCoordinator(
     private val service: SkipAccessibilityService
@@ -32,6 +33,13 @@ internal class PendingClickCoordinator(
 
     fun clearIfSignature(signature: String) {
         if (pendingClick?.signature == signature) pendingClick = null
+    }
+
+    private fun postAccessibilityTask(action: () -> Unit, delayMs: Long) {
+        service.mainHandler.postDelayed(
+            { AccessibilityNodeAccess.withCacheBoundary(service, action) },
+            delayMs
+        )
     }
 
     fun startStableClick(
@@ -70,7 +78,7 @@ internal class PendingClickCoordinator(
         )
         service.cancelScheduledOpeningAdRetry()
         pendingClick = pending
-        service.mainHandler.postDelayed({ relocateAndClick(pending) }, delayMs)
+        postAccessibilityTask({ relocateAndClick(pending) }, delayMs)
     }
 
     fun startStableCoordinateFallback(
@@ -148,7 +156,7 @@ internal class PendingClickCoordinator(
 
         service.cancelScheduledOpeningAdRetry()
         pendingClick = pending
-        service.mainHandler.postDelayed(
+        postAccessibilityTask(
             { runCoordinateFallback(pending) },
             SkipAccessibilityService.STABLE_CLICK_DELAY_MS
         )
@@ -159,7 +167,7 @@ internal class PendingClickCoordinator(
         if (pendingClick !== pending) return
         val callbackPending = ClickFlowStateMachine.recordCallbackTiming(pending)
         pendingClick = callbackPending
-        val root = service.rootInActiveWindow
+        val root = AccessibilityNodeAccess.freshActiveRoot(service)
         if (root == null && retryPendingClick(
                 pending = callbackPending,
                 reason = "root_window_null",
@@ -293,7 +301,7 @@ internal class PendingClickCoordinator(
                 clickResult = true,
                 delayBeforeClickMs = dispatched.delayBeforeClickMs
             )
-            service.mainHandler.postDelayed(
+            postAccessibilityTask(
                 { verifyActionClick(dispatched) },
                 CLICK_VERIFY_DELAY_MS
             )
@@ -307,7 +315,7 @@ internal class PendingClickCoordinator(
         if (pendingClick !== pending) return
         val callbackPending = ClickFlowStateMachine.recordCallbackTiming(pending)
         pendingClick = callbackPending
-        val root = service.rootInActiveWindow
+        val root = AccessibilityNodeAccess.freshActiveRoot(service)
         val x = callbackPending.coordinateX ?: callbackPending.candidate.bounds.centerX()
         val y = callbackPending.coordinateY ?: callbackPending.candidate.bounds.centerY()
         val rule = callbackPending.activeRules.firstOrNull { candidate ->
@@ -433,7 +441,7 @@ internal class PendingClickCoordinator(
                 delayBeforeClickMs = updated.delayBeforeClickMs,
                 clickTargetSource = ClickTargetSourceLog.CoordinateFallback
             )
-            service.mainHandler.postDelayed(
+            postAccessibilityTask(
                 {
                     if (pendingClick?.signature == updated.signature) {
                         val result = verifyClickEffect(updated)
@@ -476,7 +484,7 @@ internal class PendingClickCoordinator(
     private fun runGestureFallback(pending: PendingClick) {
         if (abortPendingIfAutomationPaused(pending)) return
         if (pendingClick?.signature != pending.signature) return
-        val root = service.rootInActiveWindow
+        val root = AccessibilityNodeAccess.freshActiveRoot(service)
         if (root == null && retryPendingClick(
                 pending = pending,
                 reason = "current_target_root_missing",
@@ -634,7 +642,7 @@ internal class PendingClickCoordinator(
                 delayBeforeClickMs = dispatched.delayBeforeClickMs,
                 clickTargetSource = ClickTargetSourceLog.GestureOnNodeCenter
             )
-            service.mainHandler.postDelayed(
+            postAccessibilityTask(
                 {
                     if (pendingClick?.signature == dispatched.signature) {
                         val result = verifyClickEffect(dispatched)
@@ -658,7 +666,7 @@ internal class PendingClickCoordinator(
     }
 
     private fun verifyClickEffect(pending: PendingClick): ClickVerification {
-        val root = service.rootInActiveWindow
+        val root = AccessibilityNodeAccess.freshActiveRoot(service)
         return ClickEffectVerifier.evaluate(
             pendingPackageName = pending.packageName,
             selfPackageName = service.packageName,
@@ -744,7 +752,7 @@ internal class PendingClickCoordinator(
         detail: String = ""
     ): Boolean {
         if (pendingClick?.signature != pending.signature) return false
-        val root = service.rootInActiveWindow
+        val root = AccessibilityNodeAccess.freshActiveRoot(service)
         val rootPackageName = root?.packageName?.toString().orEmpty()
         val samePackage = service.foregroundPackage == pending.packageName &&
             (rootPackageName.isBlank() || rootPackageName == pending.packageName)

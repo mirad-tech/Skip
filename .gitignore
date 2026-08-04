@@ -4,6 +4,9 @@
 /AGENTS.md
 /.agents/
 /.codex/
+/.claude/
+/CLAUDE.md
+/.gitnexus/
 /.worktrees/
 .codex-security-scans/
 .gradle/

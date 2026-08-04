@@ -22,6 +22,7 @@ import com.example.skip.model.ClickTargetSourceLog
 import com.example.skip.model.MatchResult
 import com.example.skip.model.ScanReport
 import com.example.skip.model.SkipRule
+import com.example.skip.util.AccessibilityNodeAccess
 import com.example.skip.util.InstalledAppUtils
 
 class SkipAccessibilityService : AccessibilityService() {
@@ -32,7 +33,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private val windowResolver by lazy(LazyThreadSafetyMode.NONE) {
         AccessibilityWindowResolver(
             selfPackageName = packageName,
-            activeRootProvider = { rootInActiveWindow },
+            activeRootProvider = { AccessibilityNodeAccess.freshActiveRoot(this) },
             interactiveWindowsProvider = { windows }
         )
     }
@@ -72,7 +73,9 @@ class SkipAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || !event.isSupportedEvent()) return
 
-        processAccessibilityEvent(event)
+        AccessibilityNodeAccess.withCacheBoundary(this) {
+            processAccessibilityEvent(event)
+        }
     }
 
     private fun processAccessibilityEvent(event: AccessibilityEvent) {
@@ -442,6 +445,7 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         mainHandler.removeCallbacksAndMessages(null)
+        AccessibilityNodeAccess.clearCache(this)
         pendingClickCoordinator.clear()
         cancelOpeningAdRecovery(resetRetrySession = true)
         LogRepository.flushPendingWritesAsync(applicationContext)
@@ -451,6 +455,7 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
+        AccessibilityNodeAccess.clearCache(this)
         pendingClickCoordinator.clear()
         cancelOpeningAdRecovery(resetRetrySession = true)
         inputMethodWindowController.unregisterSettingsObserver()
@@ -489,6 +494,13 @@ class SkipAccessibilityService : AccessibilityService() {
         )
     }
 
+    private fun postAccessibilityTask(action: () -> Unit, delayMs: Long) {
+        mainHandler.postDelayed(
+            { AccessibilityNodeAccess.withCacheBoundary(this, action) },
+            delayMs
+        )
+    }
+
     private fun scheduleOpeningAdRescans(
         packageName: String,
         activeRules: List<SkipRule>,
@@ -522,7 +534,7 @@ class SkipAccessibilityService : AccessibilityService() {
         openingAdRecoveryState.markRescansScheduled(key)
         val expectedActivityName = baseEventContext.activityName
         delaysMs.forEach { delayMs ->
-            mainHandler.postDelayed(
+            postAccessibilityTask(
                 {
                     runOpeningAdRescan(
                         key = key,
@@ -768,10 +780,10 @@ class SkipAccessibilityService : AccessibilityService() {
             retryCount = nextRetryCount,
             reason = reason
         )
-        mainHandler.postDelayed(
+        postAccessibilityTask(
             {
                 if (!openingAdRecoveryState.acceptScheduledRetry(generation, nextRetryCount)) {
-                    return@postDelayed
+                    return@postAccessibilityTask
                 }
                 runOpeningAdRetry(request)
             },
@@ -1323,7 +1335,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 return true
             }
             for (index in 0 until node.childCount) {
-                node.getChild(index)?.let(queue::add)
+                AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
         }
         return false
