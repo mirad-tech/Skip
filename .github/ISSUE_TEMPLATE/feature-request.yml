@@ -1,0 +1,45 @@
+name: 功能建议
+description: 提出有明确场景和安全边界的改进建议
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 使用场景
+      description: 请说明当前遇到的真实问题，不要只描述希望增加的按钮或开关。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望结果
+      description: 请描述你希望 Skip 如何表现。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已尝试的方法
+      description: 可选。请说明现有规则、自定义规则或其他方法为什么不适用。
+
+  - type: dropdown
+    id: safety-impact
+    attributes:
+      label: 安全边界影响
+      description: 该建议是否会扩大自动点击范围、新增权限或改变高风险阻止逻辑？
+      options:
+        - 不会
+        - 可能会，需要评估
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 补充信息
+      description: 可选。可附上已脱敏的示例、草图或规则片段。

@@ -41,15 +41,17 @@ git ls-files keystore.properties release.keystore
 ## 3. 自动化验证
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest
-.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
+.\gradlew.bat :app:compileDebugAndroidTestKotlin --rerun-tasks
+.\gradlew.bat :app:assembleDebug --rerun-tasks
+.\gradlew.bat :app:assembleRelease --rerun-tasks
 git diff --check
-.\gradlew.bat :app:assembleRelease
 ```
 
 通过标准：
 
 - 单元测试 0 failed。
+- AndroidTest 源码编译成功。
 - debug APK 构建成功。
 - diff 空白检查无错误。
 - release APK 构建成功。
@@ -120,7 +122,7 @@ app/build/outputs/apk/release/app-release.apk
    git push origin v<version>
    ```
 
-9. 使用版本化 APK、真实发布说明创建正式且标记为 Latest 的 GitHub Release：
+9. 使用版本化 APK、真实发布说明创建正式且标记为 Latest 的 GitHub Release。`--notes-file` 只能包含当前版本的用户可感知改动、必要的兼容/安全边界和 APK SHA256；不得传入整份历史 `RELEASE_NOTES.md`，也不写真机安装、测试数量、lint 或验收过程：
 
     ```powershell
     gh release create v<version> downloads\Skip-v<version>-release.apk --repo mirad-tech/Skip --verify-tag --latest --title "Skip v<version>" --notes-file <release-notes-file>
@@ -142,7 +144,7 @@ app/build/outputs/apk/release/app-release.apk
 1. 暂停分发当前 APK。
 2. 记录问题设备、系统版本、复现路径和日志。
 3. 回滚到上一版已验证 APK。
-4. 在修复分支添加回归测试。
+4. 在项目所有者授权的 Git 工作流中完成修复并添加回归测试。
 5. 重新执行 `RELEASE_TEST_MATRIX.md`。
 
 ## 9. 发布阻塞条件

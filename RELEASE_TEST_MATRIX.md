@@ -1,6 +1,6 @@
 # Skip 发布测试矩阵
 
-发布前必须完成自动化命令和人工真机验证。自动化通过不等于可以发布，仍需完成设备和场景矩阵。
+本文件是每个版本复用的发布检查模板，不记录某一次发布的历史验证结果。发布前必须执行自动化命令，并根据变更风险完成相关设备和场景验证。未实际执行的项目必须保持为“未验证”。
 
 ## 自动化命令
 
@@ -28,23 +28,12 @@ git diff --check
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-本轮自动化结果（2026-07-12，1.0.10）：
-
-| 命令 | 结果 | 备注 |
-| --- | --- | --- |
-| `.\gradlew.bat testDebugUnitTest assembleDebug compileDebugAndroidTestKotlin assembleRelease --rerun-tasks --no-daemon --max-workers=2 "-Dorg.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8"` | 通过 | exit 0；183 tests，0 failures，0 errors，0 skipped；Debug、AndroidTest 编译和签名 Release 构建完成 |
-| `.\gradlew.bat :app:assembleDebug` | 通过 | exit 0 |
-| `.\gradlew.bat :app:assembleRelease` | 通过 | exit 0，R8 / shrinkResources 执行完成 |
-| `.\gradlew.bat :app:compileDebugAndroidTestKotlin` | 通过 | exit 0 |
-| `git diff --check` | 通过 | exit 0，仅有 CRLF 工作区提示，无空白错误 |
-| `GeminiRegressionInstrumentedTest` | 未在本机执行 | 无已连接 ADB 设备；由发布者在真机完成 |
-
 ## Manifest 权限检查
 
-- [x] 检查 `app/src/main/AndroidManifest.xml` 仅因手动更新声明 `INTERNET` 和 `REQUEST_INSTALL_PACKAGES`。
-- [x] 检查无定位、通讯录、相机、麦克风、短信、外部存储权限。
-- [x] 检查无障碍服务只使用 `BIND_ACCESSIBILITY_SERVICE`。
-- [x] 检查 debug manifest 未额外加入敏感权限。
+- [ ] 检查 `app/src/main/AndroidManifest.xml` 仅因手动更新声明 `INTERNET` 和 `REQUEST_INSTALL_PACKAGES`。
+- [ ] 检查无定位、通讯录、相机、麦克风、短信、外部存储权限。
+- [ ] 检查无障碍服务只使用 `BIND_ACCESSIBILITY_SERVICE`。
+- [ ] 检查 debug manifest 未额外加入敏感权限。
 
 ## 设备矩阵
 
@@ -118,7 +107,7 @@ git diff --check
 | 统计页 | 显示安全阻止和坐标兜底次数 | 未测 |
 | release APK 安装 | 可安装并打开 | 未测 |
 | release APK R8 后功能 | 无崩溃，核心流程可用 | 未测 |
-| 关于页版本卡片 | 点击后检测新版本，最新版显示“已是最新版本” | 通过 |
+| 关于页版本卡片 | 点击后检测新版本，最新版显示“已是最新版本” | 未验证 |
 
 ## 发布记录模板
 
@@ -127,10 +116,11 @@ git diff --check
 | 测试日期 |  |
 | 测试版本 |  |
 | 测试人员 |  |
-| 单元测试 | 2026-05-14 自动化通过 |
-| debug 构建 | 2026-05-14 自动化通过 |
-| release 构建 | 2026-05-14 自动化通过 |
-| 权限检查 | 2026-05-14 源码 Manifest 与合并 Manifest 通过 |
+| 单元测试 |  |
+| AndroidTest 源码编译 |  |
+| debug 构建 |  |
+| release 构建 |  |
+| 权限检查 |  |
 | 主要设备 |  |
 | 阻塞问题 |  |
 | 发布结论 |  |

@@ -1,5 +1,29 @@
+# Android Studio, Gradle and local SDK state
 *.iml
-# Local AI assistant instructions and workspaces.
+/.idea/
+/.gradle/
+/.gradle-home/
+/.kotlin/
+/.android-home/
+**/build/
+/.externalNativeBuild/
+/.cxx/
+/local.properties
+
+# Local signing material
+/keystore.properties
+/release.keystore
+
+# Local release and diagnostic artifacts
+*.apk
+*.aab
+/dist/
+/downloads/
+/captures/
+/logs/
+skip_diagnostic_*.json
+
+# Local agent instructions, indexes and worktrees
 /AGENT.md
 /AGENTS.md
 /.agents/
@@ -8,38 +32,7 @@
 /CLAUDE.md
 /.gitnexus/
 /.worktrees/
-.codex-security-scans/
-.gradle/
-.gradle-home/
-.kotlin/
-.android-home/
-/local.properties
-/keystore.properties
-/release.keystore
-/_google_drive_upload/
-/LITIAOTIAO_PLAN.md
-/tools/deep-clean-codex-git-loop.ps1
-/tools/codex-clean-backup-*/
-.idea/
-.idea/caches
-.idea/libraries
-.idea/modules.xml
-.idea/workspace.xml
-.idea/tasks.xml
-.idea/usage.statistics.xml
-.idea/shelf/
-.idea/navEditor.xml
-.idea/assetWizardSettings.xml
-.DS_Store
-build/
-**/build/
-/captures
-.externalNativeBuild
-.cxx
-local.properties
+/.codex-security-scans/
 
-*.apk
-*.aab
-/downloads/
-logs/
-skip_diagnostic_*.json
+# Operating system files
+.DS_Store

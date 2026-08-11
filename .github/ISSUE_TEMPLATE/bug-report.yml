@@ -1,0 +1,89 @@
+name: 问题报告
+description: 报告可重现的故障、崩溃或兼容性问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你报告问题。请先确认正在使用最新 Release，并对截图、日志和诊断包中的敏感内容做脱敏处理。
+
+  - type: input
+    id: skip-version
+    attributes:
+      label: Skip 版本
+      description: 可在关于页或安装包信息中查看。
+      placeholder: 1.0.15
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-source
+    attributes:
+      label: 安装来源
+      options:
+        - GitHub Release APK
+        - 从当前源码自行构建
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统
+      description: 请提供品牌/型号、Android 版本和 ROM 名称。
+      placeholder: 品牌/型号，Android 版本，ROM 名称
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 请说明实际发生了什么，以及你期望的结果。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从启动 Skip 或目标应用开始，按顺序列出最小复现步骤。
+      placeholder: |
+        1. 打开……
+        2. 进入……
+        3. 最后一次操作是……
+    validations:
+      required: true
+
+  - type: textarea
+    id: service-state
+    attributes:
+      label: 无障碍服务状态
+      description: 问题发生后，请说明系统设置中的 Skip 服务是否仍显示启用、已故障或未连接。
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 脱敏诊断信息
+      description: 可选。请附上脱敏后的应用诊断包、关键日志或截图，不要粘贴与问题无关的完整设备日志。
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私确认
+      options:
+        - label: 我已删除账号、密码、验证码、支付信息和其他不希望公开的内容。
+          required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，没有找到相同问题。
+          required: true
+        - label: 我没有在这份公开 Issue 中披露安全漏洞的利用细节。
+          required: true

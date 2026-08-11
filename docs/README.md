@@ -61,4 +61,5 @@ Skip 默认在本机处理规则、日志、统计和诊断信息。联网仅用
 - [规则指南](../RULES_GUIDE.md)
 - [日志诊断包指南](../LOG_DIAGNOSTIC_GUIDE.md)
 - [发布说明](../RELEASE_NOTES.md)
-- [图标设计资料](design/icon-prompts.md)
+- [安全政策](../SECURITY.md)
+- [问题反馈](https://github.com/mirad-tech/Skip/issues/new/choose)
