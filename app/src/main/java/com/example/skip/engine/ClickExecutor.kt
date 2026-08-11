@@ -49,7 +49,7 @@ object ClickExecutor {
         walkParentChain(
             start = node,
             maxDepth = MAX_CLICKABLE_PARENT_DEPTH,
-            parentOf = AccessibilityNodeInfo::getParent
+            parentOf = AccessibilityNodeAccess::parent
         ) { current, parent, depth ->
             val signals = if (depth == 0) {
                 candidateSignals

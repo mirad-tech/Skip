@@ -41,8 +41,8 @@ android {
         applicationId = "com.example.skip"
         minSdk = 28
         targetSdk = 36
-        versionCode = 22
-        versionName = "1.0.14"
+        versionCode = 23
+        versionName = "1.0.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

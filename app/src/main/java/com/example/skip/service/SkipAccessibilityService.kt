@@ -1,6 +1,7 @@
 package com.example.skip.service
 
 import android.accessibilityservice.AccessibilityService
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -63,6 +64,9 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setCacheEnabled(false)
+        }
         inputMethodWindowController.refreshEnabledInputMethodPackages()
         inputMethodWindowController.registerSettingsObserver()
         SettingsRepository.markServiceConnected(this)
