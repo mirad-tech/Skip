@@ -15,6 +15,7 @@ import com.example.skip.engine.CoordinateFallbackMatchResult
 import com.example.skip.engine.HighRiskClickDecision
 import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.NodeScanner
+import com.example.skip.engine.PreciseRulePolicy
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.engine.ScoreEvaluator
@@ -55,6 +56,9 @@ class SkipAccessibilityService : AccessibilityService() {
     internal var currentActivityName: String = ""
     internal var currentActivityIdentityKnown = false
     private val lastCoordinateFallbackBlockedAt = mutableMapOf<String, Long>()
+    private var lastTreeWalkElapsedRealtime = 0L
+    private var lastEffectiveRuleWindowMs = PreciseRulePolicy.MAX_WINDOW_MS
+    private var loggedTimeWindowExpiryKey: String? = null
 
     internal val foregroundPackage: String?
         get() = foregroundState.currentForegroundPackage
@@ -76,9 +80,29 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || !event.isSupportedEvent()) return
-
-        AccessibilityNodeAccess.withCacheBoundary(this) {
-            processAccessibilityEvent(event)
+        val now = System.currentTimeMillis()
+        val elapsedSinceForegroundMs = foregroundState.foregroundStartTimeMillis
+            .takeIf { it > 0L }
+            ?.let { start -> (now - start).coerceAtLeast(0L) }
+        val work = AccessibilityEventWorkPolicy.decide(
+            eventType = event.eventType,
+            elapsedSinceForegroundMs = elapsedSinceForegroundMs,
+            ruleWindowMs = lastEffectiveRuleWindowMs,
+            lastTreeWalkElapsedRealtime = lastTreeWalkElapsedRealtime,
+            nowElapsedRealtime = SystemClock.elapsedRealtime(),
+            hasPendingClick = pendingClickCoordinator.pendingClick != null
+        )
+        when (work) {
+            AccessibilityEventWork.Drop -> return
+            AccessibilityEventWork.SkipTreeRecordExpiry -> {
+                recordRuleWindowExpiryIfNeeded()
+                return
+            }
+            AccessibilityEventWork.ProcessFully -> {
+                AccessibilityNodeAccess.withCacheBoundary(this) {
+                    processAccessibilityEvent(event)
+                }
+            }
         }
     }
 
@@ -235,6 +259,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val rules = rulePlan.rules
         val windowExpiredScope = rulePlan.scope
         val ruleWindowMs = rulePlan.effectiveWindowMs
+        lastEffectiveRuleWindowMs = ruleWindowMs
         if (eventContext.defaultRuleWindowMs != ruleWindowMs) {
             eventContext = buildEventContext(
                 eventType = event.eventType,
@@ -266,14 +291,18 @@ class SkipAccessibilityService : AccessibilityService() {
             } else {
                 "default_rule_window_expired"
             }
-            eventLogger.logEvent(
-                stage = ClickLogStage.SkippedByTimeWindow,
-                eventContext = eventContext,
-                ruleType = if (customRules.isNotEmpty()) "custom" else "default",
-                ruleName = if (customRules.isNotEmpty()) "自定义规则" else "默认开屏跳过",
-                failureReason = failureReason,
-                ruleScope = windowExpiredScope
-            )
+            val expiryKey = "$currentPackage:${foregroundState.foregroundStartTimeMillis}"
+            if (loggedTimeWindowExpiryKey != expiryKey) {
+                loggedTimeWindowExpiryKey = expiryKey
+                eventLogger.logEvent(
+                    stage = ClickLogStage.SkippedByTimeWindow,
+                    eventContext = eventContext,
+                    ruleType = if (customRules.isNotEmpty()) "custom" else "default",
+                    ruleName = if (customRules.isNotEmpty()) "自定义规则" else "默认开屏跳过",
+                    failureReason = failureReason,
+                    ruleScope = windowExpiredScope
+                )
+            }
             SettingsRepository.setLastFailureReason(this, failureReason)
             terminateOpeningAdRecovery()
             return
@@ -352,6 +381,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val activeActivityScopedRules = NodeScanner.filterRulesForActivity(activeRules, eventContext.activityName)
         val scanStartedAt = SystemClock.elapsedRealtime()
         val scan = NodeScanner.scan(root, activeRules, appElapsedMs, eventContext.activityName)
+        markTreeWalk()
         val scanDurationMs = (SystemClock.elapsedRealtime() - scanStartedAt).coerceAtLeast(0L)
         logScan(scan, eventContext, scanDurationMs = scanDurationMs)
         val match = scan.bestMatch
@@ -483,6 +513,9 @@ class SkipAccessibilityService : AccessibilityService() {
             cancelOpeningAdRecovery(resetRetrySession = true)
             currentActivityName = ""
             currentActivityIdentityKnown = false
+            lastTreeWalkElapsedRealtime = 0L
+            lastEffectiveRuleWindowMs = PreciseRulePolicy.MAX_WINDOW_MS
+            loggedTimeWindowExpiryKey = null
         }
     }
 
@@ -496,6 +529,38 @@ class SkipAccessibilityService : AccessibilityService() {
             packageName = packageName,
             resolveLabel = { InstalledAppUtils.getAppLabel(this, it) }
         )
+    }
+
+    private fun recordRuleWindowExpiryIfNeeded() {
+        val packageName = foregroundState.currentForegroundPackage.orEmpty()
+        if (packageName.isBlank() || foregroundState.foregroundStartTimeMillis <= 0L) return
+        val expiryKey = "$packageName:${foregroundState.foregroundStartTimeMillis}"
+        if (loggedTimeWindowExpiryKey == expiryKey) return
+        loggedTimeWindowExpiryKey = expiryKey
+        val eventContext = buildEventContext(
+            eventType = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            eventPackageName = packageName,
+            packageName = packageName,
+            activityName = currentActivityName,
+            windowId = -1,
+            root = null,
+            now = System.currentTimeMillis(),
+            defaultRuleWindowMs = lastEffectiveRuleWindowMs
+        )
+        eventLogger.logEvent(
+            stage = ClickLogStage.SkippedByTimeWindow,
+            eventContext = eventContext,
+            ruleType = "default",
+            ruleName = "默认开屏跳过",
+            failureReason = "default_rule_window_expired",
+            ruleScope = "expired_without_scan"
+        )
+        SettingsRepository.setLastFailureReason(this, "default_rule_window_expired")
+        terminateOpeningAdRecovery()
+    }
+
+    internal fun markTreeWalk() {
+        lastTreeWalkElapsedRealtime = SystemClock.elapsedRealtime()
     }
 
     private fun postAccessibilityTask(action: () -> Unit, delayMs: Long) {

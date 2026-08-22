@@ -387,10 +387,13 @@ object CoordinateFallbackMatcher {
     private fun AccessibilityNodeInfo.containsAnchor(fallback: CoordinateFallback): Boolean {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(this)
-        while (queue.isNotEmpty()) {
+        var visited = 0
+        while (queue.isNotEmpty() && visited < NodeScanBudget.MAX_VISITED_NODES) {
             val node = queue.removeFirst()
+            visited++
             if (node.matchesAnchor(fallback)) return true
             for (index in 0 until node.childCount) {
+                if (!NodeScanBudget.canEnqueueChild(visited, queue.size)) break
                 AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
         }

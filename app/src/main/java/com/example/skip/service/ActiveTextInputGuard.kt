@@ -1,17 +1,25 @@
 package com.example.skip.service
 
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.skip.engine.NodeScanBudget
 import com.example.skip.util.AccessibilityNodeAccess
 
 object ActiveTextInputGuard {
     fun hasFocusedEditableInput(root: AccessibilityNodeInfo?): Boolean {
         if (root == null) return false
+        val focused = runCatching {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        }.getOrNull()
+        if (focused != null) return focused.isActiveTextInput()
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
-        while (queue.isNotEmpty()) {
+        var visited = 0
+        while (queue.isNotEmpty() && visited < NodeScanBudget.MAX_VISITED_NODES) {
             val node = queue.removeFirst()
+            visited++
             if (node.isActiveTextInput()) return true
             for (index in 0 until node.childCount) {
+                if (!NodeScanBudget.canEnqueueChild(visited, queue.size)) break
                 AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
         }

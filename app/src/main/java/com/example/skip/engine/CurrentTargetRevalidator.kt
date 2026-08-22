@@ -155,8 +155,10 @@ internal object CurrentTargetRevalidator {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
         val values = mutableListOf<String>()
-        while (queue.isNotEmpty()) {
+        var visited = 0
+        while (queue.isNotEmpty() && visited < NodeScanBudget.MAX_VISITED_NODES) {
             val node = queue.removeFirst()
+            visited++
             values += listOf(
                 node.text?.toString().orEmpty(),
                 node.contentDescription?.toString().orEmpty(),
@@ -164,6 +166,7 @@ internal object CurrentTargetRevalidator {
                 node.className?.toString().orEmpty()
             )
             for (index in 0 until node.childCount) {
+                if (!NodeScanBudget.canEnqueueChild(visited, queue.size)) break
                 AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
         }

@@ -145,6 +145,24 @@ class EnginePipelineUnitTest {
                 bestCandidateFailureReason = "ignored"
             )
         )
+        assertEquals(
+            "scan_budget_exhausted",
+            NodeScanner.failureReasonForScan(
+                candidateCount = 0,
+                bestMatchFound = false,
+                bestCandidateFailureReason = null,
+                budgetExhausted = true
+            )
+        )
+        assertEquals(
+            "no_candidate_found",
+            NodeScanner.failureReasonForScan(
+                candidateCount = 0,
+                bestMatchFound = false,
+                bestCandidateFailureReason = null,
+                budgetExhausted = false
+            )
+        )
     }
 
     private fun signals(

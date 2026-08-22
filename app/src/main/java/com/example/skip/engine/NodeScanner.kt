@@ -31,9 +31,11 @@ object NodeScanner {
         var bestMatch: MatchResult? = null
         var candidateCount = 0
         var bestCandidate: CandidateEvaluation? = null
+        var visitedCount = 0
 
-        while (queue.isNotEmpty()) {
+        while (queue.isNotEmpty() && visitedCount < NodeScanBudget.MAX_VISITED_NODES) {
             val node = queue.removeFirst()
+            visitedCount++
 
             if (node.isVisibleToUser) {
                 val signals = ClickExecutor.describeRuleCandidateSignals(node)
@@ -61,16 +63,12 @@ object NodeScanner {
                 }
             }
 
-            // Performance Optimization: Skip child scanning for leaves with no content
             if (node.childCount > 0) {
                 for (index in 0 until node.childCount) {
+                    if (!NodeScanBudget.canEnqueueChild(visitedCount, queue.size)) break
                     AccessibilityNodeAccess.child(node, index)?.let(queue::add)
                 }
             }
-
-            // IMPORTANT: AccessibilityNodeInfo should technically be recycled,
-            // but in many modern Android versions, the system handles it.
-            // However, we must be careful not to recycle if still in use.
         }
 
         return ScanReport(
@@ -82,7 +80,8 @@ object NodeScanner {
             failureReason = failureReasonForScan(
                 candidateCount = candidateCount,
                 bestMatchFound = bestMatch != null,
-                bestCandidateFailureReason = bestCandidate?.failureReason
+                bestCandidateFailureReason = bestCandidate?.failureReason,
+                budgetExhausted = visitedCount >= NodeScanBudget.MAX_VISITED_NODES
             ),
             bestCandidateRuleId = bestCandidate?.rule?.id.orEmpty(),
             bestCandidateRuleName = bestCandidate?.let { candidate ->
@@ -139,13 +138,15 @@ object NodeScanner {
     internal fun failureReasonForScan(
         candidateCount: Int,
         bestMatchFound: Boolean,
-        bestCandidateFailureReason: String?
+        bestCandidateFailureReason: String?,
+        budgetExhausted: Boolean = false
     ): String {
         return when {
+            bestMatchFound -> ""
+            budgetExhausted && candidateCount == 0 -> "scan_budget_exhausted"
             candidateCount == 0 -> "no_candidate_found"
-            !bestMatchFound -> bestCandidateFailureReason.orEmpty()
+            else -> bestCandidateFailureReason.orEmpty()
                 .ifBlank { "candidate_below_threshold" }
-            else -> ""
         }
     }
 }
