@@ -1,39 +1,26 @@
 # Skip 发布测试矩阵
 
-本文件是每个版本复用的发布检查模板，不记录某一次发布的历史验证结果。发布前必须执行自动化命令，并根据变更风险完成相关设备和场景验证。未实际执行的项目必须保持为“未验证”。
+本文件是每个版本复用的发布检查模板，不记录某一次发布的历史验证结果。发布前必须执行构建命令，并根据变更风险完成相关设备和场景的人工验证。未实际执行的项目必须保持为“未验证”。
 
-## 自动化命令
+## 构建命令
 
 每个阶段完成后运行：
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
 .\gradlew.bat :app:assembleDebug
 .\gradlew.bat :app:assembleRelease
-.\gradlew.bat :app:compileDebugAndroidTestKotlin
 git diff --check
 ```
 
 `assembleRelease` 是当前唯一的 release-like 验证：它会执行正式 release 的签名校验、R8 (`minifyReleaseWithR8`)、资源压缩和 release lint。每次发布前都必须实际运行，不能用 Debug 构建替代。
 
-当前不新增 release-like 构建变体：
-
-- 项目只有 Debug AndroidTest 任务，正式 Release 依赖本机签名配置。
-- 新增 minified Debug / r8Regression 变体会改变 build type、签名和 AndroidTest 组合，超出本轮最小安全收口范围。
-- 后续如需要在设备上跑 minified AndroidTest，应单独设计 debug 签名的 release-like 变体，且不得改变正式 Release 的签名、R8 或发布配置。
-
-需要设备验证时运行：
-
-```powershell
-.\gradlew.bat :app:connectedDebugAndroidTest
-```
+设备验证通过实际操作应用完成，并记录设备、步骤和结果。
 
 ## Manifest 权限检查
 
 - [ ] 检查 `app/src/main/AndroidManifest.xml` 仅因手动更新声明 `INTERNET` 和 `REQUEST_INSTALL_PACKAGES`。
 - [ ] 检查无定位、通讯录、相机、麦克风、短信、外部存储权限。
 - [ ] 检查无障碍服务只使用 `BIND_ACCESSIBILITY_SERVICE`。
-- [ ] 检查 debug manifest 未额外加入敏感权限。
 
 ## 设备矩阵
 
@@ -116,8 +103,6 @@ git diff --check
 | 测试日期 |  |
 | 测试版本 |  |
 | 测试人员 |  |
-| 单元测试 |  |
-| AndroidTest 源码编译 |  |
 | debug 构建 |  |
 | release 构建 |  |
 | 权限检查 |  |

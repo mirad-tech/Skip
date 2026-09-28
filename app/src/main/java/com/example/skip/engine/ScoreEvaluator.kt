@@ -12,8 +12,6 @@ import java.util.Locale
 object ScoreEvaluator {
     const val GENERIC_CLOSE_BLOCKED_REASON = "generic_close_without_ad_context"
     private const val MAX_SKIP_TEXT_LENGTH = 32
-    private const val TRUSTED_GENERIC_CLOSE_BONUS = 15
-    private const val MAX_TRUSTED_GENERIC_CLOSE_AREA_RATIO = 0.02f
     private val splitAdRegex = Regex("[^a-z0-9]+")
     private val allowedGenericSkipRegex1 = Regex("^跳过\\s*\\d{1,2}\\s*[sS]?$")
     private val allowedGenericSkipRegex2 = Regex("^skip\\s*\\d{1,2}\\s*[sS]?$", RegexOption.IGNORE_CASE)
@@ -42,8 +40,6 @@ object ScoreEvaluator {
         "我知道了",
         "知道了"
     )
-
-    private val trustedGenericClosePackages = emptySet<String>()
 
     internal fun hasPotentialRuleMatch(
         signals: RuleCandidateSignals,
@@ -155,7 +151,7 @@ object ScoreEvaluator {
             .isStandaloneSkipLabel(textValue, descriptionValue)
         val areaRatio = ClickExecutor.areaRatio(candidate.bounds)
         val largeCandidate = ClickExecutor.isLargeDefaultCandidate(candidate.bounds)
-        val defaultAreaAllowed = isDefaultRuleAreaAllowedForCandidate(area)
+        val defaultAreaAllowed = true
         var clickSelection = resolution.strictSelection
         var standaloneSkipAllowed = false
         if (textKeywordIsStandaloneSkip) {
@@ -297,13 +293,6 @@ object ScoreEvaluator {
             !viewId.containsAdOrSplashSignal() &&
             listOf(textValue, descriptionValue).none { it.containsAdSignal() }
         if (onlyGenericClose) score -= 35
-        score += trustedGenericCloseBonusForDefaultRule(
-            packageName = rule.packageName,
-            matchedKeyword = matchedKeyword,
-            area = area,
-            candidateAreaRatio = areaRatio,
-            onlyGenericClose = onlyGenericClose
-        )
         val minScore = if (defaultRule && area == RuleArea.TopCenter) {
             rule.minScore + 20
         } else {
@@ -502,27 +491,6 @@ object ScoreEvaluator {
             .replace("-", "_")
             .replace(".", "_")
             .replace(":", "_")
-    }
-
-    internal fun isDefaultRuleAreaAllowedForCandidate(area: RuleArea): Boolean {
-        return true
-    }
-
-    internal fun trustedGenericCloseBonusForDefaultRule(
-        packageName: String,
-        matchedKeyword: String,
-        area: RuleArea,
-        candidateAreaRatio: Float,
-        onlyGenericClose: Boolean
-    ): Int {
-        if (!onlyGenericClose) return 0
-        if (packageName.lowercase(Locale.ROOT) !in trustedGenericClosePackages) return 0
-        if (area != RuleArea.TopRight) return 0
-        if (candidateAreaRatio <= 0f || candidateAreaRatio > MAX_TRUSTED_GENERIC_CLOSE_AREA_RATIO) return 0
-        val isGenericCloseKeyword = closeNeedsAdContext.any { closeKeyword ->
-            matchedKeyword.equals(closeKeyword, ignoreCase = true)
-        }
-        return if (isGenericCloseKeyword) TRUSTED_GENERIC_CLOSE_BONUS else 0
     }
 
     data class ScoreEvaluation(

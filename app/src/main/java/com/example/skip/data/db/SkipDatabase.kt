@@ -35,10 +35,5 @@ abstract class SkipDatabase : RoomDatabase() {
                     .also { instance = it }
             }
         }
-
-        internal fun resetForTest() {
-            instance?.close()
-            instance = null
-        }
     }
 }

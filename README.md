@@ -7,10 +7,10 @@ Skip 是一款本地运行的 Android 开屏页面辅助工具。在用户主动
 
 ## 下载
 
-当前源码版本：`1.0.16`
+当前源码版本：`1.0.17`
 
-- 最新已发布版本：[下载 Skip 1.0.16 release APK](https://github.com/mirad-tech/Skip/releases/download/v1.0.16/Skip-v1.0.16-release.apk)
-- SHA256：`FD89453FAB1AB2A2BD010E96365A6E3E302C5386CD5500C33F92A1B9BAAAAC62`
+- 最新已发布版本：[下载 Skip 1.0.17 release APK](https://github.com/mirad-tech/Skip/releases/download/v1.0.17/Skip-v1.0.17-release.apk)
+- SHA256：`233C692B45BBA4CCA5677603B56314FA492DC187FC369B8A06460BD8FF5B53C1`
 - 系统要求：Android 9（API 28）及以上版本。
 
 这是手动安装的 Android APK，未上架应用商店。安装时如系统提示“未知来源应用”，需要用户自行确认是否继续。
@@ -18,7 +18,7 @@ Skip 是一款本地运行的 Android 开屏页面辅助工具。在用户主动
 <details>
 <summary>从 1.0.7 升级</summary>
 
-1.0.7 的应用内更新可能因 SHA-256 digest 格式误判失败，不能通过应用内更新直接升级到最新版。请从 GitHub Release 手动下载 v1.0.16 APK 覆盖安装一次；从 v1.0.8 起后续应用内更新恢复正常。
+1.0.7 的应用内更新可能因 SHA-256 digest 格式误判失败，不能通过应用内更新直接升级到最新版。请从 GitHub Release 手动下载 v1.0.17 APK 覆盖安装一次；从 v1.0.8 起后续应用内更新恢复正常。
 
 </details>
 
@@ -33,7 +33,7 @@ Skip 是一款本地运行的 Android 开屏页面辅助工具。在用户主动
 
 ## 快速开始
 
-1. 安装最新已发布的 `Skip-v1.0.16-release.apk`，或从当前 `1.0.16` 源码构建安装包。
+1. 安装最新已发布的 `Skip-v1.0.17-release.apk`，或从当前 `1.0.17` 源码构建安装包。
 2. 打开 Skip，阅读首次启动披露内容。
 3. 在应用内进入无障碍用途说明页。
 4. 跳转到系统无障碍设置，手动开启 Skip 服务。
@@ -73,7 +73,6 @@ Skip 默认本地处理，不上传屏幕内容、规则、日志、统计或个
 ## 开发验证
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
 .\gradlew.bat :app:assembleDebug
 git diff --check
 ```

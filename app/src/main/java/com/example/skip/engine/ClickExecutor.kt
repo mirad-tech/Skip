@@ -32,10 +32,6 @@ object ClickExecutor {
     private const val MIN_CLICK_TARGET_SIZE_PX = 8
     private const val BOUNDS_TOLERANCE_PX = 8
 
-    fun findClickableTarget(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        return findClickableSelection(node, defaultRule = false)?.node
-    }
-
     internal fun resolveCandidate(
         node: AccessibilityNodeInfo,
         candidateSignals: RuleCandidateSignals = describeRuleCandidateSignals(node)
@@ -113,32 +109,6 @@ object ClickExecutor {
         )
     }
 
-    fun findClickableSelection(
-        node: AccessibilityNodeInfo,
-        defaultRule: Boolean
-    ): ClickTargetSelection? {
-        var current: AccessibilityNodeInfo? = node
-        var depth = 0
-        while (current != null) {
-            if (current.isSafeClickTarget(defaultRule)) {
-                val info = describeTarget(current)
-                return ClickTargetSelection(
-                    node = current,
-                    target = info,
-                    parentDepth = depth,
-                    source = if (depth == 0) {
-                        ClickTargetSourceLog.NodeSelf
-                    } else {
-                        ClickTargetSourceLog.ClickableParent
-                    }
-                )
-            }
-            if (++depth > MAX_CLICKABLE_PARENT_DEPTH) return null
-            current = AccessibilityNodeAccess.parent(current)
-        }
-        return null
-    }
-
     fun isSelfSafeClickable(node: AccessibilityNodeInfo): Boolean {
         return node.isSafeClickTarget(defaultRule = false)
     }
@@ -174,52 +144,16 @@ object ClickExecutor {
             return false
         }
 
-        val centerX = target.bounds.exactCenterX()
-        val centerY = target.bounds.exactCenterY()
-        val path = Path().apply {
-            moveTo(centerX, centerY)
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, 80L))
-            .build()
-        val accepted = service.dispatchGesture(
-            gesture,
-            object : AccessibilityService.GestureResultCallback() {
-                override fun onCompleted(gestureDescription: GestureDescription) {
-                    onResult(
-                        ClickAttempt(
-                            method = ClickMethodLog.DispatchGesture,
-                            accepted = true,
-                            target = target,
-                            reason = "gesture_completed"
-                        )
-                    )
-                }
-
-                override fun onCancelled(gestureDescription: GestureDescription) {
-                    onResult(
-                        ClickAttempt(
-                            method = ClickMethodLog.DispatchGesture,
-                            accepted = false,
-                            target = target,
-                            reason = "gesture_cancelled"
-                        )
-                    )
-                }
-            },
-            Handler(Looper.getMainLooper())
+        return dispatchGesture(
+            service = service,
+            target = target,
+            x = target.bounds.exactCenterX(),
+            y = target.bounds.exactCenterY(),
+            completedReason = "gesture_completed",
+            cancelledReason = "gesture_cancelled",
+            rejectedReason = "gesture_dispatch_returned_false",
+            onResult = onResult
         )
-        if (!accepted) {
-            onResult(
-                ClickAttempt(
-                    method = ClickMethodLog.DispatchGesture,
-                    accepted = false,
-                    target = target,
-                    reason = "gesture_dispatch_returned_false"
-                )
-            )
-        }
-        return accepted
     }
 
     fun gestureClickPoint(
@@ -257,7 +191,40 @@ object ClickExecutor {
             return false
         }
 
-        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        return dispatchGesture(
+            service = service,
+            target = target,
+            x = x.toFloat(),
+            y = y.toFloat(),
+            completedReason = "coordinate_fallback_completed",
+            cancelledReason = "coordinate_fallback_cancelled",
+            rejectedReason = "coordinate_fallback_dispatch_returned_false",
+            onResult = onResult
+        )
+    }
+
+    private fun dispatchGesture(
+        service: AccessibilityService,
+        target: ClickTargetInfo,
+        x: Float,
+        y: Float,
+        completedReason: String,
+        cancelledReason: String,
+        rejectedReason: String,
+        onResult: (ClickAttempt) -> Unit
+    ): Boolean {
+        fun report(accepted: Boolean, reason: String) {
+            onResult(
+                ClickAttempt(
+                    method = ClickMethodLog.DispatchGesture,
+                    accepted = accepted,
+                    target = target,
+                    reason = reason
+                )
+            )
+        }
+
+        val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0L, 80L))
             .build()
@@ -265,44 +232,17 @@ object ClickExecutor {
             gesture,
             object : AccessibilityService.GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription) {
-                    onResult(
-                        ClickAttempt(
-                            method = ClickMethodLog.DispatchGesture,
-                            accepted = true,
-                            target = target,
-                            reason = "coordinate_fallback_completed"
-                        )
-                    )
+                    report(true, completedReason)
                 }
 
                 override fun onCancelled(gestureDescription: GestureDescription) {
-                    onResult(
-                        ClickAttempt(
-                            method = ClickMethodLog.DispatchGesture,
-                            accepted = false,
-                            target = target,
-                            reason = "coordinate_fallback_cancelled"
-                        )
-                    )
+                    report(false, cancelledReason)
                 }
             },
             Handler(Looper.getMainLooper())
         )
-        if (!accepted) {
-            onResult(
-                ClickAttempt(
-                    method = ClickMethodLog.DispatchGesture,
-                    accepted = false,
-                    target = target,
-                    reason = "coordinate_fallback_dispatch_returned_false"
-                )
-            )
-        }
+        if (!accepted) report(false, rejectedReason)
         return accepted
-    }
-
-    fun isCoordinateFallbackGestureTargetSafe(target: ClickTargetInfo): Boolean {
-        return coordinateFallbackGestureTargetBlockReason(target) == null
     }
 
     fun coordinateFallbackGestureTargetBlockReason(
@@ -412,21 +352,6 @@ object ClickExecutor {
         }
     }
 
-    internal fun <Node> collectActionPathValues(
-        start: Node,
-        parentOf: (Node) -> Node?,
-        valuesOf: (Node) -> List<String>
-    ): List<String> {
-        val values = mutableListOf<String>()
-        var current: Node? = start
-        repeat(MAX_CLICKABLE_PARENT_DEPTH + 1) {
-            val node = current ?: return values
-            values += valuesOf(node)
-            current = parentOf(node)
-        }
-        return values
-    }
-
     private fun AccessibilityNodeInfo.isUnsafeActionPathNode(): Boolean {
         val classNameValue = className?.toString().orEmpty()
         val supportsSetText = actionList.any { action ->
@@ -458,18 +383,16 @@ object ClickExecutor {
             !visibleToUser
     }
 
-    fun isTargetPresent(root: AccessibilityNodeInfo?, target: ClickTargetInfo): Boolean {
-        if (root == null) return false
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            if (node.isVisibleToUser && node.matchesTarget(target)) return true
-            for (index in 0 until node.childCount) {
-                AccessibilityNodeAccess.child(node, index)?.let(queue::add)
-            }
-        }
-        return false
+    /** Null means that the scan could not establish either presence or absence. */
+    fun isTargetPresent(root: AccessibilityNodeInfo?, target: ClickTargetInfo): Boolean? {
+        if (root == null) return null
+        val result = NodeScanBudget.walk(
+            root = root,
+            childCountOf = { it.childCount },
+            childAt = AccessibilityNodeAccess::child,
+            stopWhen = { it.isVisibleToUser && it.matchesTarget(target) }
+        )
+        return result.predicateMatched
     }
 
     fun AccessibilityNodeInfo.isSafeClickTarget(defaultRule: Boolean = false): Boolean {
@@ -617,8 +540,4 @@ data class ClickTargetInfo(
         return "${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}"
     }
 
-    fun summary(): String {
-        val label = text.ifBlank { contentDescription }.ifBlank { viewId }.ifBlank { className }
-        return boundsString() + if (label.isBlank()) "" else " $label"
-    }
 }

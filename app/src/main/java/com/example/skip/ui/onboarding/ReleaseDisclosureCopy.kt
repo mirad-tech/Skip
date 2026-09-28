@@ -46,7 +46,4 @@ object ReleaseDisclosureCopy {
         }
     }
 
-    fun allText(): String {
-        return (disclosureItems + accessibilityPurposeItems).joinToString("\n")
-    }
 }

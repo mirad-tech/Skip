@@ -31,11 +31,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 
-internal data class ClickLogPersistencePayload(
-    val logsJson: String,
-    val throttleCountsJson: String
-)
-
 data class ClickLogThrottleSummary(
     val counts: Map<String, Int>,
     val rangeStartMillis: Long?,
@@ -173,33 +168,6 @@ object LogRepository {
         }
     }
 
-    internal fun resetStorageStateForTest() {
-        synchronized(migrationStateLock) {
-            migrationRetryJob?.cancel()
-            migrationRetryJob = null
-            migrationAttempt = null
-            migrationFailedAtElapsedMillis = 0L
-            migrationCompleted = false
-            legacyDataQuarantined = false
-            mutableStorageState.value = LogStorageState.Initializing
-        }
-        synchronized(lock) {
-            pendingDrainJob?.cancel()
-            pendingDrainJob = null
-            throttleFlushJob?.cancel()
-            throttleFlushJob = null
-            pendingClickWrites.clear()
-            pendingThrottleCounts.clear()
-            clickLogBuffer.clear()
-            pendingDrainRetryIndex = 0
-            pendingWriteGeneration += 1L
-            throttleGeneration += 1L
-            droppedPendingWriteCount = 0L
-            rateLimiter.reset()
-            publishPendingWriteDiagnosticLocked()
-        }
-    }
-
     fun addClickLog(context: Context, log: ClickLog) {
         if (log.stage.isDebugOnly && !SettingsRepository.isDebugToastEnabled(context)) return
         val now = System.currentTimeMillis()
@@ -279,10 +247,6 @@ object LogRepository {
         return synchronized(lock) { clickLogBuffer.snapshot() }
     }
 
-    suspend fun getClickLogThrottleCounts(context: Context): Map<String, Int> {
-        return getClickLogThrottleSummary(context).counts
-    }
-
     suspend fun getClickLogThrottleSummary(context: Context): ClickLogThrottleSummary =
         withContext(Dispatchers.IO) {
             val appContext = context.applicationContext
@@ -318,9 +282,6 @@ object LogRepository {
         }
         return ClickLogThrottleSummary(counts, null, null)
     }
-
-    internal fun deserializeClickLogPersistence(raw: String): List<ClickLog> =
-        ClickLogCodec.deserializeClickLogPersistence(raw)
 
     suspend fun clearClickLogs(context: Context) = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
@@ -395,18 +356,11 @@ object LogRepository {
             .toString(2)
     }
 
-    internal fun serializeClickLogPersistence(
-        logs: List<ClickLog>,
-        throttleCounts: Map<String, Int>
-    ): ClickLogPersistencePayload = ClickLogCodec.serializeClickLogPersistence(logs, throttleCounts)
-
     fun addRuleLog(context: Context, log: RuleLog) = RuleLogRepository.addRuleLog(context, log)
 
     fun getRuleLogs(context: Context): List<RuleLog> = RuleLogRepository.getRuleLogs(context)
 
     fun clearRuleLogs(context: Context) = RuleLogRepository.clearRuleLogs(context)
-
-    internal fun clickLogToJson(log: ClickLog): JSONObject = ClickLogCodec.clickLogToJson(log)
 
     internal fun isSuccessfulHit(log: ClickLog): Boolean {
         return log.success == true || log.stage == ClickLogStage.ClickEffectConfirmed
@@ -433,9 +387,6 @@ object LogRepository {
 
     internal fun clickLogJsonFields(log: ClickLog): Map<String, Any> =
         ClickLogCodec.clickLogJsonFields(log)
-
-    internal fun deserializeThrottleCounts(raw: String): Map<String, Int> =
-        ClickLogCodec.deserializeThrottleCounts(raw)
 
     private fun ensureMigrationStarted(
         context: Context,

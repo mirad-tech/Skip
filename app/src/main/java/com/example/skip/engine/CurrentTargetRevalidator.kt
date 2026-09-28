@@ -17,14 +17,17 @@ internal object CurrentTargetRevalidator {
         originalTarget: ClickTargetInfo,
         activeTextInput: Boolean
     ): CurrentTargetRevalidation {
+        val safetyTexts = pageSafetyTexts(root)
+        val search = searchAtPoint(root, x, y)
         return evaluate(
             rootAvailable = root != null,
             expectedPackageName = expectedPackageName,
             currentPackageName = currentPackageName,
             activeTextInput = activeTextInput,
-            pageSafetyTexts = pageSafetyTexts(root),
+            pageSafetyTexts = safetyTexts,
             originalTarget = originalTarget,
-            currentTarget = snapshotAtPoint(root, x, y)
+            currentTarget = search.candidate,
+            targetScanComplete = search.complete
         )
     }
 
@@ -35,7 +38,8 @@ internal object CurrentTargetRevalidator {
         activeTextInput: Boolean,
         pageSafetyTexts: List<String>,
         originalTarget: ClickTargetInfo,
-        currentTarget: CoordinateFallbackTargetSnapshot?
+        currentTarget: CoordinateFallbackTargetSnapshot?,
+        targetScanComplete: Boolean = true
     ): CurrentTargetRevalidation {
         if (!rootAvailable) return CurrentTargetRevalidation.blocked("current_target_root_missing")
         if (currentPackageName != expectedPackageName) {
@@ -46,6 +50,9 @@ internal object CurrentTargetRevalidator {
         }
         if (pageSafetyTexts.any(SafetyGuard::isSensitiveText)) {
             return CurrentTargetRevalidation.blocked("current_target_page_unsafe")
+        }
+        if (!targetScanComplete) {
+            return CurrentTargetRevalidation.blocked("current_target_scan_incomplete")
         }
         val snapshot = currentTarget
             ?: return CurrentTargetRevalidation.blocked("current_target_missing")
@@ -83,21 +90,17 @@ internal object CurrentTargetRevalidator {
         )
     }
 
-    fun snapshotAtPoint(
+    fun searchAtPoint(
         root: AccessibilityNodeInfo?,
         x: Int,
-        y: Int
-    ): CoordinateFallbackTargetSnapshot? {
-        if (root == null) return null
+        y: Int,
+        scanStartedAtNanos: Long? = null
+    ): CandidateSearchResult<CoordinateFallbackTargetSnapshot> {
+        if (root == null) return CandidateSearchResult(null, complete = false)
         return selectBestCandidateFromTree(
             root = root,
-            childrenOf = { node ->
-                buildList {
-                    for (index in 0 until node.childCount) {
-                        AccessibilityNodeAccess.child(node, index)?.let(::add)
-                    }
-                }
-            },
+            childCountOf = { it.childCount },
+            childAt = AccessibilityNodeAccess::child,
             candidateOf = snapshotCandidate@ { node ->
                 val bounds = Rect()
                 node.getBoundsInScreen(bounds)
@@ -125,38 +128,55 @@ internal object CurrentTargetRevalidator {
             },
             isBetter = { candidate, currentBest ->
                 candidate.target.bounds.area() < currentBest.target.bounds.area()
-            }
+            },
+            scanStartedAtNanos = scanStartedAtNanos
         )
     }
 
-    internal fun <Node, Candidate> selectBestCandidateFromTree(
+    internal fun <Node : Any, Candidate> selectBestCandidateFromTree(
         root: Node,
-        childrenOf: (Node) -> Iterable<Node>,
+        childCountOf: (Node) -> Int,
+        childAt: (Node, Int) -> Node?,
         candidateOf: (Node) -> Candidate?,
-        isBetter: (Candidate, Candidate) -> Boolean
-    ): Candidate? {
-        val queue = ArrayDeque<Node>()
-        queue.add(root)
+        isBetter: (Candidate, Candidate) -> Boolean,
+        nanoTime: () -> Long = System::nanoTime,
+        scanStartedAtNanos: Long? = null
+    ): CandidateSearchResult<Candidate> {
         var best: Candidate? = null
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            val candidate = candidateOf(node)
-            val currentBest = best
-            if (candidate != null && (currentBest == null || isBetter(candidate, currentBest))) {
-                best = candidate
-            }
-            childrenOf(node).forEach(queue::add)
-        }
-        return best
+        var bestDepth = Int.MAX_VALUE
+        val result = NodeScanBudget.walkDepthFirst(
+            root = root,
+            childCountOf = childCountOf,
+            childAt = childAt,
+            visit = { node, depth ->
+                val candidate = candidateOf(node)
+                val currentBest = best
+                // Keep the former breadth-first preference for equal candidates.
+                if (candidate != null && (currentBest == null ||
+                        isBetter(candidate, currentBest) ||
+                        (depth < bestDepth && !isBetter(currentBest, candidate)))
+                ) {
+                    best = candidate
+                    bestDepth = depth
+                }
+            },
+            nanoTime = nanoTime,
+            scanStartedAtNanos = scanStartedAtNanos
+        )
+        return CandidateSearchResult(best, complete = result == NodeTraversalResult.Complete)
     }
 
-    fun pageSafetyTexts(root: AccessibilityNodeInfo?): List<String> {
+    fun pageSafetyTexts(
+        root: AccessibilityNodeInfo?,
+        scanStartedAtNanos: Long? = null
+    ): List<String> {
         if (root == null) return emptyList()
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
         val values = mutableListOf<String>()
         var visited = 0
         while (queue.isNotEmpty() && visited < NodeScanBudget.MAX_VISITED_NODES) {
+            if (NodeScanBudget.isTimeExpired(scanStartedAtNanos)) break
             val node = queue.removeFirst()
             visited++
             values += listOf(
@@ -166,6 +186,7 @@ internal object CurrentTargetRevalidator {
                 node.className?.toString().orEmpty()
             )
             for (index in 0 until node.childCount) {
+                if (NodeScanBudget.isTimeExpired(scanStartedAtNanos)) break
                 if (!NodeScanBudget.canEnqueueChild(visited, queue.size)) break
                 AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
@@ -201,6 +222,11 @@ internal object CurrentTargetRevalidator {
         return (right - left).coerceAtLeast(0) * (bottom - top).coerceAtLeast(0)
     }
 }
+
+internal data class CandidateSearchResult<out Candidate>(
+    val candidate: Candidate?,
+    val complete: Boolean
+)
 
 internal data class CurrentTargetRevalidation(
     val allowed: Boolean,

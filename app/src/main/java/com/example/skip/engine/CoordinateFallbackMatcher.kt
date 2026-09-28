@@ -78,32 +78,6 @@ object CoordinateFallbackMatcher {
         )
     }
 
-    fun find(
-        root: AccessibilityNodeInfo,
-        rules: List<SkipRule>,
-        packageName: String,
-        selfPackageName: String,
-        elapsedSinceForegroundMs: Long,
-        screenWidth: Int,
-        screenHeight: Int
-    ): CoordinateFallbackMatch? {
-        return when (
-            val result = findResult(
-                root = root,
-                rules = rules,
-                packageName = packageName,
-                selfPackageName = selfPackageName,
-                elapsedSinceForegroundMs = elapsedSinceForegroundMs,
-                screenWidth = screenWidth,
-                screenHeight = screenHeight
-            )
-        ) {
-            is CoordinateFallbackMatchResult.Matched -> result.match
-            is CoordinateFallbackMatchResult.Blocked,
-            CoordinateFallbackMatchResult.NotApplicable -> null
-        }
-    }
-
     fun findResult(
         root: AccessibilityNodeInfo,
         rules: List<SkipRule>,
@@ -114,6 +88,7 @@ object CoordinateFallbackMatcher {
         screenHeight: Int,
         activeTextInput: Boolean = false
     ): CoordinateFallbackMatchResult {
+        val scanStartedAtNanos = System.nanoTime()
         val coordinateRules = rules.filter { it.coordinateFallback?.enabled == true }
         if (coordinateRules.isEmpty()) return CoordinateFallbackMatchResult.NotApplicable
         if (activeTextInput) {
@@ -123,11 +98,20 @@ object CoordinateFallbackMatcher {
             )
         }
 
+        fun incomplete(rule: SkipRule) = CoordinateFallbackMatchResult.Blocked(
+            reason = "coordinate_target_scan_incomplete",
+            rule = rule
+        )
+
         var firstBlocked: CoordinateFallbackMatchResult.Blocked? = null
-        val pageSafetyTexts by lazy { CurrentTargetRevalidator.pageSafetyTexts(root) }
+        val pageSafetyTexts by lazy {
+            CurrentTargetRevalidator.pageSafetyTexts(root, scanStartedAtNanos)
+        }
         coordinateRules.forEach { rule ->
+            if (NodeScanBudget.isTimeExpired(scanStartedAtNanos)) return incomplete(rule)
             val fallback = rule.coordinateFallback ?: return@forEach
-            val hasAnchor = !fallback.hasAnchorRequirement() || root.containsAnchor(fallback)
+            val hasAnchor = !fallback.hasAnchorRequirement() || root.containsAnchor(fallback, scanStartedAtNanos)
+            if (NodeScanBudget.isTimeExpired(scanStartedAtNanos)) return incomplete(rule)
             val decision = evaluate(
                 rule = rule,
                 packageName = packageName,
@@ -146,11 +130,13 @@ object CoordinateFallbackMatcher {
                 }
                 return@forEach
             }
-            val coordinateTarget = CurrentTargetRevalidator.snapshotAtPoint(
+            val targetSearch = CurrentTargetRevalidator.searchAtPoint(
                 root = root,
                 x = decision.x,
-                y = decision.y
+                y = decision.y,
+                scanStartedAtNanos = scanStartedAtNanos
             )
+            if (!targetSearch.complete) return incomplete(rule)
             val initialResult = evaluateInitialCandidate(
                 rule = rule,
                 packageName = packageName,
@@ -161,16 +147,20 @@ object CoordinateFallbackMatcher {
                 hasAnchor = hasAnchor,
                 activeTextInput = false,
                 pageSafetyTexts = emptyList(),
-                target = coordinateTarget
+                target = targetSearch.candidate
             )
             when (initialResult) {
                 is CoordinateFallbackMatchResult.Matched -> {
-                    if (pageSafetyTexts.any(SafetyGuard::isSensitiveText)) {
-                        return CoordinateFallbackMatchResult.Blocked(
-                            reason = "coordinate_page_unsafe",
-                            rule = rule
-                        )
+                    for (text in pageSafetyTexts) {
+                        if (NodeScanBudget.isTimeExpired(scanStartedAtNanos)) return incomplete(rule)
+                        if (SafetyGuard.isSensitiveText(text)) {
+                            return CoordinateFallbackMatchResult.Blocked(
+                                reason = "coordinate_page_unsafe",
+                                rule = rule
+                            )
+                        }
                     }
+                    if (NodeScanBudget.isTimeExpired(scanStartedAtNanos)) return incomplete(rule)
                     return initialResult
                 }
                 is CoordinateFallbackMatchResult.Blocked -> {
@@ -306,7 +296,8 @@ object CoordinateFallbackMatcher {
     ): CoordinateFallbackRevalidation {
         val fallback = rule.coordinateFallback
         val hasAnchor = root != null && fallback != null && root.containsAnchor(fallback)
-        val currentTarget = CurrentTargetRevalidator.snapshotAtPoint(root, x, y)
+        val safetyTexts = CurrentTargetRevalidator.pageSafetyTexts(root)
+        val targetSearch = CurrentTargetRevalidator.searchAtPoint(root, x, y)
         return evaluateBeforeGesture(
             rule = rule,
             expectedPackageName = expectedPackageName,
@@ -316,9 +307,10 @@ object CoordinateFallbackMatcher {
             rootAvailable = root != null,
             hasAnchor = hasAnchor,
             activeTextInput = activeTextInput,
-            pageSafetyTexts = CurrentTargetRevalidator.pageSafetyTexts(root),
+            pageSafetyTexts = safetyTexts,
             originalTarget = originalTarget,
-            currentTarget = currentTarget
+            currentTarget = targetSearch.candidate,
+            targetScanComplete = targetSearch.complete
         )
     }
 
@@ -333,7 +325,8 @@ object CoordinateFallbackMatcher {
         activeTextInput: Boolean,
         pageSafetyTexts: List<String>,
         originalTarget: ClickTargetInfo,
-        currentTarget: CoordinateFallbackTargetSnapshot?
+        currentTarget: CoordinateFallbackTargetSnapshot?,
+        targetScanComplete: Boolean = true
     ): CoordinateFallbackRevalidation {
         val ruleDecision = evaluate(
             rule = rule,
@@ -354,7 +347,8 @@ object CoordinateFallbackMatcher {
             activeTextInput = activeTextInput,
             pageSafetyTexts = pageSafetyTexts,
             originalTarget = originalTarget,
-            currentTarget = currentTarget
+            currentTarget = currentTarget,
+            targetScanComplete = targetScanComplete
         )
         if (!targetRevalidation.allowed) {
             return CoordinateFallbackRevalidation.blocked(
@@ -384,15 +378,20 @@ object CoordinateFallbackMatcher {
         return null
     }
 
-    private fun AccessibilityNodeInfo.containsAnchor(fallback: CoordinateFallback): Boolean {
+    private fun AccessibilityNodeInfo.containsAnchor(
+        fallback: CoordinateFallback,
+        scanStartedAtNanos: Long? = null
+    ): Boolean {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(this)
         var visited = 0
         while (queue.isNotEmpty() && visited < NodeScanBudget.MAX_VISITED_NODES) {
+            if (NodeScanBudget.isTimeExpired(scanStartedAtNanos)) return false
             val node = queue.removeFirst()
             visited++
             if (node.matchesAnchor(fallback)) return true
             for (index in 0 until node.childCount) {
+                if (NodeScanBudget.isTimeExpired(scanStartedAtNanos)) return false
                 if (!NodeScanBudget.canEnqueueChild(visited, queue.size)) break
                 AccessibilityNodeAccess.child(node, index)?.let(queue::add)
             }
@@ -479,6 +478,7 @@ object CoordinateFallbackMatcher {
             "current_target_active_text_input" -> "coordinate_active_text_input"
             "current_target_page_unsafe" -> "coordinate_page_unsafe"
             "current_target_missing" -> "coordinate_target_missing"
+            "current_target_scan_incomplete" -> "coordinate_target_scan_incomplete"
             "current_target_changed" -> "coordinate_target_changed"
             else -> "coordinate_target_unsafe"
         }

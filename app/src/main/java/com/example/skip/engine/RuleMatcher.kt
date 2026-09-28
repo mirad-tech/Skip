@@ -6,17 +6,6 @@ import com.example.skip.model.MatchResult
 import com.example.skip.model.SkipRule
 
 object RuleMatcher {
-    fun evaluate(
-        node: AccessibilityNodeInfo,
-        rule: SkipRule,
-        appElapsedMs: Long
-    ): CandidateEvaluation? {
-        val signals = ClickExecutor.describeRuleCandidateSignals(node)
-        if (!ScoreEvaluator.hasPotentialRuleMatch(signals, rule)) return null
-        val resolution = ClickExecutor.resolveCandidate(node, signals)
-        return evaluateResolved(node, rule, appElapsedMs, resolution)
-    }
-
     internal fun evaluateResolved(
         node: AccessibilityNodeInfo,
         rule: SkipRule,

@@ -467,7 +467,7 @@ internal class PendingClickCoordinator(
     private fun verifyActionClick(pending: PendingClick) {
         if (pendingClick?.signature != pending.signature) return
         val result = verifyClickEffect(pending)
-        if (!result.success && result.reason == "candidate_still_present") {
+        if (result.shouldTryGestureFallback) {
             runGestureFallback(pending)
             return
         }
@@ -673,7 +673,7 @@ internal class PendingClickCoordinator(
             rootPackageName = root?.packageName?.toString().orEmpty(),
             foregroundPackageName = service.foregroundPackage.orEmpty(),
             rootWindowNull = root == null,
-            targetStillPresent = root?.let { ClickExecutor.isTargetPresent(it, pending.candidate) } ?: false
+            targetStillPresent = ClickExecutor.isTargetPresent(root, pending.candidate)
         )
     }
 

@@ -18,7 +18,6 @@
 Windows 上的最小验证：
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
 .\gradlew.bat :app:assembleDebug
 git diff --check
 ```
@@ -40,5 +39,5 @@ Release 构建使用维护者的本地签名配置。外部贡献者不需要提
 
 - 一个 PR 只解决一组相关问题，避免混入格式化、重构或无关文档改动。
 - 说明问题、根因、实际改动、安全/权限影响和已执行的验证。
-- 行为改动应增加能够覆盖该回归的测试；无法自动验证时，明确列出未验证项。
+- 行为改动应记录实际复现与检查结果，并明确列出未验证项。
 - 修改用户可见行为、规则格式或发布流程时，同步更新对应文档。

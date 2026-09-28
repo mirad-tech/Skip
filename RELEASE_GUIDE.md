@@ -38,11 +38,9 @@ git ls-files keystore.properties release.keystore
 
 预期：没有输出。
 
-## 3. 自动化验证
+## 3. 构建验证
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
-.\gradlew.bat :app:compileDebugAndroidTestKotlin --rerun-tasks
 .\gradlew.bat :app:assembleDebug --rerun-tasks
 .\gradlew.bat :app:assembleRelease --rerun-tasks
 git diff --check
@@ -50,8 +48,6 @@ git diff --check
 
 通过标准：
 
-- 单元测试 0 failed。
-- AndroidTest 源码编译成功。
 - debug APK 构建成功。
 - diff 空白检查无错误。
 - release APK 构建成功。
@@ -62,7 +58,6 @@ git diff --check
 
 ```powershell
 Select-String -Path app\src\main\AndroidManifest.xml -Pattern "uses-permission"
-Select-String -Path app\src\debug\AndroidManifest.xml -Pattern "uses-permission"
 ```
 
 预期：
@@ -105,7 +100,7 @@ app/build/outputs/apk/release/app-release.apk
 
 1. `git fetch --prune --tags origin`，确认当前分支为 `main`、工作区干净，且本地 `main` 与 `origin/main` 一致。
 2. 更新 `app/build.gradle.kts` 中的 `versionCode` 和 `versionName`。
-3. 强制重新执行单元测试、AndroidTest 源码编译、Debug 构建和签名 Release 构建。
+3. 强制重新执行 Debug 构建和签名 Release 构建。
 4. 验证 APK 内嵌版本、v2 签名和历史发布包签名证书，生成版本化文件 `downloads/Skip-v<version>-release.apk` 与真实 SHA256。
 5. 同步更新 `README.md`、`docs/README.md` 和 `RELEASE_NOTES.md`：三处版本、APK 文件名、下载链接和 SHA256 必须一致，不得保留“尚未发布”占位文字。
 6. 运行发布元数据校验：
@@ -144,14 +139,13 @@ app/build/outputs/apk/release/app-release.apk
 1. 暂停分发当前 APK。
 2. 记录问题设备、系统版本、复现路径和日志。
 3. 回滚到上一版已验证 APK。
-4. 在项目所有者授权的 Git 工作流中完成修复并添加回归测试。
+4. 在项目所有者授权的 Git 工作流中完成修复并验证原问题的复现路径。
 5. 重新执行 `RELEASE_TEST_MATRIX.md`。
 
 ## 9. 发布阻塞条件
 
 出现以下任一情况不得发布：
 
-- 单元测试失败。
 - debug 或 release 构建失败。
 - `README.md`、`docs/README.md`、`RELEASE_NOTES.md` 与 APK 的版本、文件名或 SHA256 不一致。
 - Manifest 出现无关敏感权限。

@@ -151,13 +151,6 @@ object SafetyGuard {
         "跳过此步骤"
     )
 
-    fun canHandlePackage(context: Context, packageName: String): Boolean {
-        if (packageName.isBlank()) return false
-        if (isSelfPackage(context, packageName)) return false
-        if (isProtectedPackage(packageName)) return false
-        return true
-    }
-
     fun isSelfPackage(context: Context, packageName: String): Boolean {
         return packageName == context.packageName
     }
@@ -213,11 +206,6 @@ object SafetyGuard {
 
     fun isLauncherOrSystemPackage(packageName: String): Boolean {
         return isLauncherPackage(packageName) || isSystemPackage(packageName)
-    }
-
-    fun isStandaloneSkipText(text: String): Boolean {
-        val trimmed = text.trim()
-        return trimmed.equals("skip", ignoreCase = true) || trimmed == "跳过"
     }
 
     fun isSelfAppLabelCandidate(

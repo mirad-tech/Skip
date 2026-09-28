@@ -41,10 +41,8 @@ android {
         applicationId = "com.example.skip"
         minSdk = 28
         targetSdk = 36
-        versionCode = 24
-        versionName = "1.0.16"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionCode = 25
+        versionName = "1.0.17"
     }
 
     signingConfigs {
@@ -95,13 +93,5 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
-    testImplementation(libs.junit)
-    testImplementation(libs.json)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.room.testing)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

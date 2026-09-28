@@ -14,7 +14,9 @@ import com.example.skip.engine.CoordinateFallbackMatcher
 import com.example.skip.engine.CoordinateFallbackMatchResult
 import com.example.skip.engine.HighRiskClickDecision
 import com.example.skip.engine.HighRiskClickPolicy
+import com.example.skip.engine.NodeScanBudget
 import com.example.skip.engine.NodeScanner
+import com.example.skip.engine.NodeTraversalResult
 import com.example.skip.engine.PreciseRulePolicy
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
@@ -1390,24 +1392,19 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun AccessibilityNodeInfo.containsOwnAppLabel(packageName: String): Boolean {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(this)
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            if (SafetyGuard.isOwnAppIconOnLauncher(
+        return NodeScanBudget.walk(
+            root = this,
+            childCountOf = { it.childCount },
+            childAt = AccessibilityNodeAccess::child,
+            stopWhen = { node ->
+                SafetyGuard.isOwnAppIconOnLauncher(
                     this@SkipAccessibilityService,
                     packageName,
                     node.text?.toString().orEmpty(),
                     node.contentDescription?.toString().orEmpty()
                 )
-            ) {
-                return true
             }
-            for (index in 0 until node.childCount) {
-                AccessibilityNodeAccess.child(node, index)?.let(queue::add)
-            }
-        }
-        return false
+        ) == NodeTraversalResult.Stopped
     }
 
     companion object {

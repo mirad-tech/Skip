@@ -33,20 +33,6 @@ internal object ClickLogCodec {
         }
     }
 
-    fun serializeClickLogPersistence(
-        logs: List<ClickLog>,
-        throttleCounts: Map<String, Int>
-    ): ClickLogPersistencePayload {
-        return ClickLogPersistencePayload(
-            logsJson = JSONArray().apply {
-                logs.forEach { put(it.asJson()) }
-            }.toString(),
-            throttleCountsJson = JSONObject().apply {
-                throttleCounts.forEach { (key, count) -> put(key, count) }
-            }.toString()
-        )
-    }
-
     fun clickLogToJson(log: ClickLog): JSONObject {
         return log.asJson()
     }

@@ -207,27 +207,6 @@ object RuleRepository {
         cleanupRulePackages(context, normalizedRules)
     }
 
-    fun getEnabledRulesForPackage(context: Context, packageName: String): List<SkipRule> {
-        if (packageName.isBlank()) return emptyList()
-        val policy = SettingsRepository.getAppPolicy(context, packageName)
-        val customRules = if (policy.customRulesEnabled) {
-            getEnabledCustomRulesForPackage(context, packageName)
-        } else {
-            emptyList()
-        }
-        val builtInRule = if (policy.defaultRuleEnabled) {
-            listOf(createBuiltInRuleForPackage(context, packageName))
-        } else {
-            emptyList()
-        }
-        return (customRules + builtInRule)
-            .sortedWith(compareByDescending<SkipRule> { it.priority }.thenBy { it.createdAt })
-    }
-
-    fun hasRulesForPackage(context: Context, packageName: String): Boolean {
-        return getCustomRulesForPackage(context, packageName).isNotEmpty()
-    }
-
     fun getCustomRulesForPackage(context: Context, packageName: String): List<SkipRule> {
         val enabledPackages = getRulePackages(context).filter { it.enabled }.map { it.id }.toSet()
         return getRules(context)

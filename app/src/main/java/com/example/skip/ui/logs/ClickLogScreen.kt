@@ -472,10 +472,6 @@ private fun filterLogs(
         }
 }
 
-internal fun displayLogsForScreen(logs: List<ClickLog>): List<ClickLog> {
-    return logs.take(CLICK_LOG_DISPLAY_LIMIT)
-}
-
 private fun formatTime(timeMillis: Long): String {
     return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(timeMillis))
 }

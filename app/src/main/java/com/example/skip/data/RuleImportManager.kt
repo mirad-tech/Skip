@@ -171,34 +171,6 @@ object RuleImportManager {
         )
     }
 
-    fun createSimpleRule(
-        packageName: String,
-        appName: String,
-        name: String,
-        texts: List<String>,
-        area: RuleArea,
-        validDurationMs: Long,
-        avoidRepeatClick: Boolean,
-        selfPackageName: String = ""
-    ): RuleImportResult {
-        return createLocalRule(
-            packageName = packageName,
-            appName = appName,
-            name = name,
-            texts = texts,
-            contentDescriptions = texts,
-            viewIds = emptyList(),
-            area = area,
-            enabled = true,
-            priority = 100,
-            cooldownMs = if (avoidRepeatClick) 1200L else 800L,
-            validDurationMs = validDurationMs,
-            minScore = if (area == RuleArea.Any) 85 else 72,
-            coordinateFallback = null,
-            selfPackageName = selfPackageName
-        )
-    }
-
     fun createLocalRule(
         packageName: String,
         appName: String,

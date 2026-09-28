@@ -101,15 +101,6 @@ object NodeScanner {
         )
     }
 
-    fun findBestMatch(
-        root: AccessibilityNodeInfo,
-        rules: List<SkipRule>,
-        appElapsedMs: Long,
-        currentActivityName: String = ""
-    ): MatchResult? {
-        return scan(root, rules, appElapsedMs, currentActivityName).bestMatch
-    }
-
     fun filterRulesForActivity(
         rules: List<SkipRule>,
         currentActivityName: String

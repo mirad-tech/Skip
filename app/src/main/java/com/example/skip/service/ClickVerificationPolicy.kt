@@ -7,7 +7,10 @@ internal data class ClickVerification(
     val stage: ClickLogStage,
     val success: Boolean,
     val reason: String
-)
+) {
+    val shouldTryGestureFallback: Boolean
+        get() = !success && reason == "candidate_still_present"
+}
 
 internal enum class PendingEventFastPathDecision {
     AwaitClickVerification,
@@ -42,7 +45,7 @@ internal object ClickEffectVerifier {
         rootPackageName: String?,
         foregroundPackageName: String?,
         rootWindowNull: Boolean,
-        targetStillPresent: Boolean
+        targetStillPresent: Boolean?
     ): ClickVerification {
         val pending = pendingPackageName.trim()
         val self = selfPackageName.trim()
@@ -96,6 +99,13 @@ internal object ClickEffectVerifier {
                 stage = ClickLogStage.ClickEffectUnknown,
                 success = false,
                 reason = "protected_package_never_confirmed"
+            )
+        }
+        if (targetStillPresent == null) {
+            return ClickVerification(
+                stage = ClickLogStage.ClickEffectUnknown,
+                success = false,
+                reason = "target_scan_incomplete"
             )
         }
         return if (targetStillPresent) {

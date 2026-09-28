@@ -34,5 +34,4 @@ object BuiltInPreciseRuleCatalog {
     )
 
     fun forPackage(packageName: String): List<SkipRule> = rules.filter { it.packageName == packageName }
-    fun all(): List<SkipRule> = rules
 }
