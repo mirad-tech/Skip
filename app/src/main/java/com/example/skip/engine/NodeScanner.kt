@@ -32,8 +32,13 @@ object NodeScanner {
         var candidateCount = 0
         var bestCandidate: CandidateEvaluation? = null
         var visitedCount = 0
+        var budgetExhausted = false
 
-        while (queue.isNotEmpty() && visitedCount < NodeScanBudget.MAX_VISITED_NODES) {
+        // The node budget is enforced by `NodeScanBudget.canEnqueueChild` below: it keeps
+        // `visited + queued <= MAX_VISITED_NODES`, and dequeuing leaves that sum unchanged, so the
+        // queue is always empty by the time `visitedCount` could reach the cap. An extra
+        // `visitedCount < MAX_VISITED_NODES` guard here would therefore be unreachable.
+        while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
             visitedCount++
 
@@ -65,7 +70,10 @@ object NodeScanner {
 
             if (node.childCount > 0) {
                 for (index in 0 until node.childCount) {
-                    if (!NodeScanBudget.canEnqueueChild(visitedCount, queue.size)) break
+                    if (!NodeScanBudget.canEnqueueChild(visitedCount, queue.size)) {
+                        budgetExhausted = true
+                        break
+                    }
                     AccessibilityNodeAccess.child(node, index)?.let(queue::add)
                 }
             }
@@ -81,7 +89,7 @@ object NodeScanner {
                 candidateCount = candidateCount,
                 bestMatchFound = bestMatch != null,
                 bestCandidateFailureReason = bestCandidate?.failureReason,
-                budgetExhausted = visitedCount >= NodeScanBudget.MAX_VISITED_NODES
+                budgetExhausted = budgetExhausted
             ),
             bestCandidateRuleId = bestCandidate?.rule?.id.orEmpty(),
             bestCandidateRuleName = bestCandidate?.let { candidate ->

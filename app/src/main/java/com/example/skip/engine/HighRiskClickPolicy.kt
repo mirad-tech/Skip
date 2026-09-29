@@ -38,6 +38,10 @@ object HighRiskClickPolicy {
         "password",
         "verify"
     )
+    // Must be declared before anything that calls `normalizeForPolicy()`: object properties are
+    // initialised in declaration order, so a later position would leave this null during the
+    // initialisation of `normalizedBlockedTerms` and crash the class on first touch.
+    private val whitespaceRegex = Regex("\\s+")
     private val blockedTermsBySpecificity = blockedTerms.sortedByDescending { it.length }
     private val normalizedBlockedTerms = blockedTermsBySpecificity.map { it.normalizeForPolicy() }
 
@@ -82,7 +86,7 @@ object HighRiskClickPolicy {
 
     private fun String.normalizeForPolicy(): String {
         return lowercase(Locale.ROOT)
-            .replace("\\s+".toRegex(), "")
+            .replace(whitespaceRegex, "")
             .replace("　", "")
             .replace("-", "")
             .replace("_", "")

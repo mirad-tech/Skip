@@ -1,6 +1,11 @@
 package com.example.skip.engine
 
 internal object NodeScanBudget {
+    /**
+     * Upper bound on the nodes a single scan may retain and visit. [canEnqueueChild] is what enforces
+     * it (it keeps `visited + queued` at or below this value), so callers must route every child read
+     * through it instead of re-checking the count themselves.
+     */
     const val MAX_VISITED_NODES = 500
     const val MAX_RETAINED_PATH_NODES = 500
     const val MAX_TARGET_SCAN_NANOS = 300_000_000L

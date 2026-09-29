@@ -14,6 +14,10 @@ object CoordinateFallbackMatcher {
     private const val MIN_ANCHOR_VIEW_ID_LENGTH = 6
     private const val MIN_ANCHOR_CONTAINS_LENGTH = 6
 
+    // Hoisted: `normalizedAnchorText()` runs per anchor on the coordinate-fallback path, so building
+    // the regex on every call wasted allocations in a hot loop.
+    private val whitespaceRegex = Regex("\\s+")
+
     fun evaluate(
         rule: SkipRule,
         packageName: String,
@@ -427,7 +431,7 @@ object CoordinateFallbackMatcher {
     }
 
     private fun String.normalizedAnchorText(): String {
-        return lowercase(Locale.ROOT).replace("\\s+".toRegex(), "").trim()
+        return lowercase(Locale.ROOT).replace(whitespaceRegex, "").trim()
     }
 
     private fun String.matchesTextAnchor(anchors: List<String>): Boolean {

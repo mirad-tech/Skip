@@ -34,6 +34,8 @@ object RuleImportRiskPolicy {
     const val MIN_SAFE_SCORE = 60
     private const val MIN_CONTAINS_LENGTH = 2
 
+    private val whitespaceRegex = Regex("\\s+")
+
     private val genericLooseViewIds = setOf(
         "x", "close", "btn", "button", "skip", "cancel", "dismiss", "ok"
     )
@@ -190,7 +192,7 @@ object RuleImportRiskPolicy {
     }
 
     private fun normalizeRegexForRiskClassification(pattern: String): String {
-        var value = pattern.replace("\\s+".toRegex(), "")
+        var value = pattern.replace(whitespaceRegex, "")
         repeat(MAX_REGEX_NORMALIZATION_PASSES) {
             val normalized = value
                 .removePrefix("(?s)")
