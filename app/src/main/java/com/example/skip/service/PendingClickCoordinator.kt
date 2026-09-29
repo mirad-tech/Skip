@@ -163,7 +163,7 @@ internal class PendingClickCoordinator(
     }
 
     private fun relocateAndClick(pending: PendingClick) {
-        if (abortPendingIfAutomationPaused(pending)) return
+        if (abortPendingIfAutomationBlocked(pending)) return
         if (pendingClick !== pending) return
         val callbackPending = ClickFlowStateMachine.recordCallbackTiming(pending)
         pendingClick = callbackPending
@@ -216,7 +216,22 @@ internal class PendingClickCoordinator(
             currentActivityName = service.currentActivityName
         )
         val scanStartedAt = SystemClock.elapsedRealtime()
-        val scan = NodeScanner.scan(root ?: return, currentRules, elapsed, service.currentActivityName)
+        // Defence in depth. Today the `retryPendingClick` call above and
+        // `cancelIfUnsafeDelayedClickWindow` already cover a null root, so this branch is not
+        // reachable; it exists so that a future reordering of those guards cannot park the service
+        // on the pending fast path with no callback left to clear it.
+        val activeRoot = root
+        if (activeRoot == null) {
+            finishPendingClick(
+                pending = callbackPending,
+                stage = ClickLogStage.RootWindowNull,
+                success = false,
+                reason = "root_window_null_before_click",
+                attempt = null
+            )
+            return
+        }
+        val scan = NodeScanner.scan(activeRoot, currentRules, elapsed, service.currentActivityName)
         val scanDurationMs = (SystemClock.elapsedRealtime() - scanStartedAt).coerceAtLeast(0L)
         val match = scan.bestMatch
         if (match == null) {
@@ -311,7 +326,7 @@ internal class PendingClickCoordinator(
     }
 
     private fun runCoordinateFallback(pending: PendingClick) {
-        if (abortPendingIfAutomationPaused(pending)) return
+        if (abortPendingIfAutomationBlocked(pending)) return
         if (pendingClick !== pending) return
         val callbackPending = ClickFlowStateMachine.recordCallbackTiming(pending)
         pendingClick = callbackPending
@@ -467,7 +482,11 @@ internal class PendingClickCoordinator(
     private fun verifyActionClick(pending: PendingClick) {
         if (pendingClick?.signature != pending.signature) return
         val result = verifyClickEffect(pending)
-        if (result.shouldTryGestureFallback) {
+        // A gesture retry is only justified when the framework click was not accepted. When
+        // ACTION_CLICK returned true the view may simply not be torn down yet, and re-dispatching
+        // a gesture at the same coordinates would click twice.
+        val actionAccepted = pending.firstAttempt?.accepted == true
+        if (result.shouldTryGestureFallback && !actionAccepted) {
             runGestureFallback(pending)
             return
         }
@@ -482,7 +501,7 @@ internal class PendingClickCoordinator(
     }
 
     private fun runGestureFallback(pending: PendingClick) {
-        if (abortPendingIfAutomationPaused(pending)) return
+        if (abortPendingIfAutomationBlocked(pending)) return
         if (pendingClick?.signature != pending.signature) return
         val root = AccessibilityNodeAccess.freshActiveRoot(service)
         if (root == null && retryPendingClick(
@@ -733,13 +752,44 @@ internal class PendingClickCoordinator(
         cancelPendingClickForActivityScope(pending, eventContext)
     }
 
-    private fun abortPendingIfAutomationPaused(pending: PendingClick): Boolean {
-        if (SettingsRepository.isMasterEnabled(service)) return false
+    /**
+     * Single guard for every delayed click path (semantic relocation, coordinate fallback and
+     * gesture fallback). Master-off and safety-mode-on both mean "do not click", and both can
+     * change while a click is already scheduled, so neither may only be checked before the delay.
+     *
+     * The two causes must stay distinguishable in the log: `ClickSkippedBySafetyMode` counts as a
+     * safety block in `LogRepository.isSafetyBlockedHit`, so a master-off abort recorded under that
+     * stage would inflate the "安全阻止" statistic while the log also says
+     * `safetyModeEnabled = false`.
+     */
+    private fun abortPendingIfAutomationBlocked(pending: PendingClick): Boolean {
+        val masterEnabled = SettingsRepository.isMasterEnabled(service)
+        val safetyModeEnabled = SettingsRepository.isSafetyModeEnabled(service)
+        if (masterEnabled && !safetyModeEnabled) return false
         if (pendingClick?.signature == pending.signature) {
             pendingClick = null
         }
         service.terminateOpeningAdRecovery(service.pendingSessionKey(pending))
-        SettingsRepository.setLastFailureReason(service, "automation_paused", forcePersist = true)
+        val skippedBySafetyMode = masterEnabled && safetyModeEnabled
+        val reason = if (skippedBySafetyMode) {
+            "click_skipped_by_safety_mode"
+        } else {
+            "automation_paused"
+        }
+        SettingsRepository.setLastFailureReason(service, reason, forcePersist = true)
+        service.eventLogger.logEvent(
+            stage = if (skippedBySafetyMode) {
+                ClickLogStage.ClickSkippedBySafetyMode
+            } else {
+                ClickLogStage.SkippedByDisabledSetting
+            },
+            eventContext = pending.eventContext,
+            pending = pending,
+            success = false,
+            failureReason = reason,
+            reason = reason,
+            clickSkippedBySafetyMode = skippedBySafetyMode
+        )
         return true
     }
 

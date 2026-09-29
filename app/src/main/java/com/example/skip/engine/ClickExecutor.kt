@@ -263,6 +263,14 @@ object ClickExecutor {
         ) {
             return "coordinate_fallback_target_unsafe"
         }
+        // Defence in depth rather than a live guard: every target reaching this function came from
+        // `CurrentTargetRevalidator.searchAtPoint`, which only returns nodes that had a
+        // `relaxedSelection`, and that already required `isSafeBounds` (area ratio <= 35%). The
+        // check is kept so a malformed hierarchy (child bounds exceeding its parent's) or a future
+        // hand-built `ClickTargetInfo` cannot bypass the semantic path's bound.
+        if (target.bounds.computeAreaRatio() > MAX_CLICK_TARGET_SCREEN_RATIO) {
+            return "coordinate_fallback_target_unsafe"
+        }
         if (!target.nodeClickable && !target.parentClickable && !hasClickableNodeOrAncestor) {
             return "coordinate_fallback_target_unsafe"
         }

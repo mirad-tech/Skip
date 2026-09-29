@@ -151,7 +151,10 @@ object ScoreEvaluator {
             .isStandaloneSkipLabel(textValue, descriptionValue)
         val areaRatio = ClickExecutor.areaRatio(candidate.bounds)
         val largeCandidate = ClickExecutor.isLargeDefaultCandidate(candidate.bounds)
-        val defaultAreaAllowed = true
+        // Mirrors the area scoring term below: a default-rule candidate outside the configured
+        // area is only penalised, not rejected, so diagnostics must report the real outcome
+        // instead of a constant `true`.
+        val areaMatchesRule = rule.area == RuleArea.Any || area == rule.area
         var clickSelection = resolution.strictSelection
         var standaloneSkipAllowed = false
         if (textKeywordIsStandaloneSkip) {
@@ -217,7 +220,7 @@ object ScoreEvaluator {
                         area = area,
                         passesMinScore = false,
                         failureReason = standaloneDecision.reason,
-                        defaultRuleAreaAllowed = defaultAreaAllowed,
+                        defaultRuleAreaAllowed = areaMatchesRule,
                         textKeywordIsStandaloneSkip = true,
                         candidateAreaRatio = areaRatio,
                         isLargeCandidateBounds = largeCandidate,
@@ -254,7 +257,7 @@ object ScoreEvaluator {
                 area = area,
                 passesMinScore = false,
                 failureReason = "ambiguous_candidate_large_bounds",
-                defaultRuleAreaAllowed = defaultAreaAllowed,
+                defaultRuleAreaAllowed = if (defaultRule) areaMatchesRule else null,
                 textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
                 candidateAreaRatio = areaRatio,
                 isLargeCandidateBounds = true
@@ -269,7 +272,7 @@ object ScoreEvaluator {
                 area = area,
                 passesMinScore = false,
                 failureReason = "no_safe_clickable_target",
-                defaultRuleAreaAllowed = defaultAreaAllowed,
+                defaultRuleAreaAllowed = if (defaultRule) areaMatchesRule else null,
                 textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
                 candidateAreaRatio = areaRatio,
                 isLargeCandidateBounds = largeCandidate
@@ -279,7 +282,7 @@ object ScoreEvaluator {
         if (textRule != null) score += 40
         if (descriptionRule != null) score += 30
         if (idRule != null) score += 30
-        if (rule.area == RuleArea.Any || area == rule.area) score += 20
+        if (areaMatchesRule) score += 20
         if (ClickExecutor.isSelfSafeClickable(node)) score += 20
         if (clickSelection != null && clickSelection.node != node) score += 10
         if (appElapsedMs <= rule.validDurationMs) score += 20
@@ -311,7 +314,7 @@ object ScoreEvaluator {
                 onlyGenericClose -> GENERIC_CLOSE_BLOCKED_REASON
                 else -> "score_below_min_score"
             },
-            defaultRuleAreaAllowed = if (defaultRule) defaultAreaAllowed else null,
+            defaultRuleAreaAllowed = if (defaultRule) areaMatchesRule else null,
             textKeywordIsStandaloneSkip = textKeywordIsStandaloneSkip,
             candidateAreaRatio = areaRatio,
             isLargeCandidateBounds = largeCandidate,

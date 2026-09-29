@@ -362,7 +362,13 @@ object LogRepository {
 
     fun clearRuleLogs(context: Context) = RuleLogRepository.clearRuleLogs(context)
 
+    /**
+     * Success and failure must stay mutually exclusive: a log such as
+     * `stage = ClickEffectUnknown, success = true` used to be counted by both, which made
+     * `success + failure > total` in the statistics screen.
+     */
     internal fun isSuccessfulHit(log: ClickLog): Boolean {
+        if (isFailureHit(log)) return false
         return log.success == true || log.stage == ClickLogStage.ClickEffectConfirmed
     }
 

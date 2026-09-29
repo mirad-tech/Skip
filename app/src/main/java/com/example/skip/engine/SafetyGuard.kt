@@ -75,44 +75,48 @@ object SafetyGuard {
         "com.citicbank"
     )
 
+    // Matched against the whole lowercased package name, except for the short tokens listed in
+    // `boundaryMatchedKeywords` below.
+    //
+    // Never truncate this list: an earlier edit dropped "citic" while rewriting the block, which
+    // silently un-protected the `com.citics.*` brokerage apps. "citic" is deliberately kept even
+    // though `com.citicbank` is also in `protectedPrefixes` — that prefix does not cover the
+    // `com.citics.*` namespace.
     private val protectedKeywords = listOf(
-        "launcher",
-        "systemui",
-        "recents",
-        "upslide",
-        "settings",
-        "packageinstaller",
-        "inputmethod",
-        "keyboard",
-        "ime",
-        "alipay",
-        "bank",
-        "icbc",
-        "cmb",
-        "ccb",
-        "boc",
-        "psbc",
-        "spdb",
-        "citic",
-        "finance",
-        "financial",
-        "paypal",
-        "pay",
-        "payment",
-        "unionpay",
-        "wallet",
-        "cash",
-        "credit",
-        "debit",
-        "securities",
-        "broker",
-        "insurance",
-        "password",
-        "passkey",
-        "authenticator",
-        "permission",
-        "installer"
+        "launcher", "systemui", "recents", "upslide", "settings", "packageinstaller",
+        "inputmethod", "keyboard", "ime", "alipay", "bank", "icbc", "cmb", "ccb", "boc",
+        "psbc", "spdb", "citic", "finance", "financial", "paypal", "pay", "payment",
+        "unionpay", "wallet", "cash", "credit", "debit", "securities", "broker",
+        "insurance", "password", "passkey", "authenticator", "permission", "installer"
     )
+
+    private val whitespaceRegex = Regex("\\s+")
+
+    /**
+     * The one token that cannot be matched across the whole package name.
+     *
+     * `ime` is a substring of ordinary words — `time` (`com.time.mobile`), `prime`
+     * (`com.prime.video`) — so a full-name match silently disabled skipping for those apps. It has
+     * to be a whole dot-separated segment instead, which still covers `com.lge.ime`, `com.sogou.ime`
+     * and `com.baidu.ime.android`.
+     *
+     * The other short financial tokens are deliberately left on the broader full-name match: they
+     * carry real signal inside a word (`tenpay`, `jdpaysdk`, `paybyphone`, `mycashier`) and no common
+     * package word contains them by accident. `bank`, `wallet`, `login` and `settings` likewise stay
+     * full-name matches.
+     */
+    private const val SEGMENT_ONLY_KEYWORD = "ime"
+
+    /**
+     * Keywords that identify a system surface rather than a merely sensitive app. Kept as keyword
+     * literals so [isSystemPackage] classifies on the matched keyword, never on a package name.
+     */
+    private val systemKeywords = setOf(
+        "systemui", "recents", "upslide", "settings", "packageinstaller"
+    )
+
+    /** Phrases that must keep reporting the launcher/system reason string. */
+    private val launcherReasonKeywords = setOf("launcher", "systemui", "recents", "upslide")
 
     val protectedPageKeywords = listOf(
         "支付",
@@ -159,38 +163,56 @@ object SafetyGuard {
         val lower = packageName.lowercase(Locale.ROOT)
         if (lower in protectedExactPackages) return true
         if (protectedPrefixes.any { lower.startsWith(it) }) return true
-        return protectedKeywords.any { lower.contains(it) }
+        return matchedProtectedKeyword(packageName) != null
+    }
+
+    /**
+     * Returns the **keyword** that made [isProtectedPackage] true, or null when the decision came
+     * from [protectedExactPackages] / [protectedPrefixes] or from no rule at all.
+     *
+     * The contract is deliberately "keyword only": [isSystemPackage] and [protectedPackageReason]
+     * classify by comparing this value against keyword literals, so returning a package name or a
+     * prefix here (as an earlier revision did) silently sent every exact/prefix match down the
+     * generic branch.
+     */
+    fun matchedProtectedKeyword(packageName: String): String? {
+        val lower = packageName.lowercase(Locale.ROOT)
+        val segments = lower.split('.').filter { it.isNotEmpty() }
+        return protectedKeywords.firstOrNull { keyword ->
+            if (keyword == SEGMENT_ONLY_KEYWORD) {
+                segments.any { it == keyword }
+            } else {
+                lower.contains(keyword)
+            }
+        }
     }
 
     fun protectedPackageReason(packageName: String): String {
         val lower = packageName.lowercase(Locale.ROOT)
-        return when {
-            isLauncherPackage(packageName) || isSystemPackage(packageName) -> {
-                "system_or_launcher_package"
-            }
-            lower.contains("inputmethod") || lower.contains("keyboard") || lower.contains("ime") -> {
-                "input_method_package"
-            }
-            lower.contains("packageinstaller") || lower.contains("installer") -> {
-                "package_installer_package"
-            }
-            lower.contains("settings") || lower.contains("permission") -> {
-                "settings_or_permission_package"
-            }
-            isProtectedPackage(packageName) -> "protected_sensitive_package"
-            else -> ""
+        val isLauncher = isLauncherPackage(packageName)
+        val isExactOrPrefix = lower in protectedExactPackages ||
+            protectedPrefixes.any { lower.startsWith(it) }
+        if (isExactOrPrefix || isLauncher) {
+            if (isLauncher) return "system_or_launcher_package"
+            return classifyProtectedKeyword(matchedProtectedKeyword(packageName))
+                .ifBlank { "protected_sensitive_package" }
+        }
+        return classifyProtectedKeyword(matchedProtectedKeyword(packageName))
+    }
+
+    private fun classifyProtectedKeyword(keyword: String?): String {
+        return when (keyword) {
+            null -> ""
+            in launcherReasonKeywords -> "system_or_launcher_package"
+            "inputmethod", "keyboard", "ime" -> "input_method_package"
+            "packageinstaller", "installer" -> "package_installer_package"
+            "settings", "permission" -> "settings_or_permission_package"
+            else -> "protected_sensitive_package"
         }
     }
 
     fun isSystemPackage(packageName: String): Boolean {
-        val lower = packageName.lowercase(Locale.ROOT)
-        return lower == "com.android.systemui" ||
-            lower == "com.vivo.upslide" ||
-            lower.contains("systemui") ||
-            lower.contains("recents") ||
-            lower.contains("upslide") ||
-            lower.contains("settings") ||
-            lower.contains("packageinstaller")
+        return matchedProtectedKeyword(packageName) in systemKeywords
     }
 
     fun isLauncherPackage(packageName: String): Boolean {
@@ -245,7 +267,7 @@ object SafetyGuard {
 
     fun hasSensitiveSkipSemantic(text: String): Boolean {
         val normalized = text.lowercase(Locale.ROOT)
-            .replace("\\s+".toRegex(), "")
+            .replace(whitespaceRegex, "")
         return sensitiveSkipPhrases.any(normalized::contains)
     }
 
