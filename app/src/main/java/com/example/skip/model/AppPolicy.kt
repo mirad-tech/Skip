@@ -47,3 +47,13 @@ data class EffectiveAppPolicy(
     val customRulesEnabled: Boolean,
     val blockedBySafety: Boolean
 )
+
+/**
+ * Marks an existing policy as blacklisted while preserving unrelated user choices, most
+ * importantly [AppPolicy.customRulesEnabled]. Rebuilding the policy through
+ * [AppPolicy.fromLegacyBlacklist] would silently re-enable custom rules (including
+ * coordinate fallback) on every other blacklisted app whenever the blacklist changes.
+ */
+internal fun AppPolicy.asBlacklisted(): AppPolicy {
+    return copy(defaultRuleEnabled = false, migratedFromBlacklist = true)
+}

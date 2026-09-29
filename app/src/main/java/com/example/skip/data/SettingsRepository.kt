@@ -3,6 +3,7 @@ package com.example.skip.data
 import android.content.Context
 import androidx.core.content.edit
 import com.example.skip.model.AppPolicy
+import com.example.skip.model.asBlacklisted
 import com.example.skip.util.AccessibilityUtil
 import org.json.JSONArray
 import org.json.JSONObject
@@ -106,15 +107,29 @@ object SettingsRepository {
         return (legacy + disabledByPolicy).cleanPackageNames()
     }
 
+    /**
+     * Marks every package in [packages] as blacklisted while preserving all other stored policies.
+     *
+     * Note this is **not** a "replace the blacklist with this set" operation: a policy that is
+     * already blacklisted but absent from [packages] is kept as-is rather than un-blacklisted. The
+     * only production caller ([setBlacklisted]) always passes the full current blacklist plus or
+     * minus one package, and it updates the target policy first, so the two stay consistent. A
+     * future caller that passes a subset must un-blacklist explicitly.
+     *
+     * Preserving unrelated user choices is the point: `customRulesEnabled` in particular must
+     * survive, because rebuilding a blacklisted policy through [AppPolicy.fromLegacyBlacklist] would
+     * silently re-enable that app's custom rules (and their coordinate fallback).
+     */
     fun saveBlacklistPackages(context: Context, packages: Collection<String>) {
-        prefs(context)
-            .edit { putStringSet(KEY_BLACKLIST, packages.cleanPackageNames().toSet()) }
-        val existing = getAppPolicies(context)
-            .filter { it.packageName !in packages.cleanPackageNames().toSet() }
-        saveAppPolicies(
-            context,
-            existing + packages.cleanPackageNames().map(AppPolicy::fromLegacyBlacklist)
-        )
+        val targets = packages.cleanPackageNames()
+        val targetSet = targets.toSet()
+        val existingPolicies = getAppPolicies(context).associateBy { it.packageName }
+        val preservedPolicies = existingPolicies.values.filterNot { it.packageName in targetSet }
+        val blacklistedPolicies = targets.map { packageName ->
+            existingPolicies[packageName]?.asBlacklisted()
+                ?: AppPolicy.fromLegacyBlacklist(packageName)
+        }
+        saveAppPolicies(context, preservedPolicies + blacklistedPolicies)
     }
 
     fun isBlacklisted(context: Context, packageName: String): Boolean {
@@ -184,6 +199,22 @@ object SettingsRepository {
             .filter { it.packageName.isNotBlank() }
             .distinctBy { it.packageName }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.packageName })
+    }
+
+    /**
+     * Combines an imported policy with whatever the app already had.
+     *
+     * An import may change the default-rule switch, because that is the intent the rule package
+     * expresses. It must **not** touch `customRulesEnabled`: `setAppPolicy` replaces the whole
+     * policy, and an imported entry that omits the field would default it back to `true`, silently
+     * re-enabling that app's custom rules (including their coordinate fallback) — the same class of
+     * defect as rebuilding a blacklisted policy through [AppPolicy.fromLegacyBlacklist].
+     *
+     * `migratedFromBlacklist` is likewise preserved so an import can never make the app look like a
+     * user-initiated blacklist entry, which would change how `clearBlacklist` treats it.
+     */
+    internal fun mergeImportedPolicy(existing: AppPolicy, imported: AppPolicy): AppPolicy {
+        return existing.copy(defaultRuleEnabled = imported.defaultRuleEnabled)
     }
 
     fun setAppPolicy(context: Context, policy: AppPolicy) {

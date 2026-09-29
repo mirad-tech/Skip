@@ -302,7 +302,21 @@ object RuleRepository {
 
         saveRules(context, existingRules)
         if (result.appPolicies.isNotEmpty()) {
-            result.appPolicies.forEach { SettingsRepository.setAppPolicy(context, it) }
+            // Merge instead of replace: an imported policy that omits customRulesEnabled would
+            // otherwise reset it to true and silently re-enable the app's custom rules.
+            // `getAppPolicy` fabricates a default for unknown packages, so look the stored list up
+            // directly to tell "already configured" from "seen for the first time".
+            val storedPolicies = SettingsRepository.getAppPolicies(context)
+                .associateBy { it.packageName }
+            result.appPolicies.forEach { imported ->
+                val existing = storedPolicies[imported.packageName]
+                val merged = if (existing == null) {
+                    imported
+                } else {
+                    SettingsRepository.mergeImportedPolicy(existing, imported)
+                }
+                SettingsRepository.setAppPolicy(context, merged)
+            }
         }
         if (existingRules.any { it.packageId == packageInfo.id }) {
             upsertRulePackage(context, packageInfo)
@@ -398,14 +412,15 @@ object RuleRepository {
 
     private fun createBuiltInRuleForPackage(context: Context, packageName: String): SkipRule {
         val defaultRuleConfig = getDefaultRuleConfig(context)
+        val keywords = getKeywords(context)
         return SkipRule(
             id = "built_in_$packageName",
             source = RuleSource.BuiltIn,
             name = "默认开屏跳过",
             packageName = packageName,
             appName = packageName,
-            matchTexts = getKeywords(context),
-            matchContentDescriptions = getKeywords(context),
+            matchTexts = keywords,
+            matchContentDescriptions = keywords,
             matchViewIds = getViewIdKeywords(context),
             area = defaultRuleConfig.area,
             priority = 1,
@@ -553,7 +568,7 @@ object RuleRepository {
             area = area,
             action = action,
             priority = optInt("priority", 10),
-            cooldownMs = optLong("cooldownMs", 1200L),
+            cooldownMs = optLong("cooldownMs", DEFAULT_RULE_COOLDOWN_MS),
             validDurationMs = optLong("validDurationMs", DEFAULT_RULE_WINDOW_MS),
             minScore = optInt("minScore", 70),
             coordinateFallback = coordinateFallback,

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 
 @Database(
     entities = [
@@ -20,6 +21,15 @@ abstract class SkipDatabase : RoomDatabase() {
     companion object {
         private const val DATABASE_NAME = "skip_logs.db"
 
+        /**
+         * Every schema bump must add its [Migration] here and commit the matching
+         * `app/schemas/com.example.skip.data.db.SkipDatabase/<version>.json`.
+         *
+         * Deliberately no `fallbackToDestructiveMigration()`: silently dropping the
+         * database would erase the user's click history.
+         */
+        private val MIGRATIONS: Array<Migration> = emptyArray()
+
         @Volatile
         private var instance: SkipDatabase? = null
 
@@ -30,6 +40,7 @@ abstract class SkipDatabase : RoomDatabase() {
                     SkipDatabase::class.java,
                     DATABASE_NAME
                 )
+                    .addMigrations(*MIGRATIONS)
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build()
                     .also { instance = it }

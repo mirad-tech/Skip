@@ -98,6 +98,9 @@ object RuleImportManager {
                     migratedFromBlacklist = policyJson.optBoolean("migratedFromBlacklist", false)
                 )
             }
+            if (appPolicies.isNotEmpty()) {
+                warnings += "导入只会更新应用策略中的「默认规则」开关；已配置应用的自定义规则开关保持不变。"
+            }
         }
         val packageId = "json_${UUID.randomUUID()}"
         val rulePackage = RulePackage(
@@ -364,7 +367,7 @@ object RuleImportManager {
         val area = RuleArea.fromValue(ruleJson.optString("area", "any"))
             ?: return RuleImportResult(false, "$id 的 area 不合法")
 
-        val cooldownMs = ruleJson.optLong("cooldownMs", 1200L)
+        val cooldownMs = ruleJson.optLong("cooldownMs", RuleRepository.DEFAULT_RULE_COOLDOWN_MS)
         val validDurationMs = ruleJson.optLong("validDurationMs", RuleRepository.DEFAULT_RULE_WINDOW_MS)
         val minScore = ruleJson.optInt("minScore", 70)
         val textMatchMode = MatchMode.fromValue(
