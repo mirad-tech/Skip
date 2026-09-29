@@ -1,5 +1,8 @@
 package com.example.skip
 
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -47,10 +50,19 @@ class MainActivity : ComponentActivity() {
     private var releaseDisclosureAccepted by mutableStateOf(false)
     private var currentScreen by mutableStateOf<AppScreen>(AppScreen.Home)
     private val appVersionName: String by lazy {
-        packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
+        packageInfo().versionName ?: "unknown"
     }
     private val appVersionCode: Long by lazy {
-        packageManager.getPackageInfo(packageName, 0).longVersionCode
+        packageInfo().longVersionCode
+    }
+
+    private fun packageInfo(): PackageInfo {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

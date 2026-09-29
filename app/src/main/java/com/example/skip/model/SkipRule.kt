@@ -18,7 +18,12 @@ data class SkipRule(
     val area: RuleArea = RuleArea.TopRight,
     val action: RuleAction = RuleAction.Click,
     val priority: Int = 10,
-    val cooldownMs: Long = 1200L,
+    /**
+     * Must stay in sync with `RuleRepository.DEFAULT_RULE_COOLDOWN_MS`. The model layer does not
+     * depend on the data layer, so the value is duplicated here with this note instead of
+     * importing it.
+     */
+    val cooldownMs: Long = 1_500L,
     val validDurationMs: Long = 8_000L,
     val minScore: Int = 70,
     val coordinateFallback: CoordinateFallback? = null,

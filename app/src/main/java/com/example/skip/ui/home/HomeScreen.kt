@@ -89,10 +89,11 @@ fun HomeScreen(
 }
 
 internal fun homeAutomationActionLabel(skipEnabled: Boolean, safetyModeEnabled: Boolean): String {
+    // The label must describe what the button will do when tapped, not the current state:
+    // "开启观察" used to sit on a button that actually enabled automation.
     return when {
-        skipEnabled && safetyModeEnabled -> "暂停观察"
         skipEnabled -> "暂停自动化"
-        safetyModeEnabled -> "开启观察"
+        safetyModeEnabled -> "开启自动化（观察中）"
         else -> "开启自动化"
     }
 }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Dark window background so the Compose first frame does not flash a light window. -->
+    <style name="Theme.Skip" parent="android:Theme.Material.NoActionBar" />
+</resources>

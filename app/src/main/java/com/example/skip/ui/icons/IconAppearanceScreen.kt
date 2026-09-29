@@ -97,7 +97,9 @@ private fun IconSchemeRow(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val iconRes = IconManager.homeImageRes
+    // Preview the scheme's real launcher icon. Using the shared wordmark made every row look
+    // identical apart from the background colour.
+    val iconRes = IconManager.displayIconRes(scheme)
     val icon = remember(context, iconRes) {
         context.getDrawable(iconRes)
     }

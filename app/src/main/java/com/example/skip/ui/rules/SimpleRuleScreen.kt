@@ -1,4 +1,4 @@
-﻿package com.example.skip.ui.rules
+package com.example.skip.ui.rules
 
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
@@ -96,7 +96,11 @@ fun SimpleRuleScreen(
     var minScoreText by remember {
         mutableStateOf((editingRule?.minScore ?: if (preciseMode && initialViewId.contains(":id/")) 70 else if (preciseMode) 80 else 72).toString())
     }
-    var cooldownText by remember { mutableStateOf((editingRule?.cooldownMs ?: if (preciseMode) 1500L else 1200L).toString()) }
+    var cooldownText by remember {
+        mutableStateOf(
+            (editingRule?.cooldownMs ?: RuleRepository.DEFAULT_RULE_COOLDOWN_MS).toString()
+        )
+    }
     var coordinateEnabled by remember { mutableStateOf(editingRule?.coordinateFallback?.enabled == true) }
     var coordinateXRatio by remember {
         mutableStateOf(editingRule?.coordinateFallback?.xRatio?.toString() ?: "0.90")
