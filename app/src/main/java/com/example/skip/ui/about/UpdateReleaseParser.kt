@@ -14,11 +14,10 @@ internal object UpdateReleaseParser {
             ?.mapNotNull { it as? SimpleJsonObject }
             ?.mapNotNull(::toAsset)
             .orEmpty()
-        val preferredNames = setOf(
-            "Skip-$tagName-release.apk".lowercase(),
-            "Skip-$versionName-release.apk".lowercase()
-        )
-        val trustedAssets = assets.filter { it.name.lowercase() in preferredNames }
+        // The asset name must stay recognisable but must not be tied to one exact spelling:
+        // requiring `Skip-<tag>-release.apk` made the updater fail permanently as soon as a release
+        // published both the tag-based and the version-based file name.
+        val trustedAssets = assets.filter { it.name.isTrustedReleaseAssetName() }
         if (trustedAssets.size != 1) {
             error("更新信息中没有唯一可信的发布 APK 资产")
         }
@@ -43,6 +42,11 @@ internal object UpdateReleaseParser {
             browserDownloadUrl = url,
             digest = assetJson.optString("digest").trim()
         )
+    }
+
+    private fun String.isTrustedReleaseAssetName(): Boolean {
+        val lower = lowercase()
+        return lower.startsWith("skip-") && lower.endsWith("-release.apk")
     }
 
     private fun ReleaseAssetCandidate.toUpdateAsset(): UpdateAsset {

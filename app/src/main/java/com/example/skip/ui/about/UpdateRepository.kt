@@ -10,6 +10,28 @@ import kotlinx.coroutines.withContext
 internal object UpdateRepository {
     private const val LATEST_RELEASE_URL =
         "https://api.github.com/repos/mirad-tech/Skip/releases/latest"
+    private const val MAX_UPDATE_BYTES = 200L * 1024 * 1024
+    private const val MAX_DOWNLOAD_REDIRECTS = 5
+    private val REDIRECT_CODES = setOf(
+        HttpURLConnection.HTTP_MOVED_PERM,
+        HttpURLConnection.HTTP_MOVED_TEMP,
+        HttpURLConnection.HTTP_SEE_OTHER,
+        HttpURLConnection.HTTP_MULT_CHOICE,
+        307,
+        308
+    )
+
+    /**
+     * The release JSON supplies both the digest and the download URL, so the download target can
+     * never be trusted on its own. Only HTTPS URLs on these hosts are followed.
+     */
+    private val allowedDownloadHosts = setOf(
+        "github.com",
+        "api.github.com",
+        "objects.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+        "release-assets.githubusercontent.com"
+    )
 
     suspend fun checkLatestRelease(): UpdateRelease = withContext(Dispatchers.IO) {
         val text = requestText(LATEST_RELEASE_URL)
@@ -24,7 +46,7 @@ internal object UpdateRepository {
         cleanUpdateDirectory(destination.parentFile)
         destination.parentFile?.mkdirs()
         runCatching {
-            val connection = openConnection(asset.browserDownloadUrl)
+            val connection = openRedirectCheckedConnection(asset.browserDownloadUrl)
             try {
                 connection.connect()
                 val code = connection.responseCode
@@ -32,6 +54,9 @@ internal object UpdateRepository {
                     error("下载失败：HTTP $code")
                 }
                 val totalBytes = connection.contentLengthLong.takeIf { it > 0L }
+                if (totalBytes != null && totalBytes > MAX_UPDATE_BYTES) {
+                    error("更新包体积超出上限")
+                }
                 var downloadedBytes = 0L
                 var lastProgress: Int? = null
                 connection.inputStream.use { input ->
@@ -40,8 +65,11 @@ internal object UpdateRepository {
                         while (true) {
                             val read = input.read(buffer)
                             if (read <= 0) break
-                            output.write(buffer, 0, read)
                             downloadedBytes += read
+                            if (downloadedBytes > MAX_UPDATE_BYTES) {
+                                error("更新包体积超出上限")
+                            }
+                            output.write(buffer, 0, read)
                             val progress = progressPercent(downloadedBytes, totalBytes)
                             if (progress != lastProgress) {
                                 lastProgress = progress
@@ -49,6 +77,9 @@ internal object UpdateRepository {
                             }
                         }
                     }
+                }
+                if (totalBytes != null && downloadedBytes != totalBytes) {
+                    error("下载不完整：期望 $totalBytes 字节，实际 $downloadedBytes 字节")
                 }
             } finally {
                 connection.disconnect()
@@ -60,6 +91,43 @@ internal object UpdateRepository {
         }.getOrElse { throwable ->
             destination.delete()
             throw throwable
+        }
+    }
+
+    /**
+     * Follows redirects manually so every hop can be validated. `instanceFollowRedirects` would
+     * silently follow a `Location` that points at an unexpected host.
+     */
+    private fun openRedirectCheckedConnection(url: String): HttpURLConnection {
+        var currentUrl = url
+        var redirects = 0
+        while (true) {
+            assertTrustedDownloadUrl(currentUrl)
+            val connection = openConnection(currentUrl, followRedirects = false)
+            connection.connect()
+            val code = connection.responseCode
+            if (code !in REDIRECT_CODES) return connection
+            val location = connection.getHeaderField("Location")
+            connection.disconnect()
+            if (location.isNullOrBlank()) {
+                error("更新下载重定向缺少目标地址")
+            }
+            redirects++
+            if (redirects > MAX_DOWNLOAD_REDIRECTS) {
+                error("更新下载重定向次数过多")
+            }
+            currentUrl = location
+        }
+    }
+
+    private fun assertTrustedDownloadUrl(url: String) {
+        val parsed = runCatching { URL(url) }.getOrElse { error("更新下载地址无效") }
+        if (!parsed.protocol.equals("https", ignoreCase = true)) {
+            error("更新下载地址必须使用 HTTPS")
+        }
+        val host = parsed.host.orEmpty().lowercase()
+        if (host !in allowedDownloadHosts) {
+            error("更新下载地址不受信任：$host")
         }
     }
 
@@ -80,7 +148,7 @@ internal object UpdateRepository {
     }
 
     private fun requestText(url: String): String {
-        val connection = openConnection(url)
+        val connection = openConnection(url, followRedirects = true)
         try {
             connection.setRequestProperty("Accept", "application/vnd.github+json")
             connection.setRequestProperty("X-GitHub-Api-Version", "2026-03-10")
@@ -97,11 +165,11 @@ internal object UpdateRepository {
         }
     }
 
-    private fun openConnection(url: String): HttpURLConnection {
+    private fun openConnection(url: String, followRedirects: Boolean): HttpURLConnection {
         return (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
             readTimeout = 20_000
-            instanceFollowRedirects = true
+            instanceFollowRedirects = followRedirects
             requestMethod = "GET"
             setRequestProperty("User-Agent", "Skip-Android")
         }

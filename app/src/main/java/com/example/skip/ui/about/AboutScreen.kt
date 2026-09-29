@@ -315,8 +315,13 @@ private fun Throwable.userMessage(prefix: String): String {
 }
 
 private fun openReleasePage(context: Context, url: String) {
-    if (url.isBlank()) return
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+    // The release JSON is untrusted input, so only open an HTTPS release page. A non-HTTPS or
+    // non-github.com URL would otherwise be handed straight to the system browser.
+    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
+    if (!uri.scheme.equals("https", ignoreCase = true)) return
+    val host = uri.host.orEmpty().lowercase()
+    if (host != "github.com") return
+    val intent = Intent(Intent.ACTION_VIEW, uri)
     try {
         context.startActivity(intent)
     } catch (_: ActivityNotFoundException) {
