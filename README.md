@@ -73,11 +73,16 @@ Skip 默认本地处理，不上传屏幕内容、规则、日志、统计或个
 ## 开发验证
 
 ```powershell
+.\gradlew.bat :app:testDebugUnitTest
 .\gradlew.bat :app:assembleDebug
 git diff --check
 ```
 
 完整发布验证见 [发布指南](RELEASE_GUIDE.md)。Release 构建需要本地 `keystore.properties` 和签名文件；真实签名文件、密码和密钥不得提交到仓库。
+
+> **不要修改 `applicationId`（`app/build.gradle.kts` 中的 `com.example.skip`）。** 它已经是所有已发布版本的安装身份，一旦变更，用户无法覆盖安装，应用内更新链路会直接断裂。
+>
+> `app/src/test` 下已有 JVM 单元测试（覆盖受保护包匹配、扫描失败分类、节点扫描预算、应用策略合并与版本比较）；仓库仍**没有仪器测试**。
 
 ## 反馈与贡献
 

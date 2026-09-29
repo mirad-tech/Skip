@@ -1,5 +1,12 @@
 # 安全跳过候选解析 Implementation Plan
 
+> **时效说明（2026-09-28 复核）**：本计划描述的功能已合入主线并随 1.0.10 起发布，但计划中引用的以下路径**在当前仓库中已不存在**，其 `git add`、`--tests`、`connectedDebugAndroidTest` 命令均无法直接执行：
+> - `app/src/test/java/com/example/skip/SafetyAndLogUnitTest.kt`
+> - `app/src/androidTest/java/com/example/skip/GeminiRegressionInstrumentedTest.kt`
+> - `app/src/debug/java/com/example/skip/ScannerFixtureActivity.kt`
+>
+> 当前仓库没有任何测试源集。本文档保留为历史实施记录；若要按其步骤复跑验证，需先恢复测试资产。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在保持安全策略的前提下，让默认规则能点击启动八秒内右上角的小型纯“跳过 / skip”控件，并提高父容器点击与坐标兜底的节点解析一致性。

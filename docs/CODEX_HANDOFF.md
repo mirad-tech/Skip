@@ -2,13 +2,13 @@
 
 > 生成时间：2026-07-12 16:16（Asia/Shanghai）  
 > 主仓库：`S:\Android\AndroidStudioProjects\Skip`  
-> 当前功能工作树：`S:\Android\AndroidStudioProjects\Skip\.worktrees\safe-skip-candidate-resolution`
+> 当前状态：功能分支 `codex/safe-skip-candidate-resolution` 已合并，1.0.17 已发布；本文档部分章节停留在 2026-07-12 的会话状态，正文已标注需重新核实的事实。
 
 ## 0. 接手结论
 
-当前工作不是从 `main` 直接继续开发。受限“纯跳过 / skip”功能及三项 P1 安全加固已经提交在独立分支 `codex/safe-skip-candidate-resolution`，但尚未完成设备仪器测试、文档同步和合并。
+纯“跳过 / skip”功能及三项 P1 安全加固已经通过 `merge codex/safe-skip-candidate-resolution: Fast-forward` 合入主线（见 `.git/logs/HEAD`），1.0.10 至 1.0.17 均已基于该主线发布。因此本文档第 0/2 节描述的“尚未合并”状态已过期，保留仅作历史参考。
 
-最重要的合并门槛是：连接 Android 设备或启动模拟器，运行 `GeminiRegressionInstrumentedTest`。当前 `adb devices -l` 没有列出设备，因此不得把功能分支合并到 `main`，也不得声称真实无障碍树验证完成。
+仍然成立的部分：设备仪器测试从未执行过。`RELEASE_TEST_MATRIX.md` 全表为“未测”，`RELEASE_NOTES.md` 多处以“本机无连接设备，未执行真机测试”为前提，因此不得声称真实无障碍树验证完成。
 
 ## 1. 项目简介与技术栈
 
@@ -18,12 +18,12 @@ Skip 是本地运行的 Android 开屏页面辅助工具。用户主动开启无
 
 - 单模块 Android 应用：`:app`。
 - 包名/namespace：`com.example.skip`。
-- 当前版本：`1.0.9`，`versionCode=17`。
+- 当前版本：`1.0.17`，`versionCode=25`（`app/build.gradle.kts` 为版本事实来源）。
 - Kotlin `2.2.10`，Jetpack Compose、Material 3。
 - Android Gradle Plugin `9.2.0`，Gradle Wrapper `9.4.1`。
 - `compileSdk=36.1`、`targetSdk=36`、`minSdk=28`。
 - Java/Kotlin 编译目标：Java 11；Gradle daemon toolchain 配置为 JDK 21。
-- 测试：JUnit 4、AndroidX Test、Espresso、Compose UI Test。
+- 仓库当前**没有任何测试源集**：`app/src/test`、`app/src/androidTest` 均不存在，`app/build.gradle.kts` 也没有测试依赖。文档后续提到的 `SafetyAndLogUnitTest`、`GeminiRegressionInstrumentedTest` 等类只存在于 `app/build/test-results/**` 与 `app/build/reports/tests/**` 的历史产物中，源码已不在仓库内；执行 `:app:testDebugUnitTest` 只会是 NO-SOURCE 空跑。
 - 数据主要保存在本地 SharedPreferences/JSON；项目没有后端、数据库服务或生产部署链路。
 - 无障碍服务声明见 `app/src/main/AndroidManifest.xml` 和 `app/src/main/res/xml/accessibility_service_config.xml`，允许读取窗口内容、报告 View ID 和执行手势。
 
@@ -219,15 +219,16 @@ MatchResult
 - Gradle daemon toolchain：JDK 21，由 `gradle/gradle-daemon-jvm.properties` 指定。
 - Android SDK：`S:\Android\Sdk`（`local.properties` 中以 Java Properties 转义形式保存）。
 - ADB：`1.0.41`，platform-tools `37.0.0-14910828`。
-- `keystore.properties` 当前不存在；Debug 构建不受影响，Release 构建会因缺少签名属性失败。
-- 当前没有物理 `AGENTS.md` 文件；新 Session 如收到注入式项目指令，应优先遵守注入内容。
+- `keystore.properties` 与 `release.keystore` 当前都存在，且都被 `.gitignore` 排除、未被 Git 跟踪。Release 构建所需的四个签名属性已配置，可直接执行 `:app:assembleRelease`。
+- 仓库根目录存在实体 `AGENT.md`（本次改动引入的工程规范）与 `AGENTS.md`；`AGENT.md`、`AGENTS.md`、`CLAUDE.md` 都被 `.gitignore` 排除，因此对其他协作者与 CI 不可见。
+- 本文档 `docs/CODEX_HANDOFF.md` 已被 Git 跟踪（存储在 `.git` 索引中），与之相矛盾的自述“未跟踪”已删除；如需最终确认请在仓库根目录执行 `git ls-files docs/CODEX_HANDOFF.md`。
 
 ### 推荐工作目录
 
-继续功能时必须进入功能工作树：
+`.worktrees/` 已不存在，功能分支也已合并，直接在主仓库工作：
 
 ```powershell
-Set-Location -LiteralPath 'S:\Android\AndroidStudioProjects\Skip\.worktrees\safe-skip-candidate-resolution'
+Set-Location -LiteralPath 'S:\Android\AndroidStudioProjects\Skip'
 git status --short
 git branch --show-current
 ```

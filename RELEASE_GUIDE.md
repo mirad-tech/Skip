@@ -109,6 +109,9 @@ app/build/outputs/apk/release/app-release.apk
    .\tools\verify-release.ps1 -Version <version> -VersionCode <code> -Sha256 <sha256> -AllowDirty
    ```
 
+   > 请使用 PowerShell 7（`pwsh`）执行。脚本也可在 Windows PowerShell 5.1 下运行（已带 UTF-8 BOM 并避开仅 .NET Core 提供的重载），但本地与 CI 统一用 `pwsh` 可避免编码与重载差异。
+   > 失败时脚本以退出码 1 结束；成功为 0。
+
 7. 精确暂存本次发布文件，运行 `git diff --cached --check`，提交后直接执行 `git push origin main`。
 8. 在已推送的 `main` 提交上创建并推送 annotated tag：
 

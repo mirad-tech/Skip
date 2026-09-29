@@ -14,12 +14,18 @@
 ## 诊断包包含什么
 
 - `schemaVersion`、`exportTime`、`skipVersion`：用于确认导出格式、导出时间和 App 版本。
+- `privacy`：本次导出的脱敏声明（是否脱敏、范围、是否包含元数据）。
 - `device`：品牌、厂商、型号、Android 版本、SDK、ROM 类型。
 - `runtimeState`：总开关、安全模式、调试日志、披露同意、无障碍服务状态、服务连接/活跃/中断时间、最近失败原因。
+- `logStorage`：日志存储状态（是否降级、待写入条数、被丢弃条数、最近错误码）。
 - `rulesSnapshot`：当前规则、规则包、应用策略、默认规则模板、默认关键词、View ID 关键词、坐标兜底状态。
 - `clickLogs`：脱敏后的点击日志，包含阶段、失败原因、候选数量、分数、时间窗、坐标兜底、阻止原因，以及 `ruleKind`、`planScope`、`effectiveRuleWindowMs`、`candidateRelocated`、`relocationMethod` 等字段。
 - `ruleLogs`：规则创建、导入、失败记录。
 - `diagnosticSummary`：本地聚合后的常见原因计数。
+
+## 脱敏范围（重要）
+
+诊断包只对**文本内容**脱敏，**元数据会被保留**：包名、Activity 名称、View ID、控件类名、Bounds 都会按原样导出，因为排查未命中/误命中必须依赖这些信息。诊断包内的 `privacy` 节点会明确记录 `redacted`、`textRedacted`、`metadataIncluded` 与 `redactionScope` 的取值，导出前请先确认这一点。
 
 ## 我会重点看哪些字段
 
