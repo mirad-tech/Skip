@@ -20,6 +20,7 @@ import com.example.skip.engine.NodeTraversalResult
 import com.example.skip.engine.PreciseRulePolicy
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
+import com.example.skip.engine.ScanMissClassifier
 import com.example.skip.engine.ScoreEvaluator
 import com.example.skip.model.ClickLogStage
 import com.example.skip.model.ClickTargetSourceLog
@@ -61,6 +62,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastTreeWalkElapsedRealtime = 0L
     private var lastEffectiveRuleWindowMs = PreciseRulePolicy.MAX_WINDOW_MS
     private var loggedTimeWindowExpiryKey: String? = null
+    private var loggedAutomationPaused = false
 
     internal val foregroundPackage: String?
         get() = foregroundState.currentForegroundPackage
@@ -123,8 +125,28 @@ class SkipAccessibilityService : AccessibilityService() {
             pendingClickCoordinator.clear()
             terminateOpeningAdRecovery()
             SettingsRepository.setLastFailureReason(this, "automation_paused", forcePersist = true)
+            // Log once per pause so diagnostics can show why nothing was processed, without
+            // paying for an event-context build on every event while the master switch is off.
+            if (!loggedAutomationPaused) {
+                loggedAutomationPaused = true
+                eventLogger.logEvent(
+                    stage = ClickLogStage.SkippedByDisabledSetting,
+                    eventContext = buildEventContext(
+                        eventType = event.eventType,
+                        eventPackageName = event.packageName?.toString().orEmpty(),
+                        packageName = "",
+                        activityName = "",
+                        windowId = event.windowId,
+                        root = null,
+                        now = now,
+                        defaultRuleWindowMs = RuleRepository.DEFAULT_RULE_WINDOW_MS
+                    ),
+                    failureReason = "automation_paused"
+                )
+            }
             return
         }
+        loggedAutomationPaused = false
 
         val eventPackageName = event.packageName?.toString().orEmpty()
         val rootSelection = windowResolver.selectRootForEvent(eventPackageName)
@@ -218,6 +240,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         if (SafetyGuard.isSelfPackage(this, currentPackage)) {
+            markTreeWorkIfContentRead(event.eventType)
             eventLogger.logEvent(
                 stage = ClickLogStage.SkippedSelfPackage,
                 eventContext = eventContext,
@@ -228,6 +251,7 @@ class SkipAccessibilityService : AccessibilityService() {
 
         if (SafetyGuard.isProtectedPackage(currentPackage)) {
             val ownLabelOnLauncher = root?.containsOwnAppLabel(currentPackage) == true
+            markTreeWorkIfContentRead(event.eventType)
             val blockedReason = if (ownLabelOnLauncher) {
                 "own_app_label_on_launcher"
             } else {
@@ -311,6 +335,11 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         if (rules.isEmpty()) {
+            eventLogger.logEvent(
+                stage = ClickLogStage.NoCandidateFound,
+                eventContext = eventContext,
+                failureReason = "no_enabled_rules"
+            )
             SettingsRepository.setLastFailureReason(this, "no_enabled_rules")
             terminateOpeningAdRecovery()
             return
@@ -565,6 +594,24 @@ class SkipAccessibilityService : AccessibilityService() {
         lastTreeWalkElapsedRealtime = SystemClock.elapsedRealtime()
     }
 
+    /**
+     * Advances the content-scan throttle for the branches that return before the node scan.
+     *
+     * Without this, `lastTreeWalkElapsedRealtime` stays at 0 while a launcher (or Skip itself) is in
+     * the foreground, so `AccessibilityEventWorkPolicy` can never throttle
+     * `TYPE_WINDOW_CONTENT_CHANGED`. The protected-package branch then pays for the bounded
+     * `containsOwnAppLabel` tree walk on every single content event. (The self-package branch reads
+     * no tree; it marks for symmetry so a future tree read there cannot reintroduce the same bug.)
+     *
+     * Known, accepted trade-off: the throttle timestamp is global and is consulted before the
+     * package is resolved, so up to 300 ms of content events from *any* package are dropped after
+     * one of these branches runs. That window is bounded and a foreground transition normally
+     * arrives as `TYPE_WINDOW_STATE_CHANGED`, which is never throttled and clears the mark.
+     */
+    private fun markTreeWorkIfContentRead(eventType: Int) {
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) markTreeWalk()
+    }
+
     private fun postAccessibilityTask(action: () -> Unit, delayMs: Long) {
         mainHandler.postDelayed(
             { AccessibilityNodeAccess.withCacheBoundary(this, action) },
@@ -589,7 +636,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         val key = "$packageName:${foregroundState.foregroundStartTimeMillis}"
         if (!OpeningAdRecoveryGate.canRun(
-                masterEnabled = SettingsRepository.isMasterEnabled(this),
+                masterEnabled = isOpeningAdRecoveryAllowed(),
                 sessionKey = key,
                 terminalSessionKey = openingAdRecoveryState.terminalSessionKey
             )
@@ -626,7 +673,7 @@ class SkipAccessibilityService : AccessibilityService() {
         expectedActivityName: String
     ) {
         if (!OpeningAdRecoveryGate.canRun(
-                masterEnabled = SettingsRepository.isMasterEnabled(this),
+                masterEnabled = isOpeningAdRecoveryAllowed(),
                 sessionKey = key,
                 terminalSessionKey = openingAdRecoveryState.terminalSessionKey
             )
@@ -810,7 +857,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val foregroundStartTimeMillis = baseEventContext.foregroundStartTimeMillis ?: return null
         val sessionKey = "$packageName:$foregroundStartTimeMillis"
         if (!OpeningAdRecoveryGate.canRun(
-                masterEnabled = SettingsRepository.isMasterEnabled(this),
+                masterEnabled = isOpeningAdRecoveryAllowed(),
                 sessionKey = sessionKey,
                 terminalSessionKey = openingAdRecoveryState.terminalSessionKey
             )
@@ -865,7 +912,7 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun runOpeningAdRetry(request: OpeningAdRetryRequest) {
         if (!OpeningAdRecoveryGate.canRun(
-                masterEnabled = SettingsRepository.isMasterEnabled(this),
+                masterEnabled = isOpeningAdRecoveryAllowed(),
                 sessionKey = request.sessionKey,
                 terminalSessionKey = openingAdRecoveryState.terminalSessionKey
             )
@@ -1075,6 +1122,16 @@ class SkipAccessibilityService : AccessibilityService() {
 
     internal fun cancelScheduledOpeningAdRetry() {
         openingAdRecoveryState.cancelScheduledRetry()
+    }
+
+    /**
+     * Recovery work (rescans and retries) must stop as soon as automation is no longer allowed
+     * to click. Safety mode is a hard stop for clicking, so a scheduled retry must not resurrect
+     * a click that the user just downgraded to observe-only.
+     */
+    internal fun isOpeningAdRecoveryAllowed(): Boolean {
+        return SettingsRepository.isMasterEnabled(this) &&
+            !SettingsRepository.isSafetyModeEnabled(this)
     }
 
     private fun cancelOpeningAdRecovery(resetRetrySession: Boolean = false) {
@@ -1304,16 +1361,7 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun scanMissStage(scan: ScanReport): ClickLogStage {
-        return when {
-            scan.failureReason == HighRiskClickPolicy.BLOCKED_REASON -> ClickLogStage.SkippedBySafety
-            scan.failureReason == "text_input_clear_button" -> ClickLogStage.SkippedBySafety
-            scan.failureReason == "activity_scope_mismatch" -> ClickLogStage.SkippedBySafety
-            scan.failureReason == ScoreEvaluator.GENERIC_CLOSE_BLOCKED_REASON -> ClickLogStage.SkippedBySafety
-            scan.candidateCount == 0 -> ClickLogStage.NoCandidateFound
-            scan.failureReason == "score_below_min_score" ||
-                scan.failureReason == "candidate_below_threshold" -> ClickLogStage.SkippedByLowScore
-            else -> ClickLogStage.SkippedBySafety
-        }
+        return ScanMissClassifier.classify(scan.failureReason, scan.candidateCount)
     }
 
     private fun logMatch(
