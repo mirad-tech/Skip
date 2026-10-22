@@ -58,7 +58,7 @@ internal object ClickActionPathSafetyPolicy {
 }
 
 internal object DefaultStandaloneSkipPolicy {
-    const val MAX_ELAPSED_MS = 8_000L
+    const val MAX_ELAPSED_MS = OpeningAdWindowPolicy.MAX_WINDOW_MS
     const val MAX_CANDIDATE_AREA_RATIO = 0.02f
     private const val MAX_ACTION_PARENT_DEPTH = 2
 
@@ -74,7 +74,7 @@ internal object DefaultStandaloneSkipPolicy {
     fun evaluate(context: DefaultStandaloneSkipContext): DefaultStandaloneSkipDecision {
         if (!isStandaloneSkipLabel(context.candidate.text, context.candidate.contentDescription)) return DefaultStandaloneSkipDecision(false, "standalone_skip_label_not_exact")
         if (context.ruleSource != RuleSource.BuiltIn) return DefaultStandaloneSkipDecision(false, "standalone_skip_rule_source_forbidden")
-        if (context.appElapsedMs > MAX_ELAPSED_MS) return DefaultStandaloneSkipDecision(false, "standalone_skip_window_expired")
+        if (context.appElapsedMs >= MAX_ELAPSED_MS) return DefaultStandaloneSkipDecision(false, "standalone_skip_window_expired")
         if (context.area != RuleArea.TopRight) return DefaultStandaloneSkipDecision(false, "standalone_skip_not_top_right")
         if (!context.candidateAreaRatio.isFinite() || context.candidateAreaRatio <= 0f || context.candidateAreaRatio > MAX_CANDIDATE_AREA_RATIO) return DefaultStandaloneSkipDecision(false, "standalone_skip_candidate_too_large")
         if (context.actionPath.parentDepth > MAX_ACTION_PARENT_DEPTH) return DefaultStandaloneSkipDecision(false, "standalone_skip_no_safe_action_path")

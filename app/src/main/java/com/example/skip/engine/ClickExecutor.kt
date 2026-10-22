@@ -113,8 +113,11 @@ object ClickExecutor {
         return node.isSafeClickTarget(defaultRule = false)
     }
 
-    fun click(node: AccessibilityNodeInfo): ClickAttempt {
+    fun click(node: AccessibilityNodeInfo, canDispatch: () -> Boolean): ClickAttempt {
         val target = describeTarget(node)
+        if (!canDispatch()) {
+            return ClickAttempt(ClickMethodLog.ActionClick, false, target, "dispatch_guard_blocked")
+        }
         val accepted = runCatching {
             node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }.getOrDefault(false)
@@ -130,6 +133,7 @@ object ClickExecutor {
         service: AccessibilityService,
         target: ClickTargetInfo,
         allowLargeBounds: Boolean = false,
+        canDispatch: () -> Boolean,
         onResult: (ClickAttempt) -> Unit
     ): Boolean {
         if (!target.canUseGestureFallback(allowLargeBounds)) {
@@ -152,6 +156,7 @@ object ClickExecutor {
             completedReason = "gesture_completed",
             cancelledReason = "gesture_cancelled",
             rejectedReason = "gesture_dispatch_returned_false",
+            canDispatch = canDispatch,
             onResult = onResult
         )
     }
@@ -161,6 +166,7 @@ object ClickExecutor {
         target: ClickTargetInfo,
         x: Int,
         y: Int,
+        canDispatch: () -> Boolean,
         onResult: (ClickAttempt) -> Unit
     ): Boolean {
         val blockReason = coordinateFallbackGestureTargetBlockReason(target)
@@ -199,6 +205,7 @@ object ClickExecutor {
             completedReason = "coordinate_fallback_completed",
             cancelledReason = "coordinate_fallback_cancelled",
             rejectedReason = "coordinate_fallback_dispatch_returned_false",
+            canDispatch = canDispatch,
             onResult = onResult
         )
     }
@@ -211,6 +218,7 @@ object ClickExecutor {
         completedReason: String,
         cancelledReason: String,
         rejectedReason: String,
+        canDispatch: () -> Boolean,
         onResult: (ClickAttempt) -> Unit
     ): Boolean {
         fun report(accepted: Boolean, reason: String) {
@@ -228,6 +236,10 @@ object ClickExecutor {
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0L, 80L))
             .build()
+        if (!canDispatch()) {
+            report(false, "dispatch_guard_blocked")
+            return false
+        }
         val accepted = service.dispatchGesture(
             gesture,
             object : AccessibilityService.GestureResultCallback() {

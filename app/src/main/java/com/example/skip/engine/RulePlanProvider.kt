@@ -65,7 +65,7 @@ object RulePlanProvider {
                 scope = "precise_takeover",
                 skipStage = null,
                 failureReason = "",
-                effectiveWindowMs = preciseRules.maxOf { it.validDurationMs },
+                effectiveWindowMs = OpeningAdWindowPolicy.effectiveWindowMs(preciseRules.maxOf { it.validDurationMs }),
                 builtInPreciseRules = preciseRules.filter { it.source == RuleSource.BuiltIn }
             )
         }
@@ -96,7 +96,7 @@ object RulePlanProvider {
             },
             skipStage = null,
             failureReason = "",
-            effectiveWindowMs = 8_000L
+            effectiveWindowMs = OpeningAdWindowPolicy.MAX_WINDOW_MS
         )
     }
 
@@ -127,6 +127,6 @@ data class RulePlan(
     val scope: String,
     val skipStage: ClickLogStage?,
     val failureReason: String,
-    val effectiveWindowMs: Long = 8_000L,
+    val effectiveWindowMs: Long = OpeningAdWindowPolicy.MAX_WINDOW_MS,
     val builtInPreciseRules: List<SkipRule> = emptyList()
 )

@@ -64,7 +64,12 @@ fun AboutScreen(
                 if (!UpdateDownloadVerifier.verifySha256OrDelete(file, release.apkAsset.digestSha256)) {
                     error(UpdateDownloadVerifier.failureMessageFor(release.apkAsset.digestSha256))
                 }
-                when (val validation = ApkUpdateInstaller.validateDownloadedApk(context, file, versionCode)) {
+                when (val validation = ApkUpdateInstaller.validateDownloadedApk(
+                    context = context,
+                    file = file,
+                    currentVersionCode = versionCode,
+                    expectedVersionName = release.versionName
+                )) {
                     ApkValidationResult.Valid -> file
                     is ApkValidationResult.Invalid -> error(validation.message)
                 }

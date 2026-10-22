@@ -85,7 +85,7 @@ fun RuleListScreen(
     ) {
         item {
             Text(
-                text = "默认和自定义规则默认都会限制在应用前台后的前 8 秒内生效。",
+                text = "所有规则最多在应用进入前台后的前 6 秒生效，成功跳过一次即停止。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

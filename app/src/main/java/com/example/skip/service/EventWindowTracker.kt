@@ -1,11 +1,31 @@
 package com.example.skip.service
 
 import com.example.skip.engine.SafetyGuard
+import com.example.skip.engine.OpeningAdWindowPolicy
 
 internal data class ForegroundWindowState(
     val currentForegroundPackage: String? = null,
     val foregroundStartTimeMillis: Long = 0L,
-    val observedExternalWindow: Boolean = false
+    val foregroundStartElapsedRealtimeMs: Long? = null,
+    val sessionId: Long = 0L,
+    val initialized: Boolean = false,
+    val isForegroundVisible: Boolean = false,
+    val detectionFinished: Boolean = true
+) {
+    val sessionKey: String?
+        get() = if (foregroundStartElapsedRealtimeMs != null && !currentForegroundPackage.isNullOrBlank()) {
+            "$currentForegroundPackage:$sessionId"
+        } else null
+
+    fun elapsedSinceStart(nowElapsedRealtimeMs: Long): Long? =
+        foregroundStartElapsedRealtimeMs?.let { (nowElapsedRealtimeMs - it).coerceAtLeast(0L) }
+}
+
+internal enum class ForegroundWindowKind { Application, Navigation, Transient, Unknown }
+
+internal data class ForegroundObservation(
+    val kind: ForegroundWindowKind,
+    val packageName: String = ""
 )
 
 internal data class TrustedPackageResolution(
@@ -19,7 +39,9 @@ internal data class DefaultRuleWindowSnapshot(
     val elapsedSinceForegroundMs: Long? = null,
     val defaultRuleWindowMs: Long,
     val isWithinDefaultRuleWindow: Boolean,
-    val timeWindowDecision: String
+    val timeWindowDecision: String,
+    val sessionKey: String? = null,
+    val foregroundStartElapsedRealtimeMs: Long? = null
 )
 
 internal object EventWindowTracker {
@@ -44,89 +66,85 @@ internal object EventWindowTracker {
 
     fun updateForegroundWindow(
         state: ForegroundWindowState,
-        resolvedPackageName: String,
+        observation: ForegroundObservation,
         now: Long,
-        selfPackageName: String,
-        windowStateChanged: Boolean
+        nowElapsedRealtimeMs: Long,
+        windowStateChanged: Boolean,
+        masterEnabled: Boolean = true,
+        masterStateChanged: Boolean = false
     ): ForegroundWindowState {
-        val packageName = resolvedPackageName.trim()
-        if (packageName.isBlank()) return state
-        if (packageName == selfPackageName || SafetyGuard.isProtectedPackage(packageName)) {
-            return if (windowStateChanged && state.currentForegroundPackage != null) {
-                state.copy(observedExternalWindow = true)
-            } else {
-                state
-            }
+        // End the old cycle without forgetting the app we are switching away from.
+        val previous = if (masterStateChanged || !masterEnabled) {
+            state.copy(detectionFinished = true)
+        } else state
+        val packageName = observation.packageName.trim()
+        if (observation.kind == ForegroundWindowKind.Unknown ||
+            observation.kind == ForegroundWindowKind.Transient || packageName.isBlank()
+        ) {
+            return previous.copy(isForegroundVisible = false)
         }
-        if (packageName == state.currentForegroundPackage) {
-            return if (windowStateChanged && state.observedExternalWindow) {
-                state.copy(
-                    foregroundStartTimeMillis = now,
-                    observedExternalWindow = false
-                )
-            } else {
-                state
-            }
+        val applicationVisible = observation.kind == ForegroundWindowKind.Application
+        if (previous.initialized && packageName == previous.currentForegroundPackage) {
+            return previous.copy(isForegroundVisible = applicationVisible)
         }
+        // Content changes and click callbacks can suspend a cycle, but never open a new one.
+        if (previous.initialized && !windowStateChanged) {
+            return previous.copy(isForegroundVisible = false)
+        }
+        val startDetection = masterEnabled && previous.initialized && windowStateChanged && applicationVisible
         return ForegroundWindowState(
             currentForegroundPackage = packageName,
-            foregroundStartTimeMillis = now,
-            observedExternalWindow = false
+            foregroundStartTimeMillis = if (startDetection) now else 0L,
+            foregroundStartElapsedRealtimeMs = if (startDetection) nowElapsedRealtimeMs else null,
+            sessionId = previous.sessionId + 1L,
+            initialized = true,
+            isForegroundVisible = applicationVisible,
+            detectionFinished = !startDetection
         )
     }
+
+    fun finishSession(state: ForegroundWindowState, sessionKey: String?): ForegroundWindowState =
+        if (sessionKey != null && state.sessionKey == sessionKey) state.copy(detectionFinished = true) else state
+
+    fun isSessionOpen(
+        state: ForegroundWindowState,
+        sessionKey: String?,
+        packageName: String,
+        nowElapsedRealtimeMs: Long,
+        windowMs: Long
+    ): Boolean = sessionKey != null && sessionKey == state.sessionKey &&
+        snapshot(state, packageName, nowElapsedRealtimeMs, windowMs).isWithinDefaultRuleWindow
 
     fun snapshot(
         state: ForegroundWindowState,
         activePackageName: String,
-        now: Long,
+        nowElapsedRealtimeMs: Long,
         defaultRuleWindowMs: Long
     ): DefaultRuleWindowSnapshot {
         val activePackage = activePackageName.trim()
         val foregroundPackage = state.currentForegroundPackage.orEmpty()
         val startTime = state.foregroundStartTimeMillis
-        val elapsed = if (startTime > 0L) (now - startTime).coerceAtLeast(0L) else null
-
-        if (activePackage.isBlank() || foregroundPackage.isBlank() || startTime <= 0L) {
-            return DefaultRuleWindowSnapshot(
-                foregroundPackage = foregroundPackage,
-                foregroundStartTimeMillis = startTime,
-                elapsedSinceForegroundMs = elapsed,
-                defaultRuleWindowMs = defaultRuleWindowMs,
-                isWithinDefaultRuleWindow = false,
-                timeWindowDecision = "not_started"
-            )
+        val elapsed = state.elapsedSinceStart(nowElapsedRealtimeMs)
+        val effectiveWindowMs = OpeningAdWindowPolicy.effectiveWindowMs(defaultRuleWindowMs)
+        val decision = when {
+            activePackage.isBlank() || foregroundPackage.isBlank() || elapsed == null -> "not_started"
+            SafetyGuard.isProtectedPackage(activePackage) -> "ignored_system_package"
+            activePackage != foregroundPackage || !state.isForegroundVisible -> "not_foreground"
+            state.detectionFinished -> "finished"
+            !OpeningAdWindowPolicy.isWithinWindow(
+                state.foregroundStartElapsedRealtimeMs, nowElapsedRealtimeMs, effectiveWindowMs
+            ) -> "expired"
+            else -> "within_window"
         }
-
-        if (SafetyGuard.isProtectedPackage(activePackage)) {
-            return DefaultRuleWindowSnapshot(
-                foregroundPackage = foregroundPackage,
-                foregroundStartTimeMillis = startTime,
-                elapsedSinceForegroundMs = elapsed,
-                defaultRuleWindowMs = defaultRuleWindowMs,
-                isWithinDefaultRuleWindow = false,
-                timeWindowDecision = "ignored_system_package"
-            )
-        }
-
-        if (activePackage != foregroundPackage || elapsed == null) {
-            return DefaultRuleWindowSnapshot(
-                foregroundPackage = foregroundPackage,
-                foregroundStartTimeMillis = startTime,
-                elapsedSinceForegroundMs = elapsed,
-                defaultRuleWindowMs = defaultRuleWindowMs,
-                isWithinDefaultRuleWindow = false,
-                timeWindowDecision = "not_started"
-            )
-        }
-
-        val withinWindow = elapsed <= defaultRuleWindowMs
         return DefaultRuleWindowSnapshot(
             foregroundPackage = foregroundPackage,
             foregroundStartTimeMillis = startTime,
             elapsedSinceForegroundMs = elapsed,
-            defaultRuleWindowMs = defaultRuleWindowMs,
-            isWithinDefaultRuleWindow = withinWindow,
-            timeWindowDecision = if (withinWindow) "within_window" else "expired"
+            defaultRuleWindowMs = effectiveWindowMs,
+            isWithinDefaultRuleWindow = decision == "within_window",
+            timeWindowDecision = decision,
+            sessionKey = state.sessionKey,
+            foregroundStartElapsedRealtimeMs = state.foregroundStartElapsedRealtimeMs
         )
     }
 }

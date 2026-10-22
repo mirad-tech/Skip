@@ -14,13 +14,13 @@ internal object OpeningAdRescanPolicy {
     }
 
     fun remainingDelaysMs(
-        foregroundStartTimeMillis: Long,
-        nowMillis: Long,
+        foregroundStartElapsedRealtimeMs: Long,
+        nowElapsedRealtimeMs: Long,
         ruleWindowMs: Long
     ): List<Long> {
-        if (foregroundStartTimeMillis <= 0L) return emptyList()
+        if (foregroundStartElapsedRealtimeMs < 0L) return emptyList()
         return absoluteOffsetsMs(ruleWindowMs)
-            .map { offset -> foregroundStartTimeMillis + offset - nowMillis }
+            .map { offset -> foregroundStartElapsedRealtimeMs + offset - nowElapsedRealtimeMs }
             .filter { delay -> delay > 0L }
     }
 

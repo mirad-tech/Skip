@@ -28,7 +28,7 @@ fun RuleFormatScreen(onBack: () -> Unit) {
     SimpleScreenScaffold(title = "规则格式说明", onBack = onBack) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
-                text = "导入规则默认也只在应用打开后的前 8 秒生效。",
+                text = "导入规则最多在应用打开后的前 6 秒生效，成功跳过一次即停止。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -39,7 +39,7 @@ fun RuleFormatScreen(onBack: () -> Unit) {
             )
             InfoCard(
                 title = "按应用策略",
-                body = "appPolicies 可导入 defaultRuleEnabled 和 customRulesEnabled；apps[].enabled 当前不生效。Skip 自身和受保护应用不会执行规则。"
+                body = "尚未配置的应用使用导入策略；已有策略只更新 defaultRuleEnabled，customRulesEnabled 和黑名单来源保留本地。apps[].enabled 不生效。Skip 自身和受保护应用不会执行规则。"
             )
             InfoCard(
                 title = "area 支持",

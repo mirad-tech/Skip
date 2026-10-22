@@ -14,12 +14,18 @@ internal object UpdateReleaseParser {
             ?.mapNotNull { it as? SimpleJsonObject }
             ?.mapNotNull(::toAsset)
             .orEmpty()
-        // The asset name must stay recognisable but must not be tied to one exact spelling:
-        // requiring `Skip-<tag>-release.apk` made the updater fail permanently as soon as a release
-        // published both the tag-based and the version-based file name.
-        val trustedAssets = assets.filter { it.name.isTrustedReleaseAssetName() }
+        // Prefer the release tag's filename. The normalized version name is a compatibility
+        // fallback only when that filename is absent, never when its metadata is invalid.
+        val preferredNames = listOf(
+            "Skip-$tagName-release.apk",
+            "Skip-$versionName-release.apk"
+        ).distinctBy { it.lowercase() }
+        val trustedAssets = preferredNames.asSequence()
+            .map { name -> assets.filter { it.name.equals(name, ignoreCase = true) } }
+            .firstOrNull { it.isNotEmpty() }
+            .orEmpty()
         if (trustedAssets.size != 1) {
-            error("更新信息中没有唯一可信的发布 APK 资产")
+            error("更新信息中没有唯一匹配当前版本的发布 APK 资产")
         }
         val apkAsset = trustedAssets.single().toUpdateAsset()
 
@@ -35,7 +41,7 @@ internal object UpdateReleaseParser {
     private fun toAsset(assetJson: SimpleJsonObject): ReleaseAssetCandidate? {
         val name = assetJson.optString("name").trim()
         val url = assetJson.optString("browser_download_url").trim()
-        if (name.isBlank() || url.isBlank()) return null
+        if (name.isBlank()) return null
         return ReleaseAssetCandidate(
             name = name,
             size = assetJson.optLong("size", 0L),
@@ -44,12 +50,8 @@ internal object UpdateReleaseParser {
         )
     }
 
-    private fun String.isTrustedReleaseAssetName(): Boolean {
-        val lower = lowercase()
-        return lower.startsWith("skip-") && lower.endsWith("-release.apk")
-    }
-
     private fun ReleaseAssetCandidate.toUpdateAsset(): UpdateAsset {
+        require(browserDownloadUrl.isNotBlank()) { "更新 APK 下载地址缺失" }
         return UpdateAsset(
             name = name,
             size = size,

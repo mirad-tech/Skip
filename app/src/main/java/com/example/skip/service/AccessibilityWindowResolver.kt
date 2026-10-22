@@ -10,6 +10,24 @@ internal class AccessibilityWindowResolver(
     private val activeRootProvider: () -> AccessibilityNodeInfo?,
     private val interactiveWindowsProvider: () -> List<AccessibilityWindowInfo>
 ) {
+    fun observeForeground(
+        eventPackageName: String = "",
+        eventClassName: String = "",
+        eventWindowId: Int = -1
+    ): ForegroundObservation {
+        val focusedWindow = runCatching { interactiveWindowsProvider() }.getOrNull()
+            .orEmpty().filter { it.isFocused }.maxByOrNull { it.layer }
+            ?: return ForegroundObservation(ForegroundWindowKind.Unknown)
+        val root = AccessibilityNodeAccess.root(focusedWindow)
+        val focusedPackage = root?.packageName?.toString().orEmpty().ifBlank {
+            if (focusedWindow.id == eventWindowId) eventPackageName else ""
+        }
+        val className = if (focusedPackage == eventPackageName && focusedWindow.id == eventWindowId) {
+            eventClassName
+        } else root?.className?.toString().orEmpty()
+        return ForegroundWindowClassifier.classify(focusedPackage, focusedWindow.type, className)
+    }
+
     fun selectRootForEvent(eventPackageName: String): RootSelection {
         return selectRoot(
             preferredPackageName = eventPackageName,

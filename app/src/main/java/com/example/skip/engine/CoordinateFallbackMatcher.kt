@@ -51,7 +51,7 @@ object CoordinateFallbackMatcher {
         ) {
             return CoordinateFallbackDecision.blocked("coordinate_fallback_window_required")
         }
-        if (elapsedSinceForegroundMs > rule.validDurationMs) {
+        if (elapsedSinceForegroundMs >= OpeningAdWindowPolicy.effectiveWindowMs(rule.validDurationMs)) {
             return CoordinateFallbackDecision.blocked("coordinate_fallback_window_expired")
         }
         if (rule.cooldownMs < MIN_COORDINATE_FALLBACK_COOLDOWN_MS) {

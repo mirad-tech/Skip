@@ -107,7 +107,7 @@ fun MoreHubScreen(
                         }
                     )
                     Text(
-                        text = "为减少误触，Skip 默认只在应用打开后的前 8 秒工作，使用应用过程中不会自动点击弹窗。",
+                        text = "Skip 只在应用打开或切回后的前 6 秒工作，成功跳过一次即停止检测。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

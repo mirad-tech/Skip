@@ -130,8 +130,10 @@ internal object DelayedClickSafetyCheck {
         currentPackageName: String?,
         selfPackageName: String,
         foregroundPackageName: String,
-        foregroundStartTimeMillis: Long,
-        now: Long,
+        elapsedSinceForegroundMs: Long?,
+        pendingSessionKey: String?,
+        currentSessionKey: String?,
+        isSessionOpen: Boolean,
         defaultRuleWindowMs: Long,
         rootWindowNull: Boolean,
         activeTextInput: Boolean = false
@@ -197,8 +199,18 @@ internal object DelayedClickSafetyCheck {
                 detail = detail
             )
         }
-        val elapsed = (now - foregroundStartTimeMillis).coerceAtLeast(0L)
-        if (foregroundStartTimeMillis <= 0L || elapsed > defaultRuleWindowMs) {
+        if (pendingSessionKey == null || pendingSessionKey != currentSessionKey) {
+            return DelayedClickSafetyResult(
+                allowed = false,
+                stage = ClickLogStage.ClickCancelledPackageChanged,
+                reason = "opening_ad_session_changed",
+                detail = detail
+            )
+        }
+        val elapsed = elapsedSinceForegroundMs
+        if (!isSessionOpen || elapsed == null || elapsed < 0L ||
+            elapsed >= com.example.skip.engine.OpeningAdWindowPolicy.effectiveWindowMs(defaultRuleWindowMs)
+        ) {
             return DelayedClickSafetyResult(
                 allowed = false,
                 stage = ClickLogStage.ClickCancelledTimeWindowExpired,

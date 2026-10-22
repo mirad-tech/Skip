@@ -25,7 +25,7 @@
           "action": "click",
           "priority": 300,
           "cooldownMs": 1500,
-          "validDurationMs": 15000,
+          "validDurationMs": 6000,
           "minScore": 70,
           "coordinateFallback": {
             "enabled": false,

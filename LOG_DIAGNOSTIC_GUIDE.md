@@ -44,12 +44,12 @@
 
 ## 纯“跳过 / skip”诊断
 
-默认规则只会对精确的纯“跳过 / skip”候选放宽匹配，并且仍要求位于右上区域、前台八秒内、候选足够小且存在安全可点击路径。出现以下失败原因时，可按下表排查：
+默认规则只会对精确的纯“跳过 / skip”候选放宽匹配，并且仍要求位于右上区域、前台六秒内、候选足够小且存在安全可点击路径。成功跳过一次后，本周期不再检测。出现以下失败原因时，可按下表排查：
 
 | 失败原因 | 含义 | 建议处理 |
 | --- | --- | --- |
 | `standalone_skip_not_top_right` | 纯“跳过 / skip”不在右上区域 | 不使用普通/自定义纯标签规则放宽；改用带明确广告/开屏语义的文本或稳定 View ID。 |
-| `standalone_skip_window_expired` | 已超过前台八秒限制 | 检查开屏加载时机，不扩大默认纯跳过时间窗。 |
+| `standalone_skip_window_expired` | 已到达前台六秒限制 | 检查开屏加载时机，不扩大默认纯跳过时间窗。 |
 | `standalone_skip_candidate_too_large` | 候选占屏超过 2% | 不使用普通/自定义纯标签规则放宽；改用带明确广告/开屏语义的文本或稳定 View ID。 |
 | `standalone_skip_no_safe_action_path` | 未找到两层内的安全可点击路径 | 检查无障碍树或使用带锚点的坐标规则。 |
 | `standalone_skip_unsafe_ancestor` | 候选链包含高风险语义 | 不执行自动点击。 |
@@ -59,6 +59,8 @@
 | `standalone_skip_forbidden` | 普通/自定义规则不能放宽精确纯跳过 | 应使用带明确广告/开屏语义的文本或稳定 View ID。 |
 
 `standaloneSkipAllowed=true` 表示该次点击通过了默认纯“跳过 / skip”的全部限制，不能等同于对任意包含“跳过 / skip”文本的放行。
+
+`opening_ad_session_changed` 表示待执行点击属于旧的前台检测周期，已取消该操作。`timeWindowDecision=finished` 表示当前周期已结束，`not_foreground` 表示目标应用当前没有确认的前台焦点；这些状态都不能通过内容更新重新启动计时。
 
 ## 隐私边界
 

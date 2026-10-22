@@ -24,20 +24,23 @@ import com.example.skip.util.AccessibilityNodeAccess
 internal class PendingClickCoordinator(
     private val service: SkipAccessibilityService
 ) {
+    private val callbackToken = Any()
     var pendingClick: PendingClick? = null
         private set
 
     fun clear() {
         pendingClick = null
+        service.mainHandler.removeCallbacksAndMessages(callbackToken)
     }
 
     fun clearIfSignature(signature: String) {
-        if (pendingClick?.signature == signature) pendingClick = null
+        if (pendingClick?.signature == signature) clear()
     }
 
     private fun postAccessibilityTask(action: () -> Unit, delayMs: Long) {
         service.mainHandler.postDelayed(
             { AccessibilityNodeAccess.withCacheBoundary(service, action) },
+            callbackToken,
             delayMs
         )
     }
@@ -52,6 +55,7 @@ internal class PendingClickCoordinator(
         scanDurationMs: Long? = null,
         rescanReason: String = ""
     ) {
+        if (!service.isSessionOpen(eventContext.openingAdSessionKey, packageName, eventContext.defaultRuleWindowMs)) return
         val delayMs = StableClickDelayPolicy.delayMs(
             ruleSource = match.ruleSource,
             score = match.score,
@@ -92,6 +96,7 @@ internal class PendingClickCoordinator(
         scanDurationMs: Long? = null,
         rescanReason: String = ""
     ) {
+        if (!service.isSessionOpen(eventContext.openingAdSessionKey, packageName, eventContext.defaultRuleWindowMs)) return
         val rule = fallback.rule
         val pending = ClickFlowStateMachine.startCoordinateFallback(
             packageName = packageName,
@@ -163,8 +168,8 @@ internal class PendingClickCoordinator(
     }
 
     private fun relocateAndClick(pending: PendingClick) {
-        if (abortPendingIfAutomationBlocked(pending)) return
         if (pendingClick !== pending) return
+        if (!canDispatchPending(pending)) return
         val callbackPending = ClickFlowStateMachine.recordCallbackTiming(pending)
         pendingClick = callbackPending
         val root = AccessibilityNodeAccess.freshActiveRoot(service)
@@ -208,9 +213,7 @@ internal class PendingClickCoordinator(
             )
             return
         }
-        val elapsed = (
-            System.currentTimeMillis() - service.foregroundStateSnapshot.foregroundStartTimeMillis
-            ).coerceAtLeast(0L)
+        val elapsed = service.foregroundStateSnapshot.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return
         val currentRules = NodeScanner.filterRulesForActivity(
             rules = listOf(rule),
             currentActivityName = service.currentActivityName
@@ -303,7 +306,8 @@ internal class PendingClickCoordinator(
             delayBeforeClickMs = updated.delayBeforeClickMs
         )
 
-        val attempt = ClickExecutor.click(match.clickNode)
+        val attempt = ClickExecutor.click(match.clickNode) { canDispatchPending(updated) }
+        if (!isCurrentPending(updated)) return
         if (attempt.accepted) {
             val dispatched = updated.copy(firstAttempt = attempt, clickDispatched = true)
             pendingClick = dispatched
@@ -326,8 +330,8 @@ internal class PendingClickCoordinator(
     }
 
     private fun runCoordinateFallback(pending: PendingClick) {
-        if (abortPendingIfAutomationBlocked(pending)) return
         if (pendingClick !== pending) return
+        if (!canDispatchPending(pending)) return
         val callbackPending = ClickFlowStateMachine.recordCallbackTiming(pending)
         pendingClick = callbackPending
         val root = AccessibilityNodeAccess.freshActiveRoot(service)
@@ -351,9 +355,7 @@ internal class PendingClickCoordinator(
         val currentPackageName = root?.packageName?.toString().orEmpty().ifBlank {
             service.foregroundPackage.orEmpty()
         }
-        val elapsedSinceForegroundMs = (
-            System.currentTimeMillis() - service.foregroundStateSnapshot.foregroundStartTimeMillis
-            ).coerceAtLeast(0L)
+        val elapsedSinceForegroundMs = service.foregroundStateSnapshot.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return
         val revalidation = CoordinateFallbackMatcher.revalidateAtPoint(
             root = root,
             rule = rule,
@@ -422,8 +424,10 @@ internal class PendingClickCoordinator(
             clickTargetSource = ClickTargetSourceLog.CoordinateFallback
         )
 
-        val gestureQueued = ClickExecutor.gestureClickPoint(service, target, x, y) { attempt ->
-            if (pendingClick?.signature != updatedPending.signature) return@gestureClickPoint
+        val gestureQueued = ClickExecutor.gestureClickPoint(
+            service, target, x, y, canDispatch = { canDispatchPending(updatedPending) }
+        ) { attempt ->
+            if (!isCurrentPending(updatedPending)) return@gestureClickPoint
             if (!attempt.accepted) {
                 val failedPending = updatedPending.copy(firstAttempt = attempt)
                 if (!retryPendingClick(
@@ -458,7 +462,7 @@ internal class PendingClickCoordinator(
             )
             postAccessibilityTask(
                 {
-                    if (pendingClick?.signature == updated.signature) {
+                    if (isCurrentPending(updated)) {
                         val result = verifyClickEffect(updated)
                         finishPendingClick(
                             pending = updated,
@@ -474,13 +478,13 @@ internal class PendingClickCoordinator(
                 GESTURE_VERIFY_DELAY_MS
             )
         }
-        if (gestureQueued && pendingClick?.signature == updatedPending.signature) {
+        if (gestureQueued && isCurrentPending(updatedPending)) {
             pendingClick = updatedPending.copy(clickDispatched = true)
         }
     }
 
     private fun verifyActionClick(pending: PendingClick) {
-        if (pendingClick?.signature != pending.signature) return
+        if (!isCurrentPending(pending)) return
         val result = verifyClickEffect(pending)
         // A gesture retry is only justified when the framework click was not accepted. When
         // ACTION_CLICK returned true the view may simply not be torn down yet, and re-dispatching
@@ -501,8 +505,7 @@ internal class PendingClickCoordinator(
     }
 
     private fun runGestureFallback(pending: PendingClick) {
-        if (abortPendingIfAutomationBlocked(pending)) return
-        if (pendingClick?.signature != pending.signature) return
+        if (!canDispatchPending(pending)) return
         val root = AccessibilityNodeAccess.freshActiveRoot(service)
         if (root == null && retryPendingClick(
                 pending = pending,
@@ -588,9 +591,7 @@ internal class PendingClickCoordinator(
         val revalidatedCandidate = revalidatedSnapshot.target
         val revalidatedCandidateAreaRatio = ClickExecutor.areaRatio(revalidatedCandidate.bounds)
         if (pending.standaloneSkipAllowed) {
-            val currentAppElapsedMs = (
-                System.currentTimeMillis() - service.foregroundStateSnapshot.foregroundStartTimeMillis
-                ).coerceAtLeast(0L)
+            val currentAppElapsedMs = service.foregroundStateSnapshot.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return
             val standaloneDecision = StandaloneSkipGestureRevalidationPolicy.evaluate(
                 ruleSource = pending.ruleSource,
                 ruleKind = pending.ruleKind,
@@ -623,9 +624,10 @@ internal class PendingClickCoordinator(
         val gestureQueued = ClickExecutor.gestureClick(
             service,
             updated.candidate,
-            allowLargeBounds = false
+            allowLargeBounds = false,
+            canDispatch = { canDispatchPending(updated) }
         ) { gestureAttempt ->
-            if (pendingClick?.signature != updated.signature) return@gestureClick
+            if (!isCurrentPending(updated)) return@gestureClick
             if (!gestureAttempt.accepted) {
                 val firstReason = updated.firstAttempt?.reason.orEmpty()
                 val combinedReason = listOf(firstReason, gestureAttempt.reason)
@@ -663,7 +665,7 @@ internal class PendingClickCoordinator(
             )
             postAccessibilityTask(
                 {
-                    if (pendingClick?.signature == dispatched.signature) {
+                    if (isCurrentPending(dispatched)) {
                         val result = verifyClickEffect(dispatched)
                         finishPendingClick(
                             pending = dispatched,
@@ -679,7 +681,7 @@ internal class PendingClickCoordinator(
                 GESTURE_VERIFY_DELAY_MS
             )
         }
-        if (gestureQueued && pendingClick?.signature == updated.signature) {
+        if (gestureQueued && isCurrentPending(updated)) {
             pendingClick = updated.copy(clickDispatched = true)
         }
     }
@@ -700,6 +702,8 @@ internal class PendingClickCoordinator(
         pending: PendingClick,
         eventContext: EventContext
     ) {
+        if (!isCurrentPending(pending)) return
+        if (!pending.clickDispatched && !canDispatchPending(pending)) return
         val currentPackage = eventContext.packageName.trim()
         when (PendingEventFastPathPolicy.evaluate(
             clickDispatched = pending.clickDispatched,
@@ -763,12 +767,11 @@ internal class PendingClickCoordinator(
      * `safetyModeEnabled = false`.
      */
     private fun abortPendingIfAutomationBlocked(pending: PendingClick): Boolean {
+        if (!isCurrentPending(pending)) return true
         val masterEnabled = SettingsRepository.isMasterEnabled(service)
         val safetyModeEnabled = SettingsRepository.isSafetyModeEnabled(service)
         if (masterEnabled && !safetyModeEnabled) return false
-        if (pendingClick?.signature == pending.signature) {
-            pendingClick = null
-        }
+        clear()
         service.terminateOpeningAdRecovery(service.pendingSessionKey(pending))
         val skippedBySafetyMode = masterEnabled && safetyModeEnabled
         val reason = if (skippedBySafetyMode) {
@@ -801,7 +804,7 @@ internal class PendingClickCoordinator(
         clickTargetSource: ClickTargetSourceLog = pending.clickTargetSource,
         detail: String = ""
     ): Boolean {
-        if (pendingClick?.signature != pending.signature) return false
+        if (!canDispatchPending(pending)) return false
         val root = AccessibilityNodeAccess.freshActiveRoot(service)
         val rootPackageName = root?.packageName?.toString().orEmpty()
         val samePackage = service.foregroundPackage == pending.packageName &&
@@ -895,11 +898,12 @@ internal class PendingClickCoordinator(
         detail: String = "",
         eventContext: EventContext = pending.eventContext
     ) {
-        if (pendingClick?.signature != pending.signature) return
-        pendingClick = null
+        if (!isCurrentPending(pending)) return
+        clear()
         service.terminateOpeningAdRecovery(service.pendingSessionKey(pending))
         val now = System.currentTimeMillis()
         if (success) {
+            service.finishOpeningAdSession(service.pendingSessionKey(pending))
             SettingsRepository.flushRuntimeDiagnostics(service, now)
             SettingsRepository.markLastClick(service, now)
             service.feedbackController.showSuccessToast("已跳过：${pending.appName}", "success:${pending.packageName}")
@@ -938,6 +942,7 @@ internal class PendingClickCoordinator(
         pending: PendingClick,
         root: AccessibilityNodeInfo?
     ): Boolean {
+        if (!canDispatchPending(pending)) return true
         val currentPackageName = root?.packageName?.toString().orEmpty().ifBlank {
             service.foregroundPackage.orEmpty()
         }
@@ -956,8 +961,10 @@ internal class PendingClickCoordinator(
             currentPackageName = currentPackageName,
             selfPackageName = service.packageName,
             foregroundPackageName = delayedEventContext.foregroundPackage,
-            foregroundStartTimeMillis = delayedEventContext.foregroundStartTimeMillis ?: 0L,
-            now = System.currentTimeMillis(),
+            elapsedSinceForegroundMs = delayedEventContext.elapsedSinceForegroundMs,
+            pendingSessionKey = pending.eventContext.openingAdSessionKey,
+            currentSessionKey = delayedEventContext.openingAdSessionKey,
+            isSessionOpen = delayedEventContext.isWithinDefaultRuleWindow,
             defaultRuleWindowMs = delayedEventContext.defaultRuleWindowMs,
             rootWindowNull = root == null,
             activeTextInput = ActiveTextInputGuard.hasFocusedEditableInput(root)
@@ -999,6 +1006,46 @@ internal class PendingClickCoordinator(
             effectConfirmReason = decision.reason,
             blockedReason = decision.reason,
             eventContext = eventContext
+        )
+    }
+
+    private fun isCurrentPending(pending: PendingClick): Boolean =
+        pendingClick?.let { current ->
+            current.signature == pending.signature &&
+                current.eventContext.openingAdSessionKey == pending.eventContext.openingAdSessionKey
+        } == true
+
+    private fun canDispatchPending(pending: PendingClick): Boolean {
+        if (!isCurrentPending(pending) || abortPendingIfAutomationBlocked(pending)) return false
+        service.refreshForegroundForClick()
+        val ruleWindowMs = pending.activeRules.firstOrNull { it.id == pending.ruleId }?.validDurationMs
+            ?: pending.eventContext.defaultRuleWindowMs
+        if (service.isSessionOpen(
+                pending.eventContext.openingAdSessionKey,
+                pending.packageName,
+                minOf(ruleWindowMs, pending.eventContext.defaultRuleWindowMs)
+            )
+        ) return true
+        val sameSession = pending.eventContext.openingAdSessionKey == service.foregroundStateSnapshot.sessionKey
+        finishPendingClick(
+            pending = pending,
+            stage = if (sameSession) ClickLogStage.ClickCancelledTimeWindowExpired else ClickLogStage.ClickCancelledPackageChanged,
+            success = false,
+            reason = if (sameSession) "click_cancelled_time_window_expired" else "opening_ad_session_changed",
+            attempt = pending.firstAttempt
+        )
+        return false
+    }
+
+    internal fun cancelUnsentClick(sessionKey: String) {
+        val pending = pendingClick ?: return
+        if (pending.clickDispatched || pending.eventContext.openingAdSessionKey != sessionKey) return
+        finishPendingClick(
+            pending = pending,
+            stage = ClickLogStage.ClickCancelledTimeWindowExpired,
+            success = false,
+            reason = "click_cancelled_time_window_expired",
+            attempt = pending.firstAttempt
         )
     }
 

@@ -41,6 +41,7 @@ git ls-files keystore.properties release.keystore
 ## 3. 构建验证
 
 ```powershell
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
 .\gradlew.bat :app:assembleDebug --rerun-tasks
 .\gradlew.bat :app:assembleRelease --rerun-tasks
 git diff --check
@@ -48,6 +49,7 @@ git diff --check
 
 通过标准：
 
+- JVM 单元测试无失败或错误。
 - debug APK 构建成功。
 - diff 空白检查无错误。
 - release APK 构建成功。

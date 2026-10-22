@@ -1,5 +1,7 @@
 package com.example.skip.model
 
+import com.example.skip.engine.OpeningAdWindowPolicy
+
 data class SkipRule(
     val id: String,
     val source: RuleSource,
@@ -24,7 +26,7 @@ data class SkipRule(
      * importing it.
      */
     val cooldownMs: Long = 1_500L,
-    val validDurationMs: Long = 8_000L,
+    val validDurationMs: Long = OpeningAdWindowPolicy.MAX_WINDOW_MS,
     val minScore: Int = 70,
     val coordinateFallback: CoordinateFallback? = null,
     val packageId: String = "local",

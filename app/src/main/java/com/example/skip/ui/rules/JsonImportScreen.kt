@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import com.example.skip.data.RuleImportManager
 import com.example.skip.data.RuleLifecycleRepository
 import com.example.skip.data.RuleRepository
+import com.example.skip.data.SettingsRepository
 import com.example.skip.model.DuplicateStrategy
 import com.example.skip.model.RuleImportResult
 import com.example.skip.ui.common.SimpleScreenScaffold
@@ -169,6 +170,12 @@ private fun JsonPreviewDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
+    val context = LocalContext.current
+    val storedPolicies = remember(context, result) { SettingsRepository.getAppPolicies(context) }
+    val previewLines = remember(result, strategy, storedPolicies) {
+        RuleImportManager.previewImport(result, strategy, storedPolicies)
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("确认导入") },
@@ -183,7 +190,7 @@ private fun JsonPreviewDialog(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-                RuleImportManager.previewImport(result, strategy).forEachIndexed { index, line ->
+                previewLines.forEachIndexed { index, line ->
                     Text(
                         text = line,
                         fontWeight = if (index == 0) FontWeight.Medium else null,

@@ -217,6 +217,22 @@ object SettingsRepository {
         return existing.copy(defaultRuleEnabled = imported.defaultRuleEnabled)
     }
 
+    /**
+     * Resolves only the packages in this import, once per package, without reading or writing state.
+     * The last imported entry wins; existing policies keep their protected local choices.
+     * Preview and persistence must both use this function with their current stored-policy snapshot.
+     */
+    internal fun resolveImportedPolicies(
+        storedPolicies: List<AppPolicy>,
+        importedPolicies: List<AppPolicy>
+    ): List<AppPolicy> {
+        val storedByPackage = storedPolicies.associateBy { it.packageName }
+        return importedPolicies.associateBy { it.packageName }.values.map { imported ->
+            val existing = storedByPackage[imported.packageName]
+            if (existing == null) imported else mergeImportedPolicy(existing, imported)
+        }
+    }
+
     fun setAppPolicy(context: Context, policy: AppPolicy) {
         val cleanPolicy = policy.copy(packageName = policy.packageName.trim())
         if (cleanPolicy.packageName.isBlank()) return

@@ -70,7 +70,7 @@ object ScoreEvaluator {
         if (!candidate.visibleToUser) return null
         if (!candidate.enabled) return null
         if (candidate.password || candidate.input) return null
-        if (appElapsedMs > rule.validDurationMs) {
+        if (appElapsedMs >= OpeningAdWindowPolicy.effectiveWindowMs(rule.validDurationMs)) {
             return ScoreEvaluation(rule, 0, rule.minScore, "", areaInScreen(candidate.bounds), false, "skipped_by_time_window")
         }
 
@@ -285,7 +285,7 @@ object ScoreEvaluator {
         if (areaMatchesRule) score += 20
         if (ClickExecutor.isSelfSafeClickable(node)) score += 20
         if (clickSelection != null && clickSelection.node != node) score += 10
-        if (appElapsedMs <= rule.validDurationMs) score += 20
+        if (appElapsedMs < OpeningAdWindowPolicy.effectiveWindowMs(rule.validDurationMs)) score += 20
         if (viewId.containsAdOrSplashSignal()) score += 10
         if (listOf(textValue, descriptionValue).any { it.containsAdSignal() }) score += 10
         if (defaultRule && area == RuleArea.TopCenter) score -= 20

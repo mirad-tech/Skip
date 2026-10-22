@@ -7,7 +7,7 @@ import com.example.skip.model.SkipRule
 
 object PreciseRulePolicy {
     const val MIN_WINDOW_MS = 3_000L
-    const val MAX_WINDOW_MS = 15_000L
+    const val MAX_WINDOW_MS = OpeningAdWindowPolicy.MAX_WINDOW_MS
     const val MIN_COOLDOWN_MS = 800L
 
     fun validationError(rule: SkipRule): String? {

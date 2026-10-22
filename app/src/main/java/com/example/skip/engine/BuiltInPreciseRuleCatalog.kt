@@ -26,7 +26,7 @@ object BuiltInPreciseRuleCatalog {
             area = RuleArea.TopRight,
             priority = 200,
             cooldownMs = 1_500L,
-            validDurationMs = 15_000L,
+            validDurationMs = OpeningAdWindowPolicy.MAX_WINDOW_MS,
             minScore = 70,
             packageId = "built_in_precise_v1",
             createdAt = 0L

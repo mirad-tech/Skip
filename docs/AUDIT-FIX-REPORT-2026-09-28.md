@@ -1,27 +1,29 @@
-# Skip 审计修复报告（2026-09-28）
+# Skip 审计修复报告（历史审计：2026-09-28；修订：2026-10-03）
 
-> 本报告对应审计发现的全量修复（P0 + P1 + P2）。
+> 本报告保留 DeepSeek 两轮审计与修复过程；历史条目的严重度、验证结果和环境描述不能直接作为当前状态。
 > 基准版本：`1.0.17`（`versionCode 25`），基线提交 `e24acc98fdc14955afecd828218e64e8658585da`。
-> 分支：`fix/audit-p0-p1-p2-20260928`（由仓库所有者创建，见 §5）。
+> 历史提交：DeepSeek 最终于 2026-09-30 将 9 个提交写入本地 `main`，末提交为 `68e80ec`；`fix/audit-p0-p1-p2-20260928` 只是当时的分支建议，并非这些提交的实际所在分支。
+> 2026-10-03 修订记录：当时从 `68e80ec` 创建 `codex/fix-review-findings`，修复资产选择、APK 实际版本校验、导入预览与相对重定向；当时未提交、未推送、未发布。该阶段实现与验证见 §8。
+> 当前版本与检测周期已在 1.0.18 更新，见 [当前接手文档](CODEX_HANDOFF.md) 和 [发布说明](../RELEASE_NOTES.md)。本报告不再作为当前工作区、测试数量或发布状态的事实来源。
 
 ---
 
-## 0. 执行环境与本次结论的效力边界
+## 0. 第一轮初始环境（历史，已由 §7 更新）
 
 | 事实 | 影响 |
 |---|---|
 | 修复期间 `pwsh` 完全不可用（`SetNamedSecurityInfoW failed (Win32 5): grantWrite(S:\Android\AndroidStudioProjects\Skip)`） | 实施方**无法创建分支、无法提交、无法运行 gradle、无法编译**。代码改动已写入工作区，但**构建与运行验证由仓库所有者执行** |
 | 无网络 | 无法验证真实 GitHub Release 的资产命名与 digest |
 | 无 Android 设备 / 无 TalkBack | 运行期与无障碍验证未执行 |
-| 仓库无测试源集 | 本次修复**没有自动化回归防护** |
+| 第一轮开始时仓库无测试源集 | 当时没有自动化回归防护；第二轮已恢复 7 个 JVM 测试类、39 个用例，见 §7 |
 
-> 关于 `pwsh`：这不是单个会话的偶发问题。本次共两次独立尝试（主编与一个独立验证代理）都无法执行任何命令，且沙箱 ACL 修复命令被审批链拒绝。**在本环境中不要指望任何代理能自行跑 git 或 gradle**；请在 Android Studio 的内置终端（或任何普通 PowerShell 窗口）执行 §3.1 的验证命令。
+> 历史上主编与独立验证代理都遇到了上述 `pwsh` 故障；该故障随后已修复，见 §7.1。不能继续据此断言当前环境无法执行 Git 或 Gradle。
 
-**因此本报告不声称任何构建、测试或真机结果通过。** 所有验收项的状态见 §3，未执行项一律标注「未验证」。
+第一轮初始状态没有构建或测试通过的证据。§3 和 §7 保留后续历史验证；本次修订的验证只以 §8 为准，真机结果不能由本地构建替代。
 
 ---
 
-## 1. 修复清单
+## 1. 第一轮修复清单（历史）
 
 状态图例：**已改** = 代码已写入工作区；**未验证** = 缺少构建/设备/网络条件下的验证。
 
@@ -30,7 +32,7 @@
 | ID | 缺陷 | 影响 | 改动文件 | 状态 |
 |---|---|---|---|---|
 | F-01 | 黑名单操作重置其它应用的自定义规则开关 | 用户手动关闭的自定义规则（含坐标兜底）被静默重新启用，点击面被动扩大 | `model/AppPolicy.kt`、`data/SettingsRepository.kt` | 已改 / 未验证 |
-| F-02 | Room 无迁移策略 | 未来 schema 变更会让已安装用户打开日志页即崩溃 | `data/db/SkipDatabase.kt` | 已改 / 未验证 |
+| F-02 | Room 迁移开发约定缺失（原审计列为 P0，复核后降为约定补充） | 当前 schema 为 v1；空迁移数组不改变数据库运行行为，未来升级仍须实现真实迁移 | `data/db/SkipDatabase.kt` | 仅补充约定，非现存故障修复 |
 | F-03 | 启动器/自身/受保护包早退路径不推进节流时间戳 | 启动器前台时 300ms 内容事件节流完全失效，每个事件跑 ≤500 节点遍历 | `service/SkipAccessibilityService.kt` | 已改 / 未验证 |
 | F-04 | 安全模式存在 100ms 竞态窗口 | 延迟窗口内开启安全模式仍会点击，违背「只记录不点击」承诺 | `service/PendingClickCoordinator.kt`、`service/SkipAccessibilityService.kt` | 已改 / 未验证 |
 | F-05 | 零 CI | 版本一致性、构建、密钥泄漏全靠人工 | `.github/workflows/verify.yml`（新增）、`tools/verify-release.ps1` | 已改 / 未验证 |
@@ -76,8 +78,8 @@
 | F-19 Switch 无障碍语义 | 所有者选择只保留低风险 UI 项 |
 | F-20 嵌套可点击 | 同上（会改变现有交互布局，无法截图回归） |
 | F-23 `InfoCard` 去重 | 同上（会改变部分屏幕圆角/内边距外观） |
-| F-24 的测试步骤实际生效 | 本次不碰测试源集；CI 中该步骤为 NO-SOURCE 占位 |
-| 重建 17 个被删测试类 | 所有者本次不碰测试 |
+| F-24 的测试步骤实际生效 | 第一轮未恢复测试，第二轮已新增 7 类、39 个用例；当前 CI 测试步骤会执行测试 |
+| 重建 17 个被删测试类 | 第一轮未恢复；第二轮仅新增 §7 列出的 7 类，并未重建原有全部测试 |
 | `getAppPolicies` / `getRules` 内存缓存 | 需失效通知机制，属独立改造 |
 | 全量 i18n 字符串外提 | 数百条硬编码中文，无法在本环境做视觉回归 |
 | 迁移到 `PackageInstaller` 会话安装 | 独立改造 + 需大量真机验证 |
@@ -127,7 +129,7 @@
 **这是有意取舍**：会降低「ACTION_CLICK 静默无效」场景的兜底成功率。若所有者更看重兜底，可改为「3 秒内同签名未补发过手势」的条件。
 
 **F-09 永久 pending**
-`NodeScanner.scan(root ?: return, …)` 会在 root 为空时裸返回并留下无回调的 `pendingClick`，使服务此后永远走 pending 快路径。改为显式 `finishPendingClick(..., reason = "root_window_null_before_click")` 收尾。
+初审将 `NodeScanner.scan(root ?: return, …)` 认定为永久 pending 风险；复核发现前置重试与窗口安全检查已覆盖 root 为空的情况。新增显式 `finishPendingClick(..., reason = "root_window_null_before_click")` 是防御性收尾，不是已证实可达缺陷的修复。
 
 ### 2.3 引擎与评分
 
@@ -143,7 +145,7 @@
 
 第一版改法（**已被审查证明无效**）：引入 `trailingSegmentOnlyKeywords`，只在**末两段**内匹配。`com.example.timekeeper` 的末两段是 `example.timekeeper`，仍然包含 `ime` ⇒ 该修复连自己的标题案例都没修好。
 
-**最终改法**：
+**第一轮中间改法（已由 §7.3 的最终实现替代）**：
 - `boundaryMatchedKeywords = {ime, pay, cash, cmb, ccb, boc, icbc}` 改为**段边界匹配**（`matchesTokenOnSegmentBoundary`）：某个点分段等于该词、或以它开头、或以它结尾。`timekeeper` 三者皆不满足 ⇒ 不再误伤；`com.tenpay.*`、`com.miui.ime`、`com.icbc.im`、`com.lge.ime` 仍然命中。
 - 其余关键词保持全名匹配，保留 `com.sohu.inputmethod.sogou` 这类中段含信号的真实覆盖。
 - `matchedProtectedKeyword` 的契约改为**只返回关键词**（不再在 exact/prefix 命中时返回包名或前缀）——这是 `isSystemPackage` 与 `protectedPackageReason` 分类错乱的根因。
@@ -154,28 +156,28 @@
 
 ### 2.4 自更新
 
-**F-15 下载约束**：新增 `https` 强制 + 主机白名单（`github.com`、`api.github.com`、`objects.githubusercontent.com`、`github-releases.githubusercontent.com`、`release-assets.githubusercontent.com`）；`instanceFollowRedirects` 改为 `false`，改由 `openRedirectCheckedConnection` **手动跟随最多 5 跳并在每一跳重新校验**；下载循环增加 200 MB 上限与 `Content-Length` 一致性校验；失败一律删除半成品文件。`AboutScreen.openReleasePage` 同步限制为 `https` + `github.com`。
+**F-15 下载约束**：新增 `https` 强制 + 主机白名单（`github.com`、`api.github.com`、`objects.githubusercontent.com`、`github-releases.githubusercontent.com`、`release-assets.githubusercontent.com`）；手动跟随最多 5 次重定向，每一跳均检查协议和主机。2026-10-03 修订补上相对 `Location` 解析：先以当前 URL 为基准解析，再检查解析后的目标，连接建立前执行信任检查。200 MB 上限、`Content-Length` 校验、半成品文件清理和发布页限制保持不变。
 
-**F-16 资产与版本门禁**：资产匹配从「精确两种命名」放宽为「`Skip-` 前缀 + `-release.apk` 后缀且唯一」，避免同时发布两种命名时更新永久失败；`VersionComparator.compare` 区分「不是更新」与「tag 无法解析」，非法 tag 现在渲染为错误态而不是「已是最新版本」。硬门禁仍是 APK `versionCode`。
+**F-16 资产与版本门禁（按当前修订更正）**：旧版放宽前后缀并没有解决双命名冲突，还会接受其他版本的资产。当前仅接受发布 tag 对应的正式名称，以及规范化版本对应的兼容名称；忽略大小写，优先正式名称，仅在其不存在时使用兼容名称。双命名并存时选择正式名称；选中层级重复、digest 非法或下载地址缺失时拒绝，不降级。安装前还要求 APK 实际 `versionName` 去除首尾空白后与发布的规范化版本完全一致；缺失、旧版本或额外后缀均拒绝并删除文件。原有 digest、包名、签名、版本代码递增和非法 tag 错误态均保留。
 
 ### 2.5 构建与文档
 
-**F-24 CI**：`.github/workflows/verify.yml`（JDK 21 + Gradle setup + `assembleDebug` + `testDebugUnitTest` 占位 + 版本一致性 + 签名材料未跟踪闸门 + 产物上传）。版本一致性步骤复用 `tools/verify-release.ps1 -CheckVersionOnly`，避免重复实现断言逻辑。
-**F-25**：`verify-release.ps1` 新增 `-CheckVersionOnly` 与 `-SkipOriginCheck` 语义（`-CheckVersionOnly` 下完全跳过分支/工作区/origin/APK/SHA256 检查），并保留原有的 `main` 分支与干净工作区前置条件用于真实发布。`-Sha256` 由 `Mandatory` 改为「非 `-CheckVersionOnly` 时必填」。
+**F-24 CI**：`.github/workflows/verify.yml` 使用 JDK 21、Gradle、`assembleDebug`、`testDebugUnitTest`、版本一致性和签名材料跟踪检查，并上传构建产物。第二轮恢复测试后，测试步骤已不再是 NO-SOURCE 占位。版本一致性步骤复用 `tools/verify-release.ps1 -CheckVersionOnly`。
+**F-25**：`verify-release.ps1` 新增 `-CheckVersionOnly`，跳过分支/工作区/origin/APK/SHA256 检查，仍验证版本文档及未发布占位文字；不存在 `-SkipOriginCheck` 参数。完整发布模式保留 `main`、干净工作区等前置条件，且必须提供 `-Sha256`。
 
 **F-26/F-37 文档对齐**（逐项）：
-- `docs/CODEX_HANDOFF.md`：版本 `1.0.9/17` → `1.0.17/25`；删除不存在的 `.worktrees/` 引用；`keystore.properties`/`AGENTS.md` 的「不存在」更正为存在且未被跟踪；删除与之矛盾的自述；第 0 节标注功能分支已合并；§1 新增「仓库当前没有任何测试源集」条目。
-- `AGENT.md`：删除不存在的 `app/src/debug/AndroidManifest.xml`；`testDebugUnitTest` 标注为 NO-SOURCE 并说明不得作为测试通过证据；权限检查命令与发布检查命令同步修正。
+- `docs/CODEX_HANDOFF.md`：版本更新为 `1.0.17/25`。当前修订已将旧工作树、历史任务与当前状态分开，并明确现有 7 个 JVM 测试类、39 个用例；原「没有任何测试源集」描述已删除。
+- `AGENT.md`：历史上修正了 debug Manifest、权限及发布命令说明；第二轮恢复测试后已改为真实 JVM 测试入口，不能再以早期 NO-SOURCE 描述当前状态。
 - `RULES_GUIDE.md`：新增「导入时实际生效的额外规则」与「导出后再导入的注意点」两节，补齐导入即停用、`apps[].enabled` 无效、`schemaVersion > 3` 拒绝、规模/正则上限、需额外确认的写法清单（`minScore` 60–69、坐标兜底、正则、`area=any`、纯 View ID、短 `contains`、第三方 JSON）。
 - `LOG_DIAGNOSTIC_GUIDE.md`：补 `privacy` 与 `logStorage` 两个顶层键；新增「脱敏范围（重要）」说明文本脱敏但保留包名/Activity/View ID 等元数据。
 - `docs/superpowers/plans/2026-07-10-*.md`：加时效说明，标明其引用的 3 个测试/夹具路径在当前仓库已不存在（未改动 35 处历史命令本身）。
 - `downloads/github-release-notes-1.0.17.md`：新增，并在文末明确标注**为事后补齐、非发布当时生成的 `--notes-file`**。
 - `SECURITY.md`：新增「本地调试残留物」一节，说明 `logs/` 可能含第三方界面录屏与无障碍树 dump，并给出清理命令。
-- `README.md` / `docs/README.md`：声明 `applicationId` 冻结、测试源集缺失、诊断包元数据保留。
+- `README.md` / `docs/README.md`：声明 `applicationId` 冻结、现有 JVM 测试及诊断包元数据保留。
 
 ---
 
-## 3. 验收状态
+## 3. 第一轮后续验收记录（历史，不代表当前修订结果）
 
 ### 3.1 构建级 —— **已实际执行并通过**
 
@@ -185,7 +187,7 @@
 |---|---|
 | `:app:assembleDebug` | ✅ **BUILD SUCCESSFUL**（含 `kspDebugKotlin`、`compileDebugKotlin`） |
 | `:app:assembleRelease` | ✅ **BUILD SUCCESSFUL** in 2m12s —— 含 `minifyReleaseWithR8`、`optimizeReleaseResources`、`lintVitalRelease`，产出 `app-release.apk` = 2,847,293 字节 |
-| `:app:testDebugUnitTest` | ✅ exit 0（NO-SOURCE，仓库无测试源集，符合预期） |
+| `:app:testDebugUnitTest` | 当时 exit 0 且 NO-SOURCE，仅表示没有测试执行，不是测试通过；第二轮结果见 §7 |
 | `git diff --check` | ✅ 无空白错误 |
 | `app/schemas` | ✅ 无变化（未改动任何 Room 实体） |
 | `uses-permission` | ✅ 恰好 2 条（`INTERNET`、`REQUEST_INSTALL_PACKAGES`） |
@@ -254,7 +256,7 @@
 | D-7 | F-10 用 `SkippedByDisabledSetting`（`isDebugOnly = true`），默认设置下**根本不会落日志** ⇒ 我原先写的验收 V-10 不成立 | 中（文档） | **验收条件已修正**（§3.2 V-10）。**是否把它改成非调试类别由你决定**：改了会让"用了没反应"可自查，代价是每次暂停都会写一条日志（受 2 秒限流） |
 | D-7 | 报告 §2.5 写了 `verify-release.ps1` 新增"`-SkipOriginCheck` 语义"，**该参数根本不存在** | 低（文档） | **已更正**（见 §4.2） |
 | D-6 | 报告称"现已让 `isNewer` 复用 `compareParts`"，但 `isNewer` 已被整个删除 | 低（文档） | **已更正** |
-| D-5b | 报告声称放宽资产白名单能"避免同时发布两种命名时更新永久失败" —— 与 `UpdateReleaseParser.kt:21` 的 `size != 1` 硬校验矛盾：同时存在两个匹配资产仍然永久失败 | 低（文档 + 代码注释） | **已更正**：放宽的真实收益只是让匹配器不再与 tag 拼写耦合；"两个资产"仍会硬失败。已同步改写代码注释 |
+| D-5b | 放宽资产前后缀未解决双命名冲突；当时正文与注释也没有同步更正 | 低（文档 + 代码注释） | 2026-10-03 修订已改为同版本名称优先级，并增加 APK 实际版本校验；正文和注释已同步，见 §2.4、§8 |
 | D-7b | 报告 §2.5 称 `-CheckVersionOnly`"完全跳过"检查，但占位文案检查（"尚未创建/上传/记录"）仍会执行 | 低（文档） | **已更正** |
 | D-3 | F-09 新增的 `activeRoot == null` 分支在当前守卫顺序下**不可达**（`retryPendingClick` 与 `cancelIfUnsafeDelayedClickWindow` 已覆盖 root 为空） | 低 | **保留但改正注释**：明确标注为防御性代码，不再声称它修复了一个可达缺陷 |
 | D-4 | F-03 引入的节流时间戳是**全局**的，且在包名解析**之前**被消费 ⇒ 该分支执行后的 300ms 内，来自**任何**包的 content 事件都会被丢弃（含刚切到前台的 App 的首个 content 事件）。改动前启动器分支不标记，故这是新增行为 | 低 | **保留并显式记录**（见 §5 残余风险）：窗口有界、前台切换通常以 `WINDOW_STATE_CHANGED` 到达（不受节流并清除标记）；未做包感知节流以免在热路径上增加开销 |
@@ -267,7 +269,7 @@
 |---|---|
 | §2.5 提到 `-SkipOriginCheck` | **无此参数**。脚本参数只有 `Version`、`VersionCode`、`Sha256`、`ApkPath`、`AllowDirty`、`VerifyGitHubRelease`、`CheckVersionOnly`。`-CheckVersionOnly` 模式下已直接跳过分支/工作区/origin/APK/SHA256 全部前置检查，无需该开关 |
 | §2.5 "让 `isNewer` 复用 `compareParts`" | `isNewer` 已**整个删除**（零调用点）。比较算法现只有 `compareParts` 一处 |
-| §2.4 与 `UpdateReleaseParser.kt` 注释 "避免同时发布两种命名时更新永久失败" | 该收益**不成立**：`trustedAssets.size != 1` 仍会硬失败。放宽的真实收益是不再让资产名与 tag 拼写耦合（例如 tag 与 versionName 拼写不同时原先会失败） |
+| 当时 §2.4 与解析器注释称放宽前后缀可解决双命名冲突 | 当时的实现仍会因候选数不为 1 失败。2026-10-03 已改为同版本名称优先级选择，并核对 APK 实际版本；详见 §2.4、§8 |
 | §2.5 "`-CheckVersionOnly` 下完全跳过检查" | 占位文案断言仍执行（这是好事，但表述不准确） |
 | §5 提交建议含 `git add … downloads/` | `downloads/` 被 `.gitignore:21` 忽略，该命令会以非零退出。`downloads/github-release-notes-1.0.17.md` **无法被提交**，它只是本地发布产物目录中的文件 |
 | §0/§3 各处"未验证" | 构建级验证**已实际执行并通过**（§3.1） |
@@ -280,7 +282,7 @@
 - 各广告 SDK 中"ACTION_CLICK 被接受但无效"的出现频率（决定 F-07 的取舍是否划算）。
 - `tools/verify-release.ps1` 的 `String.Contains(string, StringComparison)` 重载**只在 PowerShell 7+ / .NET Core 存在**，Windows PowerShell 5.1 会抛"找不到重载"。该写法在改动前就已存在（`:42` 的 `Assert-Contains`），但脚本此前从未被真实执行过。请用 **pwsh** 而不是 `powershell.exe` 运行它。
 
-## 5. 残余风险
+## 5. 第一轮残余风险（历史，后续状态见 §7、§8）
 
 按严重度排序：
 
@@ -296,9 +298,9 @@
 
 ---
 
-## 5. 提交建议
+## 5. 提交建议（历史方案，非实际执行记录）
 
-分支由仓库所有者创建后，建议按子系统分段提交，便于 review 与回滚：
+以下是当时建议的分支及分段提交命令。实际最终提交在本地 `main`，共 9 个提交至 `68e80ec`，并未按这份分支建议交付；当前修订位于 `codex/fix-review-findings`，不执行下列提交命令：
 
 ```powershell
 cd S:\Android\AndroidStudioProjects\Skip
@@ -345,7 +347,7 @@ git status --short
 - 提升 `app/build.gradle.kts` 的 `versionCode` / `versionName`；
 - 新增对应的 `RELEASE_NOTES.md` 章节（现有 1.0.17 章节的文字不包含本次任何修复）；
 - 重新构建、计算新 APK 的 SHA256，并同步 `README.md`、`docs/README.md`、`RELEASE_NOTES.md`、`downloads/`；
-- 在具备 `keystore.properties` 的环境用 **pwsh**（不是 `powershell.exe`，见 §4.3）运行完整 `verify-release.ps1`。
+- 在具备 `keystore.properties` 的环境运行完整 `verify-release.ps1`；第二轮已修复 PowerShell 7 与 Windows PowerShell 5.1 的兼容性。
 
 ## 6. 与审计报告的差异（更正记录）
 | 审计结论 | 更正 |
@@ -357,7 +359,7 @@ git status --short
 
 ---
 
-## 7. 审查后续修复（第二轮）
+## 7. 审查后续修复（第二轮历史记录，提交至 `68e80ec`）
 
 第一轮修复完成后做了对抗式审查，暴露了发布工具链缺陷、两处同类功能缺陷，以及**我在第一轮引入的一个运行期崩溃**。本节记录第二轮的根因、改法与实测结果。
 
@@ -426,3 +428,34 @@ git status --short
 
 坐标兜底与自更新的端到端行为、启动器节流的 CPU 收益、F-07 取舍的现场效果、`ACTION_CLICK` 被接受但无效的实际频率、GitHub 资产 CDN 主机是否落在自更新的主机白名单内、TalkBack 下的无障碍语义（本轮未改 UI 无障碍）。
 
+## 8. 当前修订（2026-10-03）
+
+基线为 `68e80ec`，工作分支为 `codex/fix-review-findings`。保留 DeepSeek 的 9 个提交；本次不修改 `1.0.17 / 25`、数据库 schema、权限、点击引擎或安全模式，不提交或发布。
+
+### 8.1 修复范围
+
+1. 自更新只选择当前发布对应的名称，优先 tag 形式、兼容规范化版本形式；重复或损坏的优先资产不会降级。下载后必须核对 APK 实际版本与提示版本完全一致，并保留原有摘要、包名、签名及版本代码检查。
+2. 导入预览与保存共用纯函数解析最终应用策略。已有应用的自定义规则开关及黑名单迁移标志保留本地值；新应用采用导入值；重复包名最后条目胜出。预览标明保留本地的开关，保存时重新读取本地策略。
+3. 相对 `Location` 以当前 URL 为基准解析；之后逐跳执行既有协议及主机检查，保留跳转次数、体积、超时、长度和失败清理限制。
+4. 同步资产选择注释、规则格式说明、本报告和接手文档，明确历史与当前状态，消除分支、测试源集和双命名说明的矛盾。
+
+### 8.2 本次验证
+
+以下结果在本次代码修改后取得；§3 和 §7 的历史结果不作为当前修订通过的证据。
+
+| 检查 | 本次结果与覆盖范围 |
+|---|---|
+| `:app:assembleDebug :app:testDebugUnitTest --rerun --console=plain` | 退出码 0，Debug Kotlin 重新编译并打包成功；现有 39 个 JVM 用例全部通过，0 失败、0 错误、0 跳过 |
+| 仓库外 Java 定向验证，调用当前 Debug 编译产物 | 53 个场景通过：资产选择 15、APK 元数据校验及失败删包 14、模拟连接重定向 15、导入与预览 9；不在仓库新增测试文件或依赖 |
+| 资产选择 | 正式/兼容名称、双名并存、旧版混入、仅旧版、同层重复、大小写、缺失或非法 digest、缺失 URL 均按约定选择或拒绝；损坏正式资产不降级 |
+| APK 元数据 | 一致版本通过；缺失、旧版、debug/rc 后缀拒绝且删除文件；包名、签名、版本代码原有拒绝条件继续生效。此项不等同于真实 APK 解析或系统安装验收 |
+| 重定向 | 绝对/根相对/目录相对/父路径及可信 CDN 均通过；降级和非可信主机在连接前被拒绝；空目标、非法目标、循环及第 6 次跳转拒绝，第 5 次允许。未访问真实网络 |
+| 导入与预览 | 双向开关冲突、新应用、黑名单标志、重复包名、未涉及应用及确认时新本地状态均符合合并规则；真实 JSON 解析路径验证最后条目胜出。已核对生产方法生成的预览文本，不代表 Android 布局或 SharedPreferences 集成验收 |
+| `:app:lintDebug` | 退出码 1，仍为 2 errors / 16 warnings。按 issue id、严重度、文件及消息与修改前 XML 比较，18 项完全一致，无新增项；两个错误仍是 HomeScreen / IconAppearanceScreen 的 `LocalContextGetResourceValueCall` |
+| `verify-release.ps1 -CheckVersionOnly` | PowerShell 7 与 Windows PowerShell 5.1 的正确版本输入均退出 0，错误版本 `9.9.9` 均退出 1 |
+| `git diff --check` | 退出码 0，本次差异无空白错误，修改文档末尾多余空行已清除 |
+| 差异边界 | 测试源集、测试依赖、版本号、manifest、数据库 schema、点击引擎与服务源码均无变化；修复保留在新分支的未提交工作区 |
+
+### 8.3 验证边界
+
+本次不操作手机，不运行远端 CI，不进行签名 Release 发布。真实 Android 的持久化、确认页布局、网络下载和系统安装流程须另行验收，不能由纯 JVM 验证代替。

@@ -120,7 +120,7 @@ fun SimpleRuleScreen(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
-                text = if (preciseMode) "精确规则仅在指定 Activity 接管，匹配模式固定为 exact。" else "普通规则只在应用打开后的前 8 秒内生效。",
+                text = if (preciseMode) "精确规则仅在指定 Activity 接管，匹配模式固定为 exact。" else "普通规则只在应用打开后的前 6 秒内生效，成功跳过一次即停止。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -204,7 +204,7 @@ fun SimpleRuleScreen(
 
             Text("规则生效时间", style = MaterialTheme.typography.titleSmall)
             ChipGrid(
-                values = if (preciseMode) listOf(3_000L, 5_000L, 8_000L, 10_000L, 15_000L) else listOf(RuleRepository.DEFAULT_RULE_WINDOW_MS),
+                values = if (preciseMode) listOf(3_000L, 5_000L, RuleRepository.DEFAULT_RULE_WINDOW_MS) else listOf(RuleRepository.DEFAULT_RULE_WINDOW_MS),
                 selected = validDurationMs,
                 label = { formatDuration(it) },
                 onSelected = { validDurationMs = it }

@@ -116,7 +116,8 @@ internal object UpdateRepository {
             if (redirects > MAX_DOWNLOAD_REDIRECTS) {
                 error("更新下载重定向次数过多")
             }
-            currentUrl = location
+            currentUrl = runCatching { URL(URL(currentUrl), location.trim()).toExternalForm() }
+                .getOrElse { error("更新下载重定向地址无效") }
         }
     }
 

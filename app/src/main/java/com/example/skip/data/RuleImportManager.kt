@@ -99,7 +99,7 @@ object RuleImportManager {
                 )
             }
             if (appPolicies.isNotEmpty()) {
-                warnings += "导入只会更新应用策略中的「默认规则」开关；已配置应用的自定义规则开关保持不变。"
+                warnings += "尚未配置的应用使用导入策略；已有应用策略仅更新「默认规则」，保留本地自定义规则开关和黑名单来源。"
             }
         }
         val packageId = "json_${UUID.randomUUID()}"
@@ -170,7 +170,7 @@ object RuleImportManager {
             parsedRuleCount = rules.size,
             rulePackage = rulePackage,
             rules = rules,
-            appPolicies = appPolicies.distinctBy { it.packageName }
+            appPolicies = appPolicies.toList()
         )
     }
 
@@ -229,6 +229,8 @@ object RuleImportManager {
             if (area == RuleArea.Any) add("位置选为“不确定”会提高误触风险，已自动提高匹配分数要求。")
             if (coordinateFallback?.enabled == true && validDurationMs != effectiveWindowMs) {
                 add("坐标兜底时间窗已收紧为最多 ${coordinateFallbackWindowSeconds()} 秒。")
+            } else if (kind == RuleKind.Precise && validDurationMs != effectiveWindowMs) {
+                add("精确规则时间窗已调整为 ${effectiveWindowMs}ms，最多 ${defaultWindowSeconds()} 秒。")
             } else if (kind == RuleKind.Standard && validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
                 add("为减少误触，自定义规则已统一收紧为应用前台后的 ${defaultWindowSeconds()} 秒内生效。")
             }
@@ -331,7 +333,7 @@ object RuleImportManager {
                       "action": "click",
                       "priority": 300,
                       "cooldownMs": 1500,
-                      "validDurationMs": 15000,
+                      "validDurationMs": 6000,
                       "minScore": 70,
                       "coordinateFallback": {
                         "enabled": false,
@@ -429,6 +431,8 @@ object RuleImportManager {
         }
         if (coordinateFallback?.enabled == true && validDurationMs != effectiveWindowMs) {
             warningMessages += "$id 的 coordinateFallback 时间窗已收紧到 ${effectiveWindowMs}ms。"
+        } else if (kind == RuleKind.Precise && validDurationMs != effectiveWindowMs) {
+            warningMessages += "$id 的 validDurationMs 已调整到 ${effectiveWindowMs}ms，最多 ${defaultWindowSeconds()} 秒。"
         } else if (kind == RuleKind.Standard && validDurationMs != RuleRepository.DEFAULT_RULE_WINDOW_MS) {
             warningMessages += "$id 的 validDurationMs 已收紧到 ${RuleRepository.DEFAULT_RULE_WINDOW_MS}ms，使用过程中不再默认扫描。"
         }
@@ -533,8 +537,14 @@ object RuleImportManager {
         return RuleImportResult(false, "$ruleId 的 $fieldName 包含非法正则：$invalidPattern")
     }
 
-    fun previewImport(result: RuleImportResult, strategy: DuplicateStrategy): List<String> {
+    fun previewImport(
+        result: RuleImportResult,
+        strategy: DuplicateStrategy,
+        storedPolicies: List<AppPolicy>
+    ): List<String> {
         val pkg = result.rulePackage
+        val effectivePolicies = SettingsRepository.resolveImportedPolicies(storedPolicies, result.appPolicies)
+        val storedPackages = storedPolicies.map { it.packageName }.toSet()
         return buildList {
             add("规则包：${pkg?.name.orEmpty()}")
             add("作者：${pkg?.author.orEmpty()}")
@@ -560,10 +570,11 @@ object RuleImportManager {
                     "disabled=${result.rules.count { !it.enabled }}"
             )
             add("重复处理：${strategy.label}")
-            result.appPolicies.forEach { policy ->
+            effectivePolicies.forEach { policy ->
+                val customPolicySource = if (policy.packageName in storedPackages) "（保留本地）" else ""
                 add(
                     "应用策略：${policy.packageName} defaultRuleEnabled=${policy.defaultRuleEnabled} " +
-                        "customRulesEnabled=${policy.customRulesEnabled}"
+                        "customRulesEnabled=${policy.customRulesEnabled}$customPolicySource"
                 )
             }
             result.rules.forEach { rule ->

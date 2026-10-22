@@ -1,14 +1,20 @@
 # Skip 项目 Codex 接手文档
 
 > 生成时间：2026-07-12 16:16（Asia/Shanghai）  
+> 当前状态修订：2026-10-22（Asia/Shanghai）
 > 主仓库：`S:\Android\AndroidStudioProjects\Skip`  
-> 当前状态：功能分支 `codex/safe-skip-candidate-resolution` 已合并，1.0.17 已发布；本文档部分章节停留在 2026-07-12 的会话状态，正文已标注需重新核实的事实。
+> 当前源码：`1.0.18 / 26`，发布分支为 `main`，对应标签为 `v1.0.18`。版本、APK 下载和 SHA256 以仓库 README 与发布说明为准。
+> §0–2 描述当前状态；§H2–H9 保留 2026-07-12 的原始接手记录，其中的分支、行号、构建产物和操作顺序不能作为当前事实或执行指令。
 
 ## 0. 接手结论
 
-纯“跳过 / skip”功能及三项 P1 安全加固已经通过 `merge codex/safe-skip-candidate-resolution: Fast-forward` 合入主线（见 `.git/logs/HEAD`），1.0.10 至 1.0.17 均已基于该主线发布。因此本文档第 0/2 节描述的“尚未合并”状态已过期，保留仅作历史参考。
+1.0.18 将所有自动检测限制为每次真实进入前台后的前 6 秒，成功跳过一次即结束本次检测。普通事件、补扫、重试和实际点击派发共用周期身份及单调时钟截止时间；系统临时窗口和应用内页面变化不能重新计时。
 
-仍然成立的部分：设备仪器测试从未执行过。`RELEASE_TEST_MATRIX.md` 全表为“未测”，`RELEASE_NOTES.md` 多处以“本机无连接设备，未执行真机测试”为前提，因此不得声称真实无障碍树验证完成。
+暂停期间继续跟踪前台应用，总开关变化绕过普通内容事件过滤。重新开启后的首次真实切回可以开始检测，在同一应用原地重新开启或服务重连不会凭空开启周期。
+
+1.0.17 的发布基线为 `e24acc9`；随后已有 9 个审计修复提交至 `68e80ec`。1.0.18 保留这些提交，并包含后续更新资产、APK 实际版本、规则导入预览及重定向修复，不重写历史。历史报告的分支名称与“未发布”状态不代表当前发布状态。
+
+手机安装和真实设备验收由项目所有者操作。本地构建与 JVM 测试不能代替无障碍时序、厂商最近任务界面、实际持久化或系统安装流程的真机验证。
 
 ## 1. 项目简介与技术栈
 
@@ -18,16 +24,39 @@ Skip 是本地运行的 Android 开屏页面辅助工具。用户主动开启无
 
 - 单模块 Android 应用：`:app`。
 - 包名/namespace：`com.example.skip`。
-- 当前版本：`1.0.17`，`versionCode=25`（`app/build.gradle.kts` 为版本事实来源）。
+- 当前版本：`1.0.18`，`versionCode=26`（`app/build.gradle.kts` 为版本事实来源）。
 - Kotlin `2.2.10`，Jetpack Compose、Material 3。
 - Android Gradle Plugin `9.2.0`，Gradle Wrapper `9.4.1`。
 - `compileSdk=36.1`、`targetSdk=36`、`minSdk=28`。
 - Java/Kotlin 编译目标：Java 11；Gradle daemon toolchain 配置为 JDK 21。
-- 仓库当前**没有任何测试源集**：`app/src/test`、`app/src/androidTest` 均不存在，`app/build.gradle.kts` 也没有测试依赖。文档后续提到的 `SafetyAndLogUnitTest`、`GeminiRegressionInstrumentedTest` 等类只存在于 `app/build/test-results/**` 与 `app/build/reports/tests/**` 的历史产物中，源码已不在仓库内；执行 `:app:testDebugUnitTest` 只会是 NO-SOURCE 空跑。
-- 数据主要保存在本地 SharedPreferences/JSON；项目没有后端、数据库服务或生产部署链路。
+- `app/src/test` 当前包含 11 个 JVM 测试类、72 个用例，使用 JUnit 4；`:app:testDebugUnitTest` 会执行这些测试，不是 NO-SOURCE。覆盖检测周期、开关恢复、点击截止时间、规则时长、受保护包匹配、节点预算、应用策略与版本比较。`app/src/androidTest` 不存在。历史章节中的仪器测试类不是当前测试源集。
+- 数据保存在本地 SharedPreferences/JSON 和 Room 日志库；项目没有远端后端或数据库服务。
 - 无障碍服务声明见 `app/src/main/AndroidManifest.xml` 和 `app/src/main/res/xml/accessibility_service_config.xml`，允许读取窗口内容、报告 View ID 和执行手势。
 
-## 2. 当前任务与目标
+## 2. 当前修复与验证入口（2026-10-22）
+
+- **开屏周期**：`EventWindowTracker` 维护前台身份、单调时钟起点与周期标识。开关切换结束旧周期但保留已确认前台身份；暂停时仅跟踪应用，不能创建活动周期。`AccessibilityWindowResolver` 使用获得焦点的窗口确认前台，不用备用扫描根节点推断切换。
+- **点击截止**：`OpeningAdWindowPolicy.MAX_WINDOW_MS` 为统一的 6000ms 上限。普通规则固定 6 秒，精确规则保留 3～6 秒，旧配置与导入值通过现有入口规范化。`ClickExecutor` 在节点动作或手势实际派发前调用周期检查，已发出的动作到期后仅允许收尾确认。
+- **成功后停止**：确认成功后结束本周期，取消补扫、重试与未执行点击。普通界面事件不会重新激活该周期；过期周期回调不能作用于新的周期。
+- **自更新**：资产名称必须对应当前发布。优先 `Skip-<tagName>-release.apk`，仅在不存在时兼容 `Skip-<规范化版本>-release.apk`；忽略大小写，两名并存不报冲突。选中层级的重复资产、非法 digest 或缺失下载地址均失败，不降级。APK 实际 `versionName` 去首尾空白后必须完全等于发布版本；包名、签名、版本代码递增和 SHA-256 检查继续执行。
+- **下载跳转**：用当前 URL 解析相对 `Location`，随后检查 HTTPS 和现有主机白名单；每一跳在连接前检查，最多 5 次重定向，200 MB 和长度限制保持不变。
+- **规则导入**：预览与保存共用 `resolveImportedPolicies`。已有应用仅更新默认规则开关，保留本地自定义规则开关和黑名单迁移标志；新应用使用导入策略。同包重复条目最后一项生效，预览每包一条并标注保留的本地开关。保存时重新读取本地策略。
+- **兼容与边界**：应用身份、JSON 格式、现有数据、权限和运行时依赖不变；旧规则超过 6 秒的时长被收紧。连续两层广告的第二层可能需要手动关闭。厂商界面无法确认真实切换时不重新启动检测。
+
+当前本地检查入口：
+
+```powershell
+.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest --rerun-tasks --console=plain
+.\gradlew.bat :app:assembleRelease --rerun-tasks --console=plain
+.\gradlew.bat :app:lintDebug --console=plain
+pwsh -NoProfile -File .\tools\verify-release.ps1 -Version 1.0.18 -VersionCode 26 -CheckVersionOnly
+git diff --check
+git status --short --branch
+```
+
+lint 基线已有 `HomeScreen` 与 `IconAppearanceScreen` 两个 `LocalContextGetResourceValueCall` 错误；不能把构建完成写成 lint 全通过。当前回归测试位于仓库 `app/src/test`，每次修改后需要重新运行。发布须核对签名 Release APK 的内嵌版本、历史证书、SHA256，以及 GitHub Release、标签和 main 的一致性，具体命令见 `RELEASE_GUIDE.md`。下面的历史输出不得复用为当前验证证据。
+
+## H2. 原任务与目标（2026-07-12 历史）
 
 当前任务是提高默认规则对开屏纯“跳过 / skip”按钮的命中率，同时保持安全边界。目标条件必须同时满足：
 
@@ -42,7 +71,7 @@ Skip 是本地运行的 Android 开屏页面辅助工具。用户主动开启无
 
 本轮原定收口步骤是：同步设计/实施文档 → 完整验证 → 设备仪器测试 → 快进合并 `main` → 合并后复验和清理工作树。用户随后要求先生成本接手文档，因此上述收口尚未继续。
 
-## 3. 状态分层
+## H3. 状态分层（2026-07-12 历史）
 
 ### 3.1 已完成并有代码证据
 
@@ -122,7 +151,7 @@ Skip 是本地运行的 Android 开屏页面辅助工具。用户主动开启无
    - 只能在合并及合并后验证通过后执行。
    - 从主仓库目录移除 `.worktrees/safe-skip-candidate-resolution`，执行 `git worktree prune`，再删除本地功能分支。
 
-## 4. 当前 Git 状态
+## H4. Git 状态（2026-07-12 历史）
 
 ### 主工作区
 
@@ -152,7 +181,7 @@ Skip 是本地运行的 Android 开屏页面辅助工具。用户主动开启无
 - `main` 已领先 `origin/main` 3 个文档/忽略配置提交；不要先执行不加判断的 `git pull` 或重置。
 - 功能分支从当前 `main` 的 `b7ac32b` 分出，因此在主分支无新提交时可快进合并。
 
-## 5. 关键文件、接口和调用链
+## H5. 关键文件、接口和调用链（2026-07-12 历史）
 
 ### 应用入口和设置
 
@@ -211,7 +240,7 @@ MatchResult
 
 `standaloneSkipAllowed` 必须在整条链上保持，旧 JSON 没有该字段时默认 `false`。
 
-## 6. 启动、构建、测试和环境
+## H6. 启动、构建、测试和环境（历史，当前入口见 §2）
 
 ### 环境事实
 
@@ -225,7 +254,7 @@ MatchResult
 
 ### 推荐工作目录
 
-`.worktrees/` 已不存在，功能分支也已合并，直接在主仓库工作：
+原功能分支已合并；磁盘中可能残留旧目录，不能以目录存在与否判断当前注册工作树。实际位置以 `git worktree list` 为准。以下命令保留原接手场景，当前修复入口见 §2：
 
 ```powershell
 Set-Location -LiteralPath 'S:\Android\AndroidStudioProjects\Skip'
@@ -275,7 +304,7 @@ S:\Android\Sdk\platform-tools\adb.exe devices -l
 
 禁止在日志或接手文档中写出签名密码和密钥内容。
 
-## 7. 已知报错、风险、阻塞点和待确认事项
+## H7. 已知报错、风险、阻塞点和待确认事项（2026-07-12 历史）
 
 ### 已知报错
 
@@ -303,7 +332,7 @@ S:\Android\Sdk\platform-tools\adb.exe devices -l
 - 待确认：仪器测试通过后，是否仍按原计划只做本地快进合并，不 push、不创建 PR。
 - 待确认：接手文档最终是否需要单独提交；当前用户明确要求本轮不要提交 Git。
 
-## 8. 推荐的新 Session 执行顺序
+## H8. 原推荐执行顺序（2026-07-12 历史，不用于当前修复）
 
 1. 阅读本文件，并分别检查主工作区和功能 worktree 的 `git status`、分支和 HEAD；不要假设状态未变化。
 2. 进入 `safe-skip-candidate-resolution` 工作树，确认 HEAD 至少包含 `8279037`，且无未知改动。
@@ -317,7 +346,7 @@ S:\Android\Sdk\platform-tools\adb.exe devices -l
 10. 在 `main` 重跑完整 JVM 测试和打包；全部通过后再移除工作树、`git worktree prune`、删除本地功能分支。
 11. 保留主工作区的 `docs/CODEX_HANDOFF.md`，除非用户明确决定提交或删除。
 
-## 9. 可直接发送给新 Codex Session 的接手 Prompt
+## H9. 原接手 Prompt（2026-07-12 历史，不再适用）
 
 ```text
 请接手 Android 项目 S:\Android\AndroidStudioProjects\Skip。

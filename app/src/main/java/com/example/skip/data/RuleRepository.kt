@@ -1,5 +1,7 @@
 package com.example.skip.data
 
+import com.example.skip.engine.OpeningAdWindowPolicy
+
 import android.content.Context
 import androidx.core.content.edit
 import com.example.skip.model.CoordinateFallback
@@ -29,8 +31,8 @@ object RuleRepository {
         val rule: SkipRule? = null,
         val errorMessage: String = ""
     )
-    const val DEFAULT_RULE_WINDOW_MS = 8_000L
-    const val MAX_COORDINATE_FALLBACK_WINDOW_MS = 6_000L
+    const val DEFAULT_RULE_WINDOW_MS = OpeningAdWindowPolicy.MAX_WINDOW_MS
+    const val MAX_COORDINATE_FALLBACK_WINDOW_MS = OpeningAdWindowPolicy.MAX_WINDOW_MS
     const val DEFAULT_RULE_MIN_SCORE = 70
     const val DEFAULT_RULE_COOLDOWN_MS = 1_500L
     const val MIN_DEFAULT_RULE_COOLDOWN_MS = 800L
@@ -302,21 +304,12 @@ object RuleRepository {
 
         saveRules(context, existingRules)
         if (result.appPolicies.isNotEmpty()) {
-            // Merge instead of replace: an imported policy that omits customRulesEnabled would
-            // otherwise reset it to true and silently re-enable the app's custom rules.
-            // `getAppPolicy` fabricates a default for unknown packages, so look the stored list up
-            // directly to tell "already configured" from "seen for the first time".
-            val storedPolicies = SettingsRepository.getAppPolicies(context)
-                .associateBy { it.packageName }
-            result.appPolicies.forEach { imported ->
-                val existing = storedPolicies[imported.packageName]
-                val merged = if (existing == null) {
-                    imported
-                } else {
-                    SettingsRepository.mergeImportedPolicy(existing, imported)
-                }
-                SettingsRepository.setAppPolicy(context, merged)
-            }
+            // Re-read at confirmation time so a preview snapshot cannot overwrite newer choices.
+            val policies = SettingsRepository.resolveImportedPolicies(
+                storedPolicies = SettingsRepository.getAppPolicies(context),
+                importedPolicies = result.appPolicies
+            )
+            policies.forEach { SettingsRepository.setAppPolicy(context, it) }
         }
         if (existingRules.any { it.packageId == packageInfo.id }) {
             upsertRulePackage(context, packageInfo)

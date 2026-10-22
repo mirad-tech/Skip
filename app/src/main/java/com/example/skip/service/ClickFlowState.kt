@@ -27,7 +27,9 @@ internal data class EventContext(
     val elapsedSinceForegroundMs: Long?,
     val defaultRuleWindowMs: Long,
     val isWithinDefaultRuleWindow: Boolean,
-    val timeWindowDecision: String
+    val timeWindowDecision: String,
+    val openingAdSessionKey: String? = null,
+    val foregroundStartElapsedRealtimeMs: Long? = null
 )
 
 internal data class ClickMatchSnapshot(

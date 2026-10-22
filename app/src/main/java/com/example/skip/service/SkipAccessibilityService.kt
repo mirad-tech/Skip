@@ -17,7 +17,7 @@ import com.example.skip.engine.HighRiskClickPolicy
 import com.example.skip.engine.NodeScanBudget
 import com.example.skip.engine.NodeScanner
 import com.example.skip.engine.NodeTraversalResult
-import com.example.skip.engine.PreciseRulePolicy
+import com.example.skip.engine.OpeningAdWindowPolicy
 import com.example.skip.engine.RulePlanProvider
 import com.example.skip.engine.SafetyGuard
 import com.example.skip.engine.ScanMissClassifier
@@ -60,9 +60,12 @@ class SkipAccessibilityService : AccessibilityService() {
     internal var currentActivityIdentityKnown = false
     private val lastCoordinateFallbackBlockedAt = mutableMapOf<String, Long>()
     private var lastTreeWalkElapsedRealtime = 0L
-    private var lastEffectiveRuleWindowMs = PreciseRulePolicy.MAX_WINDOW_MS
+    private var lastEffectiveRuleWindowMs = OpeningAdWindowPolicy.MAX_WINDOW_MS
     private var loggedTimeWindowExpiryKey: String? = null
     private var loggedAutomationPaused = false
+    private var masterWasEnabled = false
+    private var openingAdExpiry: Runnable? = null
+    private val openingAdWorkToken = Any()
 
     internal val foregroundPackage: String?
         get() = foregroundState.currentForegroundPackage
@@ -80,21 +83,25 @@ class SkipAccessibilityService : AccessibilityService() {
         SettingsRepository.markServiceConnected(this)
         RuleRepository.disableRulesForPackage(this, packageName)
         LogRepository.start(applicationContext)
+        masterWasEnabled = SettingsRepository.isMasterEnabled(this)
+        resetForegroundBaseline(windowResolver.observeForeground())
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || !event.isSupportedEvent()) return
-        val now = System.currentTimeMillis()
-        val elapsedSinceForegroundMs = foregroundState.foregroundStartTimeMillis
-            .takeIf { it > 0L }
-            ?.let { start -> (now - start).coerceAtLeast(0L) }
+        val masterEnabled = SettingsRepository.isMasterEnabled(this)
+        expireOpeningAdSessionIfNeeded()
+        val elapsedSinceForegroundMs = foregroundState.elapsedSinceStart(SystemClock.elapsedRealtime())
         val work = AccessibilityEventWorkPolicy.decide(
             eventType = event.eventType,
             elapsedSinceForegroundMs = elapsedSinceForegroundMs,
             ruleWindowMs = lastEffectiveRuleWindowMs,
             lastTreeWalkElapsedRealtime = lastTreeWalkElapsedRealtime,
             nowElapsedRealtime = SystemClock.elapsedRealtime(),
-            hasPendingClick = pendingClickCoordinator.pendingClick != null
+            hasPendingClick = pendingClickCoordinator.pendingClick != null,
+            hasActiveSession = foregroundState.sessionKey != null &&
+                !foregroundState.detectionFinished && foregroundState.isForegroundVisible,
+            masterStateChanged = masterEnabled != masterWasEnabled
         )
         when (work) {
             AccessibilityEventWork.Drop -> return
@@ -104,13 +111,13 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             AccessibilityEventWork.ProcessFully -> {
                 AccessibilityNodeAccess.withCacheBoundary(this) {
-                    processAccessibilityEvent(event)
+                    processAccessibilityEvent(event, masterEnabled)
                 }
             }
         }
     }
 
-    private fun processAccessibilityEvent(event: AccessibilityEvent) {
+    private fun processAccessibilityEvent(event: AccessibilityEvent, masterEnabled: Boolean) {
 
         val now = System.currentTimeMillis()
         val windowStateChanged = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
@@ -119,7 +126,22 @@ class SkipAccessibilityService : AccessibilityService() {
             lastWindowStateChangedAt = now
         }
         SettingsRepository.markServiceActive(this)
-        if (!SettingsRepository.isMasterEnabled(this)) {
+        val masterStateChanged = masterEnabled != masterWasEnabled
+        val foregroundObservation = windowResolver.observeForeground(
+            event.packageName?.toString().orEmpty(),
+            event.className?.toString().orEmpty(),
+            event.windowId
+        )
+        if (masterStateChanged) {
+            masterWasEnabled = masterEnabled
+            openingAdExpiry?.let(mainHandler::removeCallbacks)
+            openingAdExpiry = null
+            pendingClickCoordinator.clear()
+            cancelOpeningAdRecovery(resetRetrySession = true)
+        }
+        // Track foreground changes while paused, and preserve a real switch on re-enable.
+        updateForegroundWindow(foregroundObservation, now, windowStateChanged, masterStateChanged)
+        if (!masterEnabled) {
             currentActivityName = ""
             currentActivityIdentityKnown = false
             pendingClickCoordinator.clear()
@@ -180,19 +202,22 @@ class SkipAccessibilityService : AccessibilityService() {
             terminateOpeningAdRecovery()
             return
         }
-        updateForegroundWindow(currentPackage, now, windowStateChanged)
-
         val observedActivityName = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             event.className?.toString().orEmpty()
         } else {
             ""
         }
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            eventPackageName == foregroundState.currentForegroundPackage &&
+            foregroundState.isForegroundVisible
+        ) {
             currentActivityIdentityKnown = observedActivityName.isNotBlank()
         } else if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
             currentActivityIdentityKnown = false
         }
-        if (observedActivityName.isNotBlank()) {
+        if (observedActivityName.isNotBlank() && eventPackageName == foregroundState.currentForegroundPackage &&
+            foregroundState.isForegroundVisible
+        ) {
             currentActivityName = observedActivityName
         }
         val activityName = currentActivityName
@@ -211,6 +236,10 @@ class SkipAccessibilityService : AccessibilityService() {
             pendingClickCoordinator.handlePendingEventFastPath(pending, pendingEventContext)
             return
         }
+
+        if (foregroundState.detectionFinished || !foregroundState.isForegroundVisible ||
+            currentPackage != foregroundState.currentForegroundPackage
+        ) return
 
         var eventContext = buildEventContext(
             eventType = event.eventType,
@@ -317,7 +346,7 @@ class SkipAccessibilityService : AccessibilityService() {
             } else {
                 "default_rule_window_expired"
             }
-            val expiryKey = "$currentPackage:${foregroundState.foregroundStartTimeMillis}"
+            val expiryKey = currentOpeningAdSessionKey()
             if (loggedTimeWindowExpiryKey != expiryKey) {
                 loggedTimeWindowExpiryKey = expiryKey
                 eventLogger.logEvent(
@@ -385,7 +414,9 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val activityScopedRules = NodeScanner.filterRulesForActivity(rules, eventContext.activityName)
+        if (!isSessionOpen(eventContext.openingAdSessionKey, currentPackage, ruleWindowMs)) return
         if (ActiveTextInputGuard.hasFocusedEditableInput(root)) {
+            if (!isSessionOpen(eventContext.openingAdSessionKey, currentPackage, ruleWindowMs)) return
             val coordinateResult = CoordinateFallbackMatcher.findResult(
                 root = root,
                 rules = activityScopedRules,
@@ -408,7 +439,8 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
-        val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
+        if (!isSessionOpen(eventContext.openingAdSessionKey, currentPackage, ruleWindowMs)) return
+        val appElapsedMs = foregroundState.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return
         val activeActivityScopedRules = NodeScanner.filterRulesForActivity(activeRules, eventContext.activityName)
         val scanStartedAt = SystemClock.elapsedRealtime()
         val scan = NodeScanner.scan(root, activeRules, appElapsedMs, eventContext.activityName)
@@ -417,13 +449,14 @@ class SkipAccessibilityService : AccessibilityService() {
         logScan(scan, eventContext, scanDurationMs = scanDurationMs)
         val match = scan.bestMatch
         if (match == null) {
+            if (!isSessionOpen(eventContext.openingAdSessionKey, currentPackage, ruleWindowMs)) return
             when (
                 val coordinateResult = CoordinateFallbackMatcher.findResult(
                 root = root,
                 rules = activeActivityScopedRules,
                 packageName = currentPackage,
                 selfPackageName = packageName,
-                elapsedSinceForegroundMs = appElapsedMs,
+                elapsedSinceForegroundMs = foregroundState.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return,
                 screenWidth = resources.displayMetrics.widthPixels,
                 screenHeight = resources.displayMetrics.heightPixels
                 )
@@ -513,6 +546,7 @@ class SkipAccessibilityService : AccessibilityService() {
         AccessibilityNodeAccess.clearCache(this)
         pendingClickCoordinator.clear()
         cancelOpeningAdRecovery(resetRetrySession = true)
+        resetForegroundBaseline(windowResolver.observeForeground())
         LogRepository.flushPendingWritesAsync(applicationContext)
         SettingsRepository.markServiceInterrupted(this)
         feedbackController.hidePopup()
@@ -530,24 +564,84 @@ class SkipAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun updateForegroundWindow(packageName: String, now: Long, windowStateChanged: Boolean) {
+    private fun updateForegroundWindow(
+        observation: ForegroundObservation,
+        now: Long,
+        windowStateChanged: Boolean,
+        masterStateChanged: Boolean = false
+    ) {
         val previous = foregroundState
         foregroundState = EventWindowTracker.updateForegroundWindow(
             state = foregroundState,
-            resolvedPackageName = packageName,
+            observation = observation,
             now = now,
-            selfPackageName = this.packageName,
-            windowStateChanged = windowStateChanged
+            nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+            windowStateChanged = windowStateChanged,
+            masterEnabled = masterWasEnabled,
+            masterStateChanged = masterStateChanged
         )
-        if (foregroundState != previous) {
+        if (foregroundState.sessionId != previous.sessionId) {
+            pendingClickCoordinator.clear()
             lastClickSignature = null
             cancelOpeningAdRecovery(resetRetrySession = true)
             currentActivityName = ""
             currentActivityIdentityKnown = false
             lastTreeWalkElapsedRealtime = 0L
-            lastEffectiveRuleWindowMs = PreciseRulePolicy.MAX_WINDOW_MS
+            lastEffectiveRuleWindowMs = OpeningAdWindowPolicy.MAX_WINDOW_MS
             loggedTimeWindowExpiryKey = null
+            scheduleOpeningAdExpiry()
         }
+    }
+
+    private fun resetForegroundBaseline(observation: ForegroundObservation) {
+        openingAdExpiry?.let(mainHandler::removeCallbacks)
+        openingAdExpiry = null
+        pendingClickCoordinator.clear()
+        cancelOpeningAdRecovery(resetRetrySession = true)
+        foregroundState = ForegroundWindowState(sessionId = foregroundState.sessionId + 1L)
+        updateForegroundWindow(observation, System.currentTimeMillis(), windowStateChanged = false)
+    }
+
+    private fun scheduleOpeningAdExpiry() {
+        openingAdExpiry?.let(mainHandler::removeCallbacks)
+        openingAdExpiry = null
+        val key = currentOpeningAdSessionKey() ?: return
+        if (foregroundState.detectionFinished) return
+        val remaining = OpeningAdWindowPolicy.MAX_WINDOW_MS -
+            (foregroundState.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return)
+        val expiry = Runnable {
+            if (currentOpeningAdSessionKey() == key) expireOpeningAdSessionIfNeeded()
+        }
+        openingAdExpiry = expiry
+        mainHandler.postDelayed(expiry, remaining.coerceAtLeast(0L))
+    }
+
+    private fun expireOpeningAdSessionIfNeeded() {
+        if (foregroundState.detectionFinished) return
+        val elapsed = foregroundState.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return
+        if (elapsed < OpeningAdWindowPolicy.MAX_WINDOW_MS) return
+        recordRuleWindowExpiryIfNeeded()
+        val key = currentOpeningAdSessionKey() ?: return
+        finishOpeningAdSession(key)
+        pendingClickCoordinator.cancelUnsentClick(key)
+    }
+
+    internal fun finishOpeningAdSession(sessionKey: String?) {
+        if (sessionKey == null || sessionKey != currentOpeningAdSessionKey()) return
+        foregroundState = EventWindowTracker.finishSession(foregroundState, sessionKey)
+        openingAdExpiry?.let(mainHandler::removeCallbacks)
+        openingAdExpiry = null
+        terminateOpeningAdRecovery(sessionKey)
+    }
+
+    internal fun refreshForegroundForClick() {
+        updateForegroundWindow(windowResolver.observeForeground(), System.currentTimeMillis(), windowStateChanged = false)
+    }
+
+    internal fun isSessionOpen(sessionKey: String?, packageName: String, windowMs: Long): Boolean {
+        return EventWindowTracker.isSessionOpen(
+            foregroundState, sessionKey, packageName, SystemClock.elapsedRealtime(), windowMs
+        )
     }
 
     private fun joinDetails(vararg details: String): String {
@@ -564,8 +658,8 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun recordRuleWindowExpiryIfNeeded() {
         val packageName = foregroundState.currentForegroundPackage.orEmpty()
-        if (packageName.isBlank() || foregroundState.foregroundStartTimeMillis <= 0L) return
-        val expiryKey = "$packageName:${foregroundState.foregroundStartTimeMillis}"
+        if (packageName.isBlank()) return
+        val expiryKey = currentOpeningAdSessionKey() ?: return
         if (loggedTimeWindowExpiryKey == expiryKey) return
         loggedTimeWindowExpiryKey = expiryKey
         val eventContext = buildEventContext(
@@ -615,6 +709,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun postAccessibilityTask(action: () -> Unit, delayMs: Long) {
         mainHandler.postDelayed(
             { AccessibilityNodeAccess.withCacheBoundary(this, action) },
+            openingAdWorkToken,
             delayMs
         )
     }
@@ -634,7 +729,8 @@ class SkipAccessibilityService : AccessibilityService() {
         ) {
             return
         }
-        val key = "$packageName:${foregroundState.foregroundStartTimeMillis}"
+        val key = baseEventContext.openingAdSessionKey ?: return
+        if (!isSessionOpen(key, packageName, baseEventContext.defaultRuleWindowMs)) return
         if (!OpeningAdRecoveryGate.canRun(
                 masterEnabled = isOpeningAdRecoveryAllowed(),
                 sessionKey = key,
@@ -642,10 +738,10 @@ class SkipAccessibilityService : AccessibilityService() {
             )
         ) return
         if (openingAdRecoveryState.rescanKey == key) return
-        val foregroundStartTimeMillis = baseEventContext.foregroundStartTimeMillis ?: return
+        val startedAt = baseEventContext.foregroundStartElapsedRealtimeMs ?: return
         val delaysMs = OpeningAdRescanPolicy.remainingDelaysMs(
-            foregroundStartTimeMillis = foregroundStartTimeMillis,
-            nowMillis = System.currentTimeMillis(),
+            foregroundStartElapsedRealtimeMs = startedAt,
+            nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
             ruleWindowMs = baseEventContext.defaultRuleWindowMs
         )
         if (delaysMs.isEmpty()) return
@@ -672,6 +768,9 @@ class SkipAccessibilityService : AccessibilityService() {
         defaultRuleWindowMs: Long,
         expectedActivityName: String
     ) {
+        if (!isSameOpeningAdSession(key, packageName)) return
+        refreshForegroundForClick()
+        if (!isSessionOpen(key, packageName, defaultRuleWindowMs)) return
         if (!OpeningAdRecoveryGate.canRun(
                 masterEnabled = isOpeningAdRecoveryAllowed(),
                 sessionKey = key,
@@ -740,7 +839,6 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
-        updateForegroundWindow(currentPackage, now, windowStateChanged = false)
         val rulePlan = currentRulePlan(currentPackage)
         if (rulePlan.skipStage != null || rulePlan.rules.isEmpty()) {
             terminateOpeningAdRecovery()
@@ -785,7 +883,8 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
-        val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
+        if (!isSessionOpen(key, currentPackage, ruleWindowMs)) return
+        val appElapsedMs = foregroundState.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return
         val scanStartedAt = SystemClock.elapsedRealtime()
         val scan = NodeScanner.scan(root, activeRules, appElapsedMs, eventContext.activityName)
         val scanDurationMs = (SystemClock.elapsedRealtime() - scanStartedAt).coerceAtLeast(0L)
@@ -854,8 +953,9 @@ class SkipAccessibilityService : AccessibilityService() {
             pendingClickCoordinator.pendingClick != null ||
             openingAdRecoveryState.retryScheduled
         ) return null
-        val foregroundStartTimeMillis = baseEventContext.foregroundStartTimeMillis ?: return null
-        val sessionKey = "$packageName:$foregroundStartTimeMillis"
+        val startedAt = baseEventContext.foregroundStartElapsedRealtimeMs ?: return null
+        val sessionKey = baseEventContext.openingAdSessionKey ?: return null
+        if (!isSessionOpen(sessionKey, packageName, baseEventContext.defaultRuleWindowMs)) return null
         if (!OpeningAdRecoveryGate.canRun(
                 masterEnabled = isOpeningAdRecoveryAllowed(),
                 sessionKey = sessionKey,
@@ -883,9 +983,9 @@ class SkipAccessibilityService : AccessibilityService() {
             return null
         }
         val delayMs = OpeningAdRetryPolicy.nextDelayMs(performedCount) ?: return null
-        val now = System.currentTimeMillis()
-        val windowEndAt = foregroundStartTimeMillis + baseEventContext.defaultRuleWindowMs
-        if (now + delayMs > windowEndAt) return null
+        val now = SystemClock.elapsedRealtime()
+        val windowEndAt = startedAt + OpeningAdWindowPolicy.effectiveWindowMs(baseEventContext.defaultRuleWindowMs)
+        if (now + delayMs >= windowEndAt) return null
 
         val nextRetryCount = performedCount + 1
         val generation = openingAdRecoveryState.scheduleRetry()
@@ -911,6 +1011,9 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun runOpeningAdRetry(request: OpeningAdRetryRequest) {
+        if (!isSameOpeningAdSession(request.sessionKey, request.packageName)) return
+        refreshForegroundForClick()
+        if (!isSessionOpen(request.sessionKey, request.packageName, request.defaultRuleWindowMs)) return
         if (!OpeningAdRecoveryGate.canRun(
                 masterEnabled = isOpeningAdRecoveryAllowed(),
                 sessionKey = request.sessionKey,
@@ -1004,7 +1107,8 @@ class SkipAccessibilityService : AccessibilityService() {
             terminateOpeningAdRecovery()
             return
         }
-        val appElapsedMs = eventContext.elapsedSinceForegroundMs ?: 0L
+        if (!isSessionOpen(request.sessionKey, currentPackage, request.defaultRuleWindowMs)) return
+        val appElapsedMs = foregroundState.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return
         val scanStartedAt = SystemClock.elapsedRealtime()
         val scan = NodeScanner.scan(
             root = root,
@@ -1035,13 +1139,14 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
 
+        if (!isSessionOpen(request.sessionKey, currentPackage, request.defaultRuleWindowMs)) return
         when (
             val coordinateResult = CoordinateFallbackMatcher.findResult(
                 root = root,
                 rules = activityScopedRules,
                 packageName = currentPackage,
                 selfPackageName = packageName,
-                elapsedSinceForegroundMs = appElapsedMs,
+                elapsedSinceForegroundMs = foregroundState.elapsedSinceStart(SystemClock.elapsedRealtime()) ?: return,
                 screenWidth = resources.displayMetrics.widthPixels,
                 screenHeight = resources.displayMetrics.heightPixels
             )
@@ -1095,20 +1200,15 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun isSameOpeningAdSession(key: String, packageName: String): Boolean {
         return foregroundState.currentForegroundPackage == packageName &&
-            key == "$packageName:${foregroundState.foregroundStartTimeMillis}"
+            key == currentOpeningAdSessionKey()
     }
 
     private fun currentOpeningAdSessionKey(): String? {
-        val packageName = foregroundState.currentForegroundPackage.orEmpty()
-        val startedAt = foregroundState.foregroundStartTimeMillis
-        if (packageName.isBlank() || startedAt <= 0L) return null
-        return "$packageName:$startedAt"
+        return foregroundState.sessionKey
     }
 
     internal fun pendingSessionKey(pending: PendingClick): String? {
-        return pending.eventContext.foregroundStartTimeMillis
-            ?.takeIf { it > 0L }
-            ?.let { startedAt -> "${pending.packageName}:$startedAt" }
+        return pending.eventContext.openingAdSessionKey
     }
 
     internal fun hasActivityChanged(expectedActivityName: String): Boolean {
@@ -1135,10 +1235,13 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun cancelOpeningAdRecovery(resetRetrySession: Boolean = false) {
+        mainHandler.removeCallbacksAndMessages(openingAdWorkToken)
         openingAdRecoveryState.cancel(resetRetrySession)
     }
 
     internal fun terminateOpeningAdRecovery(sessionKey: String? = currentOpeningAdSessionKey()) {
+        if (sessionKey != currentOpeningAdSessionKey()) return
+        mainHandler.removeCallbacksAndMessages(openingAdWorkToken)
         openingAdRecoveryState.terminate(sessionKey)
     }
     private fun startClickFromMatch(
@@ -1236,7 +1339,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val snapshot = EventWindowTracker.snapshot(
             state = foregroundState,
             activePackageName = packageName,
-            now = now,
+            nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
             defaultRuleWindowMs = defaultRuleWindowMs
         )
         return EventContext(
@@ -1254,7 +1357,9 @@ class SkipAccessibilityService : AccessibilityService() {
             elapsedSinceForegroundMs = snapshot.elapsedSinceForegroundMs,
             defaultRuleWindowMs = snapshot.defaultRuleWindowMs,
             isWithinDefaultRuleWindow = snapshot.isWithinDefaultRuleWindow,
-            timeWindowDecision = snapshot.timeWindowDecision
+            timeWindowDecision = snapshot.timeWindowDecision,
+            openingAdSessionKey = snapshot.sessionKey,
+            foregroundStartElapsedRealtimeMs = snapshot.foregroundStartElapsedRealtimeMs
         )
     }
 

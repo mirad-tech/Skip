@@ -17,7 +17,8 @@ internal object ApkUpdateInstaller {
     fun validateDownloadedApk(
         context: Context,
         file: File,
-        currentVersionCode: Long
+        currentVersionCode: Long,
+        expectedVersionName: String
     ): ApkValidationResult {
         if (!file.exists() || file.length() <= 0L) {
             return ApkValidationResult.Invalid("下载文件为空")
@@ -39,10 +40,12 @@ internal object ApkUpdateInstaller {
             file = file,
             expectedPackageName = context.packageName,
             currentVersionCode = currentVersionCode,
+            expectedVersionName = expectedVersionName,
             installedCertificateSha256 = installedCertificateSha256,
             archive = ApkArchiveMetadata(
                 packageName = archivePackageInfo.packageName,
                 versionCode = archivePackageInfo.longVersionCode,
+                versionName = archivePackageInfo.versionName,
                 signingCertificateSha256 = archiveCertificateSha256
             )
         )
@@ -52,6 +55,7 @@ internal object ApkUpdateInstaller {
         file: File,
         expectedPackageName: String,
         currentVersionCode: Long,
+        expectedVersionName: String,
         installedCertificateSha256: Set<String>,
         archive: ApkArchiveMetadata
     ): ApkValidationResult {
@@ -60,6 +64,13 @@ internal object ApkUpdateInstaller {
         }
         if (archive.versionCode <= currentVersionCode) {
             return invalidAndDelete(file, "下载的 APK 版本不高于当前版本")
+        }
+        val actualVersionName = archive.versionName.orEmpty().trim()
+        if (actualVersionName.isBlank()) {
+            return invalidAndDelete(file, "下载的 APK 版本名称缺失")
+        }
+        if (expectedVersionName.isBlank() || actualVersionName != expectedVersionName) {
+            return invalidAndDelete(file, "下载的 APK 版本与发布版本不一致")
         }
         if (installedCertificateSha256.isEmpty() || archive.signingCertificateSha256.isEmpty()) {
             return invalidAndDelete(file, "APK 签名证书缺失")
@@ -181,6 +192,7 @@ internal object ApkUpdateInstaller {
 internal data class ApkArchiveMetadata(
     val packageName: String,
     val versionCode: Long,
+    val versionName: String?,
     val signingCertificateSha256: Set<String>
 )
 
