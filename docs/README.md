@@ -7,7 +7,7 @@ Skip 是一款本地运行的 Android 开屏页面辅助工具。它只在用户
 ## 下载和安装
 
 - 最新已发布版本：[下载 Skip 1.0.18 release APK](https://github.com/mirad-tech/Skip/releases/download/v1.0.18/Skip-v1.0.18-release.apk)
-- SHA256：`8EAAEA79C79BCD1D7A7C3CC1488E4A5AC615443CA25C0532A4F9AD76AADE58F5`
+- SHA256：`E01F07A76945941F830C8BFB143662F890808AABDD24D8C4DA3D660FFE3D776D`
 
 > 更新提示：1.0.7 的应用内更新可能因 SHA-256 digest 格式误判失败，不能通过应用内更新直接升级到最新版。请从 GitHub Release 手动下载 v1.0.18 APK 覆盖安装一次；从 v1.0.8 起后续应用内更新恢复正常。
 

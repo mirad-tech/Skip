@@ -17,7 +17,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.IconManager
@@ -34,12 +36,15 @@ fun HomeScreen(
     onOpenMore: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
+    val theme = context.theme
     val skipEnabled = serviceEnabled && masterEnabled
     val actionLabel = homeAutomationActionLabel(skipEnabled, safetyModeEnabled)
     val iconScheme = remember(context) { IconManager.currentScheme(context) }
     val iconRes = IconManager.homeImageRes
-    val icon = remember(context, iconRes) {
-        context.getDrawable(iconRes)
+    val icon = remember(resources, configuration, theme, iconRes) {
+        resources.getDrawable(iconRes, theme)
     }
 
     Surface(

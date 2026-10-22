@@ -54,7 +54,7 @@ git diff --check
 git status --short --branch
 ```
 
-lint 基线已有 `HomeScreen` 与 `IconAppearanceScreen` 两个 `LocalContextGetResourceValueCall` 错误；不能把构建完成写成 lint 全通过。当前回归测试位于仓库 `app/src/test`，每次修改后需要重新运行。发布须核对签名 Release APK 的内嵌版本、历史证书、SHA256，以及 GitHub Release、标签和 main 的一致性，具体命令见 `RELEASE_GUIDE.md`。下面的历史输出不得复用为当前验证证据。
+2026-10-22 的 1.0.18 同版本安装包修订已消除 `HomeScreen` 与 `IconAppearanceScreen` 两个 `LocalContextGetResourceValueCall` 错误：图标改用 `LocalResources` 读取，保留原资源、主题和自适应图标支持，并按配置变化刷新缓存。本次 `lintDebug` 为 0 个错误、16 个警告，`lintRelease` 为 0 个错误、9 个警告。当前回归测试位于仓库 `app/src/test`，每次修改后需要重新运行。发布须核对签名 Release APK 的内嵌版本、历史证书、SHA256，以及 GitHub Release、标签和 main 的一致性，具体命令见 `RELEASE_GUIDE.md`。下面的历史输出不得复用为当前验证证据。
 
 ## H2. 原任务与目标（2026-07-12 历史）
 

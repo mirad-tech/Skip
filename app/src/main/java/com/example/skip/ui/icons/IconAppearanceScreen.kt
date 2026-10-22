@@ -21,7 +21,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.skip.data.IconManager
@@ -97,11 +99,14 @@ private fun IconSchemeRow(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
+    val theme = context.theme
     // Preview the scheme's real launcher icon. Using the shared wordmark made every row look
     // identical apart from the background colour.
     val iconRes = IconManager.displayIconRes(scheme)
-    val icon = remember(context, iconRes) {
-        context.getDrawable(iconRes)
+    val icon = remember(resources, configuration, theme, iconRes) {
+        resources.getDrawable(iconRes, theme)
     }
 
     Card(
