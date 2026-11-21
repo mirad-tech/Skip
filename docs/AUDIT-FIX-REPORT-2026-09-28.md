@@ -12,7 +12,7 @@
 
 | 事实 | 影响 |
 |---|---|
-| 修复期间 `pwsh` 完全不可用（`SetNamedSecurityInfoW failed (Win32 5): grantWrite(S:\Android\AndroidStudioProjects\Skip)`） | 实施方**无法创建分支、无法提交、无法运行 gradle、无法编译**。代码改动已写入工作区，但**构建与运行验证由仓库所有者执行** |
+| 修复期间 `pwsh` 完全不可用（`SetNamedSecurityInfoW failed (Win32 5): grantWrite(<仓库根目录>)`） | 实施方**无法创建分支、无法提交、无法运行 gradle、无法编译**。代码改动已写入工作区，但**构建与运行验证由仓库所有者执行** |
 | 无网络 | 无法验证真实 GitHub Release 的资产命名与 digest |
 | 无 Android 设备 / 无 TalkBack | 运行期与无障碍验证未执行 |
 | 第一轮开始时仓库无测试源集 | 当时没有自动化回归防护；第二轮已恢复 7 个 JVM 测试类、39 个用例，见 §7 |
@@ -181,7 +181,7 @@
 
 ### 3.1 构建级 —— **已实际执行并通过**
 
-执行环境：Windows 的 PowerShell（环境问题已在 §0 说明并修复），`GRADLE_USER_HOME=S:\Android\.gradle`，加 `--offline`（本机无外网，依赖缓存已完整）。
+执行环境：Windows 的 PowerShell（环境问题已在 §0 说明并修复），`GRADLE_USER_HOME=<Gradle 缓存目录>`，加 `--offline`（本机无外网，依赖缓存已完整）。
 
 | 检查 | 结果 |
 |---|---|
@@ -303,7 +303,7 @@
 以下是当时建议的分支及分段提交命令。实际最终提交在本地 `main`，共 9 个提交至 `68e80ec`，并未按这份分支建议交付；当前修订位于 `codex/fix-review-findings`，不执行下列提交命令：
 
 ```powershell
-cd S:\Android\AndroidStudioProjects\Skip
+cd <仓库根目录>
 git switch -c fix/audit-p0-p1-p2-20260928 main
 
 git add app/src/main/java/com/example/skip/model/AppPolicy.kt app/src/main/java/com/example/skip/data/SettingsRepository.kt
@@ -365,7 +365,7 @@ git status --short
 
 ### 7.1 环境说明（影响后续所有验证）
 
-`pwsh` 已修复：根因是 `S:\Android\AndroidStudioProjects\Skip` 缺少 **`WRITE_OWNER`** 权限（`WRITE_DAC` 有、`WRITE_OWNER` 没有），DSH 因此无法为该工作区 provisioning 写授权。现已补齐并校验通过。
+`pwsh` 已修复：根因是 `<仓库根目录>` 缺少 **`WRITE_OWNER`** 权限（`WRITE_DAC` 有、`WRITE_OWNER` 没有），DSH 因此无法为该工作区 provisioning 写授权。现已补齐并校验通过。
 
 > 这纠正了本报告 §0 的一条早期判断——"本环境无法编译、git 不可用、需由仓库所有者代为执行"在修复后不成立。**后续验证均由本会话真实执行**。
 

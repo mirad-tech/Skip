@@ -2,7 +2,7 @@
 
 > 生成时间：2026-07-12 16:16（Asia/Shanghai）  
 > 当前状态修订：2026-10-22（Asia/Shanghai）
-> 主仓库：`S:\Android\AndroidStudioProjects\Skip`  
+> 主仓库：`<仓库根目录>`  
 > 当前源码：`1.0.18 / 26`，发布分支为 `main`，对应标签为 `v1.0.18`。版本、APK 下载和 SHA256 以仓库 README 与发布说明为准。
 > §0–2 描述当前状态；§H2–H9 保留 2026-07-12 的原始接手记录，其中的分支、行号、构建产物和操作顺序不能作为当前事实或执行指令。
 
@@ -155,7 +155,7 @@ git status --short --branch
 
 ### 主工作区
 
-- 路径：`S:\Android\AndroidStudioProjects\Skip`
+- 路径：`<仓库根目录>`
 - 分支：`main`
 - HEAD：`b7ac32b8ee0af391433a2f8f0df2b8b580bf4075`
 - 上游：`origin/main`
@@ -165,7 +165,7 @@ git status --short --branch
 
 ### 功能工作树
 
-- 路径：`S:\Android\AndroidStudioProjects\Skip\.worktrees\safe-skip-candidate-resolution`
+- 路径：`<仓库根目录>\.worktrees\safe-skip-candidate-resolution`
 - 分支：`codex/safe-skip-candidate-resolution`
 - HEAD：`8279037ee6cf9f1f0f74b2bae60a7b4135fa2736`
 - `git status --porcelain=v1`：无输出，工作树干净。
@@ -244,9 +244,9 @@ MatchResult
 
 ### 环境事实
 
-- 当前 `JAVA_HOME`：`C:\Users\ASL\.jdks\ms-17.0.17`。
+- 当前 `JAVA_HOME`：`<JDK 安装路径>`。
 - Gradle daemon toolchain：JDK 21，由 `gradle/gradle-daemon-jvm.properties` 指定。
-- Android SDK：`S:\Android\Sdk`（`local.properties` 中以 Java Properties 转义形式保存）。
+- Android SDK：`<Android SDK 路径>`（`local.properties` 中以 Java Properties 转义形式保存）。
 - ADB：`1.0.41`，platform-tools `37.0.0-14910828`。
 - `keystore.properties` 与 `release.keystore` 当前都存在，且都被 `.gitignore` 排除、未被 Git 跟踪。Release 构建所需的四个签名属性已配置，可直接执行 `:app:assembleRelease`。
 - 仓库根目录存在实体 `AGENT.md`（本次改动引入的工程规范）与 `AGENTS.md`；`AGENT.md`、`AGENTS.md`、`CLAUDE.md` 都被 `.gitignore` 排除，因此对其他协作者与 CI 不可见。
@@ -257,7 +257,7 @@ MatchResult
 原功能分支已合并；磁盘中可能残留旧目录，不能以目录存在与否判断当前注册工作树。实际位置以 `git worktree list` 为准。以下命令保留原接手场景，当前修复入口见 §2：
 
 ```powershell
-Set-Location -LiteralPath 'S:\Android\AndroidStudioProjects\Skip'
+Set-Location -LiteralPath '<仓库根目录>'
 git status --short
 git branch --show-current
 ```
@@ -288,7 +288,7 @@ git diff --check main..HEAD
 ### 设备仪器测试
 
 ```powershell
-S:\Android\Sdk\platform-tools\adb.exe devices -l
+<Android SDK 路径>\platform-tools\adb.exe devices -l
 .\gradlew.bat connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.example.skip.GeminiRegressionInstrumentedTest
 ```
 
@@ -349,9 +349,9 @@ S:\Android\Sdk\platform-tools\adb.exe devices -l
 ## H9. 原接手 Prompt（2026-07-12 历史，不再适用）
 
 ```text
-请接手 Android 项目 S:\Android\AndroidStudioProjects\Skip。
+请接手 Android 项目 <仓库根目录>。
 
-先完整阅读 docs/CODEX_HANDOFF.md，并实际重新检查主工作区与 S:\Android\AndroidStudioProjects\Skip\.worktrees\safe-skip-candidate-resolution 的 Git 状态，不要只复述文档。
+先完整阅读 docs/CODEX_HANDOFF.md，并实际重新检查主工作区与 <仓库根目录>\.worktrees\safe-skip-candidate-resolution 的 Git 状态，不要只复述文档。
 
 当前目标是收口 codex/safe-skip-candidate-resolution 分支上的受限纯“跳过 / skip”功能。代码中的三个 P1 已实现：冲突标签全部拒绝、候选到动作节点的完整链路安全检查、手势前基于当前节点重新执行完整授权。当前最重要的阻塞是没有连接 Android 设备，仪器测试尚未运行；在 connectedDebugAndroidTest 真正通过前不要合并 main，也不要声称完成。
 
